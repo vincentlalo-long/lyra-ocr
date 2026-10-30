@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lyra-ocr"
+version = "0.1.0"
+description = "Hardcoded-lyrics OCR pipeline for video to LRC"
+requires-python = ">=3.11"
+dependencies = [
+    "yt-dlp>=2024.0.0",
+    "rapidocr>=3.0.0",
+    "onnxruntime>=1.17.0",
+    "opencv-python>=4.8.0",
+    "numpy>=1.24.0",
+    "pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[project.scripts]
+lyra-ocr = "lyra_ocr.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: needs ffmpeg/OCR/GPU",
+    "gpu: needs CUDA",
+]
+addopts = "-m 'not slow and not gpu'"
+
+[tool.setuptools.packages.find]
+where = ["src"]
