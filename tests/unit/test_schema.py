@@ -1,6 +1,18 @@
 """Unit tests for artifact schema validation (manifest.json and ocr_raw.json)."""
 
 from lyra_ocr.ocr import TextLine
+from lyra_ocr.cli import get_tool_versions
+
+
+def test_get_tool_versions_contract():
+    versions = get_tool_versions()
+    assert versions["rapidocr"] != "3.x"
+    assert versions["rapidocr"] == "3.10.0"
+    assert "python" in versions
+    assert "onnxruntime" in versions
+    assert "opencv" in versions
+    assert "ffmpeg" in versions
+
 
 
 def test_ocr_line_schema():

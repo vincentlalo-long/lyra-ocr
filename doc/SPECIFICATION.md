@@ -1,0 +1,156 @@
+# Lyra OCR — Data Contracts & Artifact Specifications
+
+This document defines the formal data contracts, coordinate systems, and serialization schemas used throughout the Lyra OCR pipeline.
+
+---
+
+## 1. Overview of Artifacts
+
+Every execution pipeline persists standardized intermediate artifacts to allow inspection, regression testing, and modular processing without re-running expensive vision inference steps:
+
+| Artifact | Generating Component | Description |
+|---|---|---|
+| `manifest.json` | Execution Coordinator | Run configuration, tool versions, model identifiers, and input metadata. |
+| `frame_index.json` | Stream Synchronization Service | Mapping between frame identifiers, relative image file paths, and millisecond timestamps. |
+| `ocr_raw.json` | Vision & Recognition Pipeline | Raw frame-by-frame spatial detections (polygons, bboxes) and recognized text lines. |
+| `roi_preview.jpg` | Execution Coordinator | Representative annotated image frame for visual quality audit. |
+| `tracks.json` *(Phase 1)* | Temporal Tracking Engine | Temporal tracks clustered across frames with assigned category labels and classification rationale. |
+| `review.csv` *(Phase 1)* | Classification Subsystem | Tabular review sheet for rapid human-in-the-loop audit and confirmation. |
+
+---
+
+## 2. Coordinate System & Geometry Conventions
+
+1. **Origin**: Coordinate `(0, 0)` is located at the **top-left corner** of the frame.
+2. **Polygon Representation (`polygon`)**:
+   - Represented as a convex 4-point list of `[x, y]` coordinates:
+     ```json
+     [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
+     ```
+   - Ordering follows standard clockwise quadrilateral vertex sequencing: top-left, top-right, bottom-right, bottom-left.
+3. **Bounding Box Representation (`bbox`)**:
+   - Axis-aligned rectangle defined as `[xmin, ymin, xmax, ymax]`:
+     ```json
+     [xmin, ymin, xmax, ymax]
+     ```
+   - All coordinates are integer pixel values constrained within `[0, frame_width]` and `[0, frame_height]`.
+4. **Timestamp Representation**:
+   - All timestamps across internal artifacts are stored as non-negative integer **milliseconds (`ms`)**.
+   - Timing is mapped to final centisecond format (`[mm:ss.xx]`) exclusively during `.lrc` file export.
+
+---
+
+## 3. Schema Definitions
+
+### 3.1. `manifest.json`
+Captures run-level parameters, environment provenance, and model signatures for auditability.
+
+```json
+{
+  "video_path": "/path/to/input_video.mp4",
+  "probe": {
+    "video_path": "/path/to/input_video.mp4",
+    "duration": 141.224,
+    "fps": 60.0,
+    "width": 1280,
+    "height": 720,
+    "rotation": 0,
+    "has_audio": true
+  },
+  "config": {
+    "sample_fps": 2.0,
+    "start_sec": 0.0,
+    "sample_frames": 5
+  },
+  "tool_versions": {
+    "python": "3.11.16",
+    "rapidocr": "3.10.0",
+    "onnxruntime": "1.31.1",
+    "opencv": "5.0.0",
+    "ffmpeg": "ffmpeg version 8.1.3"
+  },
+  "models": {
+    "det": "PP-OCRv6_det_small",
+    "rec": "PP-OCRv6_rec_small"
+  },
+  "timestamp_created": 1730310000
+}
+```
+
+### 3.2. `frame_index.json`
+Records the exact Presentation Time Stamp (PTS) for each sampled frame.
+
+```json
+[
+  {
+    "frame_id": 0,
+    "timestamp_ms": 20000,
+    "pts_time": 20.0,
+    "image_path": "frames/frame_000000.jpg"
+  },
+  {
+    "frame_id": 1,
+    "timestamp_ms": 20500,
+    "pts_time": 20.5,
+    "image_path": "frames/frame_000001.jpg"
+  }
+]
+```
+
+### 3.3. `ocr_raw.json`
+Stores verbatim OCR outputs and spatial coordinates for every processed frame.
+
+```json
+{
+  "video_path": "/path/to/input_video.mp4",
+  "manifest_path": "manifest.json",
+  "total_frames_processed": 5,
+  "avg_frame_time_ms": 315.89,
+  "frames": [
+    {
+      "frame_id": 0,
+      "timestamp_ms": 20000,
+      "pts_time": 20.0,
+      "image_path": "frames/frame_000000.jpg",
+      "elapsed_ms": 472.0,
+      "boxes": [
+        {
+          "polygon": [[274, 2], [1001, 6], [1001, 55], [274, 51]],
+          "bbox": [274, 2, 1001, 55],
+          "text_raw": "We can be alone in the castle in the sky",
+          "text_norm": "We can be alone in the castle in the sky",
+          "confidence": 0.9957,
+          "model_id": "PP-OCRv6_rec_small",
+          "script": "latin"
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## 4. Forward Specifications (Phase 1)
+
+### 4.1. Label Taxonomy for `tracks.json`
+
+During Phase 1, text boxes across frames will be clustered into continuous tracks and assigned a categorical classification label:
+
+| Label | Description | Example Pattern |
+|---|---|---|
+| `lyric` | Core song lyrics intended for subtitle/LRC output. | Recurring text changes within a stable spatial region. |
+| `channel` | Channel handle, logo, artist watermarks. | Text matching video metadata, static position throughout video. |
+| `song_title` | Title cards, introductory credit text. | Static text appearing strictly during the initial 5% of duration. |
+| `supplementary` | Static overlays, subscribe prompts, social icons. | Static text clustered in corner regions. |
+| `scene_text` | Text occurring inside video scenery (e.g. posters). | Significant trajectory drift corresponding to camera motion. |
+| `unknown` | Ambiguous items routed to human verification. | Short-lived, low-confidence, or contradictory features. |
+
+### 4.2. `review.csv` Structure
+Tabular format for rapid human-in-the-loop review:
+
+```csv
+track_id,start_ms,end_ms,label,confidence,suggested_text,decision,review_note
+1,20000,24500,lyric,0.99,"We can be alone in the castle in the sky",accept,
+2,0,140000,channel,0.98,"CLARX & HARDDOPE",reject,Matched persistent artist watermark
+```

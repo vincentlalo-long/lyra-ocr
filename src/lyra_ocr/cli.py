@@ -28,8 +28,8 @@ def get_tool_versions() -> dict[str, str]:
         "python": platform.python_version(),
     }
     try:
-        import rapidocr
-        versions["rapidocr"] = getattr(rapidocr, "__version__", "3.x")
+        from importlib.metadata import version
+        versions["rapidocr"] = version("rapidocr")
     except Exception:
         versions["rapidocr"] = "unknown"
 

@@ -1,16 +1,16 @@
 # Lyra OCR
 
-A modular toolchain and local workspace for video frame sampling, scene text detection, and multilingual OCR.
+A modular pipeline and command-line toolchain for video frame sampling, scene text detection, and lyric OCR (English / Romaji / Japanese).
 
 ---
 
 ## 🗺️ Roadmap & Phases
 
-> **Current Progress:** **Phase 0 (Foundations) — EN ✅ / JP ✅ / VI In Progress ⏳**
+> **Current Progress:** **Phase 0 (Foundations) — Completed ✅ (English / Romaji / Japanese verified)**
 
 | Phase | Milestone | Purpose | Status |
 |:---:|---|---|:---:|
-| **0** | **Foundations** | Video probing, PTS frame extraction, full-frame detection, and multilingual OCR engine. | EN ✅ / JP ✅ / VI ⏳ |
+| **0** | **Foundations** | Video probing, PTS frame extraction, full-frame detection, and decoupled OCR engine. | Completed ✅ |
 | **1** | **Lyric Identification** | Temporal text tracking to filter out watermarks, channel logos, and title cards from actual lyrics. | Upcoming ⏳ |
 | **2** | **Timing & LRC** | Refining cue timestamps and exporting standard line-level `.lrc` lyric files. | Planned 📋 |
 | **3** | **Trained Classifier** | Training lightweight models on user-confirmed review data to automate filtering. | Planned 📋 |
@@ -18,11 +18,19 @@ A modular toolchain and local workspace for video frame sampling, scene text det
 
 ---
 
+## 📖 Documentation
+
+- [System Architecture & Design Philosophy](doc/ARCHITECTURE.md): Layered subsystem decomposition, domain entities, decoupled vision pipeline, and fundamental architectural decisions (ADRs).
+- [Data Contracts & Artifact Specifications](doc/SPECIFICATION.md): Formal schemas, coordinate systems, and serialization contracts for all pipeline artifacts (`manifest.json`, `frame_index.json`, `ocr_raw.json`, `tracks.json`, `review.csv`).
+- [Mathematical Foundations of DBNet (PDF)](doc/research/dbnet-mathematics.pdf): Theoretical monograph covering Differentiable Binarization, gradient mechanics, adaptive threshold calibration, and polygon decoding geometry.
+
+---
+
 ## 🔮 Up Next
 
-- **Vietnamese OCR Integration**: Integrating a dedicated Vietnamese recognition model (such as VietOCR) to accurately handle Vietnamese tone marks and diacritics.
-- **Technical Analysis Documentation**: Preparing comprehensive architectural, technical analysis, and benchmark reports (to be published in `doc/`).
-- **Web UI Feature Expansion**: Upgrading the local web interface from a simple video downloader into a visual workspace featuring video playback, frame scrubbing, ROI/box visualization, and interactive OCR inspection.
+- **Phase 1: Temporal Text Tracking**: Grouping frame-by-frame text detections into continuous `TextTrack` streams using spatial IoU overlap and string edit-distance continuity.
+- **Heuristic Distractor Discrimination**: Filtering out persistent channel watermarks, stationary logos, and introductory title cards from actual dynamic lyrics.
+- **Review Artifact Export**: Generating structured `tracks.json` and tabular `review.csv` for human-in-the-loop verification.
 
 ---
 
@@ -31,9 +39,9 @@ A modular toolchain and local workspace for video frame sampling, scene text det
 - **Video Metadata Inspection** ([`src/lyra_ocr/probe.py`](src/lyra_ocr/probe.py)): Analyzes video files using `ffprobe` to extract resolution, FPS, duration, rotation, and audio stream details.
 - **Precision PTS Frame Sampling** ([`src/lyra_ocr/frames.py`](src/lyra_ocr/frames.py)): Samples frames at a configurable rate (default: 2.0 FPS) while recording exact Presentation Time Stamps (PTS) from container metadata.
 - **Full-Frame Scene Text Detection** ([`src/lyra_ocr/detect.py`](src/lyra_ocr/detect.py)): Detects text boxes across the entire frame without hardcoded region-of-interest assumptions using DBNet (`PP-OCRv6_det_small`).
-- **Multilingual Recognition & Normalization** ([`src/lyra_ocr/ocr.py`](src/lyra_ocr/ocr.py)): Crops and recognizes text lines with RapidOCR (`PP-OCRv6_rec_small`), normalizes Unicode text to NFC, and classifies script types (`latin`, `japan`, `mixed`).
+- **Text Recognition & Normalization** ([`src/lyra_ocr/ocr.py`](src/lyra_ocr/ocr.py)): Crops and recognizes text lines with RapidOCR (`PP-OCRv6_rec_small`), normalizes Unicode text to NFC, and classifies script types (`latin`, `japan`, `mixed`).
 - **Smoke Test & Audit CLI** (`lyra-ocr smoke`): Generates audit-ready artifacts including `manifest.json`, `ocr_raw.json`, `frame_index.json`, and visual annotated preview images (`roi_preview.jpg`).
-- **Local Web Interface** ([`src/lyra_ocr/web.py`](src/lyra_ocr/web.py)): A lightweight local server providing background job management for video downloads, currently being expanded into an interactive OCR workstation.
+- **Local Video Downloader** ([`src/lyra_ocr/web.py`](src/lyra_ocr/web.py)): A lightweight local server providing background job management for video downloads.
 - **Automated Test Suite**: Unit test suite covering probe extraction, PTS indexing, Unicode normalization, script detection, and artifact schemas.
 
 ---
