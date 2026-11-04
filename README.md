@@ -64,8 +64,9 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 ### 1. Installation
 
 ```bash
-cd /home/danglong/projects/lyra-ocr
-python3.11 -m venv .venv
+git clone https://github.com/vincentlalo-long/lyra-ocr.git
+cd lyra-ocr
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 pip install -e ".[eval]"
