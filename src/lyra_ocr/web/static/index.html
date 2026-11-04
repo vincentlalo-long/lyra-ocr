@@ -1,0 +1,1735 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lyra OCR - Track Review & Ground Truth Tool</title>
+  <style>
+    :root {
+      --bg-dark: #0b0f19;
+      --bg-panel: #131b2e;
+      --bg-card: #1e293b;
+      --bg-card-hover: #27354f;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #3b82f6;
+      --accent-hover: #2563eb;
+      --lyric: #10b981;
+      --channel: #ef4444;
+      --song-title: #f59e0b;
+      --supplementary: #ec4899;
+      --scene-text: #06b6d4;
+      --unknown: #8b5cf6;
+      --radius: 8px;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg-dark);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      font-size: 14px;
+    }
+
+    /* Header */
+    header {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-shrink: 0;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 700;
+      font-size: 16px;
+      letter-spacing: 0.5px;
+    }
+    .brand span { color: var(--accent); }
+    .header-controls {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    select, button, input {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 6px 12px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      outline: none;
+    }
+    select:focus, input:focus { border-color: var(--accent); }
+    button {
+      cursor: pointer;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+    button:hover { background: var(--bg-card-hover); }
+    button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+    button.primary:hover { background: var(--accent-hover); }
+
+    .badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .badge-lyric { background: rgba(16, 185, 129, 0.2); color: var(--lyric); border: 1px solid var(--lyric); }
+    .badge-channel { background: rgba(239, 68, 68, 0.2); color: var(--channel); border: 1px solid var(--channel); }
+    .badge-song_title { background: rgba(245, 158, 11, 0.2); color: var(--song-title); border: 1px solid var(--song-title); }
+    .badge-supplementary { background: rgba(236, 72, 153, 0.2); color: var(--supplementary); border: 1px solid var(--supplementary); }
+    .badge-scene_text { background: rgba(6, 182, 212, 0.2); color: var(--scene-text); border: 1px solid var(--scene-text); }
+    .badge-unknown { background: rgba(139, 92, 246, 0.2); color: var(--unknown); border: 1px solid var(--unknown); }
+    .badge-pass { background: rgba(16, 185, 129, 0.2); color: var(--lyric); }
+    .badge-fail { background: rgba(239, 68, 68, 0.2); color: var(--channel); }
+
+    /* Layout */
+    .main-container {
+      display: grid;
+      grid-template-columns: 320px 1fr 360px;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* Left Panel: Track List */
+    .left-panel {
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .panel-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .filter-bar {
+      padding: 8px 12px;
+      display: flex;
+      gap: 6px;
+      background: rgba(0,0,0,0.2);
+      border-bottom: 1px solid var(--border);
+    }
+    .filter-btn {
+      padding: 4px 8px;
+      font-size: 11px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      color: var(--text-muted);
+    }
+    .filter-btn.active {
+      background: var(--bg-card);
+      border-color: var(--border);
+      color: var(--text);
+    }
+    .track-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .track-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .track-card:hover { background: var(--bg-card-hover); border-color: #475569; }
+    .track-card.active {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.15);
+    }
+    .track-card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .track-card-text {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: #e2e8f0;
+    }
+    .track-card-meta {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
+    /* Center Panel: Frame Viewer */
+    .center-panel {
+      display: flex;
+      flex-direction: column;
+      background: #000;
+      overflow: hidden;
+      position: relative;
+    }
+    .frame-toolbar {
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      z-index: 10;
+    }
+    .canvas-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      background: #000;
+    }
+    canvas {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      cursor: crosshair;
+    }
+    .playback-bar {
+      background: var(--bg-panel);
+      border-top: 1px solid var(--border);
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      z-index: 10;
+    }
+    .slider-container {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    input[type=range] {
+      flex: 1;
+      height: 6px;
+      background: var(--border);
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+
+    /* Right Panel: Track Inspector & Labeling */
+    .right-panel {
+      background: var(--bg-panel);
+      border-left: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      padding: 16px;
+      gap: 16px;
+    }
+    .section-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+    .info-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .info-row {
+      display: flex;
+      justify-content: space-between;
+      font-size: 13px;
+    }
+    .info-label { color: var(--text-muted); }
+    .info-val { font-weight: 500; }
+    .text-box-display {
+      background: rgba(0,0,0,0.3);
+      padding: 8px;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 12px;
+      word-break: break-all;
+      color: #38bdf8;
+    }
+
+    /* Labeling Options */
+    .label-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .label-option {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      font-weight: 500;
+      transition: all 0.15s ease;
+    }
+    .label-option:hover { border-color: #64748b; }
+    .label-option.selected {
+      border-color: var(--accent);
+      background: rgba(59, 130, 246, 0.15);
+      color: #fff;
+    }
+    .hotkey-badge {
+      background: rgba(255,255,255,0.1);
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .form-group label {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .form-group input, .form-group textarea {
+      width: 100%;
+    }
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .checkbox-row input { cursor: pointer; }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      background: #10b981;
+      color: #fff;
+      padding: 10px 16px;
+      border-radius: var(--radius);
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+      z-index: 100;
+    }
+    #toast.show { opacity: 1; }
+
+    /* Tabs */
+    .tabbar {
+      display: flex;
+      gap: 4px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      flex-shrink: 0;
+    }
+    .tab-btn {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      border-radius: 0;
+      color: var(--text-muted);
+      padding: 10px 16px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .tab-btn:hover { background: rgba(255,255,255,0.04); }
+    .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+    .view {
+      flex: 1;
+      overflow: hidden;
+      display: none;
+    }
+    .view.active { display: flex; }
+    #view-review.active { display: grid; }
+
+    /* Generic tables */
+    .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .data-table th, .data-table td {
+      text-align: left;
+      padding: 7px 10px;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+    }
+    .data-table th {
+      color: var(--text-muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      background: rgba(0,0,0,0.2);
+      position: sticky;
+      top: 0;
+    }
+    .data-table td.wrap { white-space: normal; max-width: 420px; }
+    .data-table tr:hover td { background: rgba(255,255,255,0.03); }
+
+    /* Datasets view */
+    .datasets-layout {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      flex: 1;
+      overflow: hidden;
+    }
+    .ds-sidebar, .ds-main {
+      overflow-y: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+    .ds-sidebar { background: var(--bg-panel); border-right: 1px solid var(--border); }
+    .ds-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .ds-card h4 {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+    }
+    .ds-card input, .ds-card textarea, .ds-card select { width: 100%; }
+    .ds-card textarea { resize: vertical; min-height: 60px; font-family: monospace; font-size: 12px; }
+    .opts-row { display: flex; gap: 8px; }
+    .opts-row > div { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--text-muted); }
+    .stat-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+    .stat-chip {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 8px 14px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .stat-chip strong { display: block; font-size: 18px; color: var(--text); }
+    .state-chip {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .state-queued   { background: rgba(148,163,184,0.2); color: #94a3b8; }
+    .state-running  { background: rgba(59,130,246,0.25); color: #60a5fa; }
+    .state-done     { background: rgba(16,185,129,0.2);  color: #10b981; }
+    .state-failed   { background: rgba(239,68,68,0.2);   color: #ef4444; }
+    .state-cancelled{ background: rgba(245,158,11,0.2);  color: #f59e0b; }
+    .state-skipped  { background: rgba(139,92,246,0.2);  color: #8b5cf6; }
+    .pbar {
+      width: 110px; height: 6px; background: var(--border);
+      border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle;
+    }
+    .pbar > div { height: 100%; background: var(--accent); transition: width 0.4s ease; }
+    .mini-btn { padding: 3px 8px; font-size: 11px; }
+    .link-btn {
+      background: transparent; border: none; color: var(--accent);
+      padding: 2px 6px; font-size: 12px; text-decoration: underline;
+    }
+    .spinner-inline {
+      display: inline-block; width: 14px; height: 14px;
+      border: 2px solid var(--border); border-top-color: var(--accent);
+      border-radius: 50%; animation: spin 0.8s linear infinite; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Eval view */
+    .eval-layout { flex: 1; overflow-y: auto; padding: 16px 24px; display: flex; flex-direction: column; gap: 16px; }
+    .eval-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .gate-banner {
+      border-radius: var(--radius);
+      padding: 14px 18px;
+      font-size: 15px;
+      font-weight: 700;
+      border: 1px solid var(--border);
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .gate-pass { background: rgba(16,185,129,0.12); border-color: var(--lyric); color: var(--lyric); }
+    .gate-fail { background: rgba(239,68,68,0.12); border-color: var(--channel); color: var(--channel); }
+    .gate-banner ul { list-style: none; font-weight: 400; font-size: 13px; color: var(--text-muted); }
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+    .metric-card {
+      background: var(--bg-card); border: 1px solid var(--border);
+      border-radius: var(--radius); padding: 10px 14px;
+    }
+    .metric-card .m-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; }
+    .metric-card .m-val { font-size: 22px; font-weight: 700; margin-top: 2px; }
+    .metric-card .m-sub { font-size: 11px; color: var(--text-muted); }
+    .cm-cell { text-align: center; font-size: 12px; }
+    .cm-diag { background: rgba(16,185,129,0.25); }
+    .cm-off { background: rgba(239,68,68,0.20); }
+    .err-reason { font-size: 11px; }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand">
+      <span>✦</span> LYRA OCR <span style="font-weight:400;color:var(--text-muted)">| Review & Label Tool</span>
+    </div>
+    <div class="header-controls" id="reviewHeaderControls">
+      <label for="artifactSelect" style="color:var(--text-muted);font-size:12px">Artifact:</label>
+      <select id="artifactSelect"></select>
+      <div id="coveragePill" class="badge badge-lyric">100% Labeled</div>
+      <button id="refreshBtn" title="Reload state">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Tab Navigation -->
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="review">Review</button>
+    <button class="tab-btn" data-tab="datasets">Datasets</button>
+    <button class="tab-btn" data-tab="eval">Eval</button>
+  </nav>
+
+  <!-- Main Body -->
+  <div class="main-container view active" id="view-review">
+
+    <!-- Left Panel: Tracks -->
+    <div class="left-panel">
+      <div class="panel-header">
+        <span>Video Tracks (<span id="trackCount">0</span>)</span>
+      </div>
+      <div class="filter-bar">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="unlabeled">Unlabeled</button>
+        <button class="filter-btn" data-filter="lyric">Lyric</button>
+        <button class="filter-btn" data-filter="distractor">Distractor</button>
+      </div>
+      <div class="track-list" id="trackList"></div>
+    </div>
+
+    <!-- Center Panel: Canvas & Playback -->
+    <div class="center-panel">
+      <div class="frame-toolbar">
+        <div>
+          <strong>Frame <span id="frameNum">0</span></strong> / <span id="frameTotal">0</span>
+          <span style="color:var(--text-muted);margin-left:10px" id="ptsTime">00:00.000</span>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="showAllBoxes" checked> Show All Boxes
+          </label>
+        </div>
+      </div>
+
+      <div class="canvas-container" id="canvasContainer">
+        <canvas id="frameCanvas"></canvas>
+      </div>
+
+      <div class="playback-bar">
+        <button id="prevBtn" title="Previous frame (A / Left Arrow)">◀ Prev</button>
+        <button id="playBtn" class="primary" title="Play/Pause (Space)">▶ Play</button>
+        <button id="nextBtn" title="Next frame (D / Right Arrow)">Next ▶</button>
+        <div class="slider-container">
+          <input type="range" id="frameSlider" min="0" max="0" value="0">
+        </div>
+        <select id="fpsSelect" style="width:70px">
+          <option value="1">1.0x</option>
+          <option value="2" selected>2.0x</option>
+          <option value="4">4.0x</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Right Panel: Track & Labeling Inspector -->
+    <div class="right-panel">
+      <div>
+        <div class="section-title">Selected Track</div>
+        <div class="info-card" id="trackInfoCard">
+          <div style="color:var(--text-muted);font-style:italic">Select a track or click a bounding box</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Human Annotation</div>
+        <div class="info-card" style="gap:12px">
+          <div class="label-grid" id="labelOptions">
+            <div class="label-option" data-label="lyric"><span class="hotkey-badge">1</span> Lyric</div>
+            <div class="label-option" data-label="channel"><span class="hotkey-badge">2</span> Channel</div>
+            <div class="label-option" data-label="song_title"><span class="hotkey-badge">3</span> Song Title</div>
+            <div class="label-option" data-label="supplementary"><span class="hotkey-badge">4</span> Supp. Tag</div>
+            <div class="label-option" data-label="scene_text"><span class="hotkey-badge">5</span> Scene Text</div>
+            <div class="label-option" data-label="unknown"><span class="hotkey-badge">0</span> Unknown</div>
+          </div>
+
+          <label class="checkbox-row">
+            <input type="checkbox" id="trackingErrorCheckbox">
+            <span>Tracking Error / Fragmented Track <span class="hotkey-badge">E</span></span>
+          </label>
+
+          <div class="form-group">
+            <label for="correctedTextInput">Corrected Text (optional):</label>
+            <input type="text" id="correctedTextInput" placeholder="Override OCR errors">
+          </div>
+
+          <div class="form-group">
+            <label for="notesInput">Review Notes:</label>
+            <input type="text" id="notesInput" placeholder="Auditor rationale / observations">
+          </div>
+
+          <button id="saveLabelBtn" class="primary" style="padding:10px;font-size:14px;margin-top:4px">
+            💾 Save Label (Enter)
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Keyboard Shortcuts</div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
+          • <kbd>1</kbd> - <kbd>5</kbd>, <kbd>0</kbd> : Quick Label Select<br>
+          • <kbd>A</kbd> / <kbd>D</kbd> or <kbd>←</kbd> / <kbd>→</kbd> : Step Frames<br>
+          • <kbd>Space</kbd> : Play / Pause Video<br>
+          • <kbd>E</kbd> : Toggle Tracking Error<br>
+          • <kbd>Enter</kbd> : Save & Advance Track
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <!-- /view-review -->
+
+  <!-- Datasets View -->
+  <div class="view" id="view-datasets">
+    <div class="datasets-layout">
+      <div class="ds-sidebar">
+        <div class="ds-card">
+          <h4>Dataset</h4>
+          <select id="dsSelect"></select>
+          <input type="text" id="dsNewName" placeholder="New dataset name">
+          <input type="text" id="dsNewDesc" placeholder="Description (optional)">
+          <button class="primary" id="dsCreateBtn">+ Create Dataset</button>
+        </div>
+
+        <div class="ds-card">
+          <h4>YouTube Channel / Playlist</h4>
+          <input type="text" id="ytUrl" placeholder="https://www.youtube.com/@channel/videos">
+          <div class="opts-row">
+            <div>Max items
+              <input type="number" id="ytLimit" value="200" min="1" max="1000">
+            </div>
+            <div style="flex:0 0 auto; justify-content:flex-end">
+              <button id="ytFetchBtn">Fetch list</button>
+            </div>
+          </div>
+          <div id="ytStatus" style="font-size:12px;color:var(--text-muted)"></div>
+          <div id="ytResults" style="max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; display:none">
+            <table class="data-table" id="ytTable"></table>
+          </div>
+        </div>
+
+        <div class="ds-card">
+          <h4>Local Video Files (workspace-relative paths, one per line)</h4>
+          <textarea id="localPaths" placeholder="outputs/raw/myvideo.mp4&#10;/abs/path/inside/workspace.mp4"></textarea>
+        </div>
+
+        <div class="ds-card">
+          <h4>Pipeline Options & Queue</h4>
+          <div class="opts-row">
+            <div>FPS <input type="number" id="optFps" value="1.0" step="0.5" min="0.1" max="8"></div>
+            <div>Tracker
+              <select id="optTracker">
+                <option value="greedy" selected>greedy</option>
+                <option value="sort">sort</option>
+                <option value="bytetrack">bytetrack</option>
+                <option value="st_dbscan">st_dbscan</option>
+              </select>
+            </div>
+            <div>Max height
+              <input type="number" id="optMaxHeight" value="720" step="60" min="0">
+            </div>
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="optForce"> Force re-run (reprocess finished videos)
+          </label>
+          <div style="font-size:11px;color:var(--text-muted)" id="forceWarn" hidden>
+            ⚠ Force re-run can shift track IDs; existing labels may mis-align.
+          </div>
+          <button class="primary" id="queueBtn">Queue selected videos</button>
+        </div>
+      </div>
+
+      <div class="ds-main">
+        <div id="dsStats" class="stat-chips"></div>
+        <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
+          <span id="dsTitle">No dataset selected</span>
+          <span style="display:flex;gap:8px">
+            <button class="mini-btn" id="dsFreezeBtn" title="Recompute artifact/config hashes for eval provenance">❄ Freeze</button>
+            <button class="mini-btn" id="dsEvalBtn">Eval →</button>
+            <button class="mini-btn" id="dsRefreshBtn">↻ Refresh</button>
+          </span>
+        </div>
+        <div style="border:1px solid var(--border); border-top:none; border-radius:0 0 var(--radius) var(--radius); overflow:auto; max-height: calc(100vh - 240px)">
+          <table class="data-table" id="dsVideoTable"></table>
+        </div>
+        <div id="dsDetailError" style="font-size:12px;color:var(--channel)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Eval View -->
+  <div class="view" id="view-eval">
+    <div class="eval-layout">
+      <div class="eval-toolbar">
+        <label style="color:var(--text-muted);font-size:12px" for="evalDatasetSelect">Dataset / Golden:</label>
+        <select id="evalDatasetSelect" style="min-width:260px"></select>
+        <button class="primary" id="evalRunBtn">Run Evaluation</button>
+        <button id="evalFreezeBtn" title="Freeze then evaluate">❄ Freeze & Eval</button>
+        <span id="evalStatus" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
+      <div id="evalContent">
+        <div style="color:var(--text-muted);font-style:italic;padding:30px">
+          Select a dataset (or golden/v1) and run an evaluation. Coverage requires labels saved from the Review tab.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast">Label Saved Successfully!</div>
+
+  <script>
+    // State
+    let artifacts = [];
+    let currentArtifact = null;
+    let dataset = null;
+    let currentFrameIndex = 0;
+    let selectedTrackId = null;
+    let selectedLabel = "lyric";
+    let isPlaying = false;
+    let playInterval = null;
+    let currentFilter = "all";
+    let frameImage = new Image();
+
+    // DOM Elements
+    const artifactSelect = document.getElementById("artifactSelect");
+    const trackList = document.getElementById("trackList");
+    const trackCount = document.getElementById("trackCount");
+    const frameCanvas = document.getElementById("frameCanvas");
+    const ctx = frameCanvas.getContext("2d");
+    const frameSlider = document.getElementById("frameSlider");
+    const frameNum = document.getElementById("frameNum");
+    const frameTotal = document.getElementById("frameTotal");
+    const ptsTime = document.getElementById("ptsTime");
+    const playBtn = document.getElementById("playBtn");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+    const fpsSelect = document.getElementById("fpsSelect");
+    const trackInfoCard = document.getElementById("trackInfoCard");
+    const labelOptions = document.getElementById("labelOptions");
+    const trackingErrorCheckbox = document.getElementById("trackingErrorCheckbox");
+    const correctedTextInput = document.getElementById("correctedTextInput");
+    const notesInput = document.getElementById("notesInput");
+    const saveLabelBtn = document.getElementById("saveLabelBtn");
+    const coveragePill = document.getElementById("coveragePill");
+    const refreshBtn = document.getElementById("refreshBtn");
+    const showAllBoxes = document.getElementById("showAllBoxes");
+
+    // Colors mapping
+    const COLORS = {
+      lyric: "#10b981",
+      channel: "#ef4444",
+      song_title: "#f59e0b",
+      supplementary: "#ec4899",
+      scene_text: "#06b6d4",
+      unknown: "#8b5cf6"
+    };
+
+    // Load initial artifacts
+    async function init() {
+      try {
+        const res = await fetch("/api/artifacts");
+        const data = await res.json();
+        artifacts = data.artifacts || [];
+
+        artifactSelect.innerHTML = "";
+        artifacts.forEach(a => {
+          const opt = document.createElement("option");
+          opt.value = a.path;
+          opt.textContent = `${a.name} (${a.coverage_percent}%)`;
+          artifactSelect.appendChild(opt);
+        });
+
+        if (artifacts.length > 0) {
+          loadArtifact(artifacts[0].path);
+        }
+      } catch (err) {
+        console.error("Failed to load artifacts:", err);
+      }
+    }
+
+    async function loadArtifact(path) {
+      currentArtifact = path;
+      try {
+        const res = await fetch(`/api/data?dir=${encodeURIComponent(path)}`);
+        dataset = await res.json();
+        updateUI();
+      } catch (err) {
+        console.error("Failed to load dataset:", err);
+      }
+    }
+
+    function updateUI() {
+      if (!dataset) return;
+
+      // Update Header & Coverage
+      const cov = dataset.status?.coverage_percent || 0;
+      coveragePill.textContent = `${cov}% Labeled (${dataset.status?.labeled_tracks || 0}/${dataset.status?.total_tracks || 0})`;
+      coveragePill.className = `badge ${cov >= 95 ? "badge-lyric" : "badge-channel"}`;
+
+      // Frames setup
+      const totalFrames = (dataset.frame_index && dataset.frame_index.length) || 0;
+      frameTotal.textContent = totalFrames;
+      frameSlider.max = Math.max(0, totalFrames - 1);
+      currentFrameIndex = 0;
+
+      // Render Track List
+      renderTrackList();
+
+      // Select first track if available
+      if (dataset.tracks && dataset.tracks.length > 0) {
+        selectTrack(dataset.tracks[0].track_id);
+      }
+
+      loadCurrentFrame();
+    }
+
+    function renderTrackList() {
+      trackList.innerHTML = "";
+      if (!dataset || !dataset.tracks) return;
+
+      let filtered = dataset.tracks.filter(t => {
+        const tid = String(t.track_id);
+        const lbl = dataset.labels[tid]?.human_label;
+        if (currentFilter === "unlabeled") return !lbl;
+        if (currentFilter === "lyric") return (lbl === "lyric" || (!lbl && t.label === "lyric"));
+        if (currentFilter === "distractor") return (lbl && lbl !== "lyric") || (!lbl && t.label !== "lyric");
+        return true;
+      });
+
+      trackCount.textContent = filtered.length;
+
+      filtered.forEach(t => {
+        const tid = String(t.track_id);
+        const card = document.createElement("div");
+        card.className = `track-card ${String(selectedTrackId) === tid ? "active" : ""}`;
+        card.id = `track-card-${tid}`;
+
+        const humanLbl = dataset.labels[tid]?.human_label;
+        const displayLbl = humanLbl || t.label || "unknown";
+        const hasHuman = !!humanLbl;
+
+        card.innerHTML = `
+          <div class="track-card-header">
+            <strong>Track #${t.track_id}</strong>
+            <span class="badge badge-${displayLbl}">${displayLbl} ${hasHuman ? "✓" : ""}</span>
+          </div>
+          <div class="track-card-text">${escapeHtml(t.features?.dominant_text || "(empty text)")}</div>
+          <div class="track-card-meta">
+            <span>${(t.duration_ms / 1000).toFixed(1)}s (${t.occurrences?.length || t.num_occurrences || 0} f)</span>
+            <span>Conf: ${(t.confidence || 0).toFixed(2)}</span>
+          </div>
+        `;
+
+        card.addEventListener("click", () => selectTrack(t.track_id, true));
+        trackList.appendChild(card);
+      });
+    }
+
+    function selectTrack(trackId, jumpToFrame = false) {
+      selectedTrackId = String(trackId);
+      const t = dataset.tracks.find(x => String(x.track_id) === selectedTrackId);
+      if (!t) return;
+
+      // Update Card Active State
+      document.querySelectorAll(".track-card").forEach(c => c.classList.remove("active"));
+      const activeCard = document.getElementById(`track-card-${selectedTrackId}`);
+      if (activeCard) {
+        activeCard.classList.add("active");
+        activeCard.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      }
+
+      // If requested, seek frame to start of track
+      if (jumpToFrame && t.occurrences && t.occurrences.length > 0) {
+        const firstOccur = t.occurrences[0];
+        const fIdx = dataset.frame_index.findIndex(f => f.pts_ms >= firstOccur.timestamp_ms);
+        if (fIdx >= 0) {
+          seekToFrame(fIdx);
+        }
+      }
+
+      // Populate Right Inspector
+      const humanRec = dataset.labels[selectedTrackId] || {};
+      const currentHumanLabel = humanRec.human_label || (t.label || "lyric");
+      setChosenLabel(currentHumanLabel);
+
+      trackingErrorCheckbox.checked = !!humanRec.tracking_error;
+      correctedTextInput.value = humanRec.corrected_text || "";
+      notesInput.value = humanRec.notes || "";
+
+      trackInfoCard.innerHTML = `
+        <div class="info-row">
+          <span class="info-label">Track ID:</span>
+          <span class="info-val">#${t.track_id}</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Model Classification:</span>
+          <span class="badge badge-${t.label || 'unknown'}">${t.label || 'unknown'} (${t.confidence?.toFixed(2) || '0.00'})</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Lifetime:</span>
+          <span class="info-val">${(t.start_ms/1000).toFixed(2)}s → ${(t.end_ms/1000).toFixed(2)}s (${t.duration_ms} ms)</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Occurrences:</span>
+          <span class="info-val">${t.occurrences?.length || t.num_occurrences || 0} frames</span>
+        </div>
+        <div class="section-title" style="margin-top:6px">Dominant Text</div>
+        <div class="text-box-display">${escapeHtml(t.features?.dominant_text || "(empty)")}</div>
+      `;
+
+      drawFrame();
+    }
+
+    function setChosenLabel(label) {
+      selectedLabel = label;
+      document.querySelectorAll(".label-option").forEach(opt => {
+        opt.classList.toggle("selected", opt.dataset.label === label);
+      });
+    }
+
+    // Canvas & Frame Rendering
+    function loadCurrentFrame() {
+      if (!dataset || !dataset.frame_index || dataset.frame_index.length === 0) return;
+
+      const fInfo = dataset.frame_index[currentFrameIndex];
+      if (!fInfo) return;
+
+      frameNum.textContent = currentFrameIndex + 1;
+      frameSlider.value = currentFrameIndex;
+
+      // PTS Format MM:SS.mmm
+      const pts = fInfo.pts_ms || 0;
+      const min = Math.floor(pts / 60000);
+      const sec = Math.floor((pts % 60000) / 1000);
+      const ms = Math.floor(pts % 1000);
+      ptsTime.textContent = `${String(min).padStart(2,'0')}:${String(sec).padStart(2,'0')}.${String(ms).padStart(3,'0')}`;
+
+      frameImage.onload = () => {
+        frameCanvas.width = frameImage.naturalWidth || 1280;
+        frameCanvas.height = frameImage.naturalHeight || 720;
+        drawFrame();
+      };
+      frameImage.src = `/api/frame?dir=${encodeURIComponent(currentArtifact)}&file=${encodeURIComponent(fInfo.filename)}`;
+    }
+
+    function drawFrame() {
+      if (!frameImage.complete) return;
+
+      ctx.clearRect(0, 0, frameCanvas.width, frameCanvas.height);
+      ctx.drawImage(frameImage, 0, 0);
+
+      if (!dataset || !dataset.tracks) return;
+
+      const currentPts = dataset.frame_index[currentFrameIndex]?.pts_ms;
+      if (currentPts === undefined) return;
+
+      // Find occurrences in this frame
+      dataset.tracks.forEach(t => {
+        const tid = String(t.track_id);
+        const isSelected = (tid === selectedTrackId);
+
+        if (!showAllBoxes.checked && !isSelected) return;
+
+        const occ = (t.occurrences || []).find(o => Math.abs(o.timestamp_ms - currentPts) < 300);
+        if (!occ || !occ.bbox) return;
+
+        const [x1, y1, x2, y2] = occ.bbox;
+        const w = x2 - x1;
+        const h = y2 - y1;
+
+        const humanLbl = dataset.labels[tid]?.human_label;
+        const color = COLORS[humanLbl || t.label] || "#3b82f6";
+
+        ctx.strokeStyle = color;
+        ctx.lineWidth = isSelected ? 4 : 2;
+        ctx.strokeRect(x1, y1, w, h);
+
+        if (isSelected) {
+          ctx.fillStyle = "rgba(59, 130, 246, 0.2)";
+          ctx.fillRect(x1, y1, w, h);
+        }
+
+        // Label Tag
+        ctx.fillStyle = color;
+        const tagText = `#${t.track_id} ${t.features?.dominant_text?.substring(0, 16) || ''}`;
+        ctx.font = "bold 13px monospace";
+        const txtWidth = ctx.measureText(tagText).width;
+        ctx.fillRect(x1, Math.max(0, y1 - 20), txtWidth + 8, 20);
+
+        ctx.fillStyle = "#fff";
+        ctx.fillText(tagText, x1 + 4, Math.max(14, y1 - 5));
+      });
+    }
+
+    // Canvas click to select bounding box
+    frameCanvas.addEventListener("click", e => {
+      if (!dataset || !dataset.tracks) return;
+
+      const rect = frameCanvas.getBoundingClientRect();
+      const scaleX = frameCanvas.width / rect.width;
+      const scaleY = frameCanvas.height / rect.height;
+
+      const clickX = (e.clientX - rect.left) * scaleX;
+      const clickY = (e.clientY - rect.top) * scaleY;
+
+      const currentPts = dataset.frame_index[currentFrameIndex]?.pts_ms;
+      if (currentPts === undefined) return;
+
+      for (let t of dataset.tracks) {
+        const occ = (t.occurrences || []).find(o => Math.abs(o.timestamp_ms - currentPts) < 300);
+        if (occ && occ.bbox) {
+          const [x1, y1, x2, y2] = occ.bbox;
+          if (clickX >= x1 && clickX <= x2 && clickY >= y1 && clickY <= y2) {
+            selectTrack(t.track_id);
+            break;
+          }
+        }
+      }
+    });
+
+    // Save Label Action
+    async function saveCurrentLabel() {
+      if (!selectedTrackId || !dataset) return;
+
+      const payload = {
+        artifact_dir: currentArtifact,
+        video_id: dataset.manifest?.video_id || dataset.manifest?.video_path || "video",
+        track_id: selectedTrackId,
+        human_label: selectedLabel,
+        tracking_error: trackingErrorCheckbox.checked,
+        corrected_text: correctedTextInput.value.trim() || null,
+        notes: notesInput.value.trim(),
+        annotator: "web_reviewer"
+      };
+
+      try {
+        const res = await fetch("/api/label", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const result = await res.json();
+
+        if (result.ok) {
+          showToast(`Saved Track #${selectedTrackId} as ${selectedLabel.toUpperCase()}`);
+          dataset.labels[selectedTrackId] = result.record;
+          dataset.status = result.status;
+
+          // Update UI
+          renderTrackList();
+          const cov = dataset.status?.coverage_percent || 0;
+          coveragePill.textContent = `${cov}% Labeled (${dataset.status?.labeled_tracks || 0}/${dataset.status?.total_tracks || 0})`;
+
+          // Advance to next track
+          advanceNextTrack();
+        }
+      } catch (err) {
+        console.error("Save label failed:", err);
+      }
+    }
+
+    function advanceNextTrack() {
+      if (!dataset || !dataset.tracks) return;
+      const idx = dataset.tracks.findIndex(t => String(t.track_id) === selectedTrackId);
+      if (idx >= 0 && idx + 1 < dataset.tracks.length) {
+        selectTrack(dataset.tracks[idx + 1].track_id, true);
+      }
+    }
+
+    function seekToFrame(idx) {
+      if (!dataset || !dataset.frame_index) return;
+      currentFrameIndex = Math.max(0, Math.min(dataset.frame_index.length - 1, idx));
+      loadCurrentFrame();
+    }
+
+    function showToast(msg) {
+      const toast = document.getElementById("toast");
+      toast.textContent = msg;
+      toast.classList.add("show");
+      setTimeout(() => toast.classList.remove("show"), 2000);
+    }
+
+    function escapeHtml(str) {
+      return (str || "").replace(/[&<>'"]/g, tag => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", "\"": "&quot;"
+      }[tag] || tag));
+    }
+
+    // Playback loop
+    function togglePlay() {
+      isPlaying = !isPlaying;
+      playBtn.textContent = isPlaying ? "⏸ Pause" : "▶ Play";
+      if (isPlaying) {
+        const fps = parseFloat(fpsSelect.value) * 2.0; // 2.0 FPS baseline
+        playInterval = setInterval(() => {
+          if (currentFrameIndex + 1 < dataset.frame_index.length) {
+            seekToFrame(currentFrameIndex + 1);
+          } else {
+            togglePlay();
+          }
+        }, 1000 / fps);
+      } else {
+        clearInterval(playInterval);
+      }
+    }
+
+    // Event Listeners
+    artifactSelect.addEventListener("change", e => loadArtifact(e.target.value));
+    refreshBtn.addEventListener("click", () => loadArtifact(currentArtifact));
+    prevBtn.addEventListener("click", () => seekToFrame(currentFrameIndex - 1));
+    nextBtn.addEventListener("click", () => seekToFrame(currentFrameIndex + 1));
+    playBtn.addEventListener("click", togglePlay);
+    frameSlider.addEventListener("input", e => seekToFrame(parseInt(e.target.value)));
+    saveLabelBtn.addEventListener("click", saveCurrentLabel);
+    showAllBoxes.addEventListener("change", drawFrame);
+
+    document.querySelectorAll(".label-option").forEach(opt => {
+      opt.addEventListener("click", () => setChosenLabel(opt.dataset.label));
+    });
+
+    document.querySelectorAll(".filter-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".filter-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentFilter = btn.dataset.filter;
+        renderTrackList();
+      });
+    });
+
+    // Keyboard Shortcuts
+    window.addEventListener("keydown", e => {
+      if (activeTab !== "review") return;
+      // Ignore if typing in text input
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") {
+        if (e.key === "Enter") saveCurrentLabel();
+        return;
+      }
+
+      if (e.key === "1") setChosenLabel("lyric");
+      else if (e.key === "2") setChosenLabel("channel");
+      else if (e.key === "3") setChosenLabel("song_title");
+      else if (e.key === "4") setChosenLabel("supplementary");
+      else if (e.key === "5") setChosenLabel("scene_text");
+      else if (e.key === "0") setChosenLabel("unknown");
+      else if (e.key === "e" || e.key === "E") trackingErrorCheckbox.checked = !trackingErrorCheckbox.checked;
+      else if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") seekToFrame(currentFrameIndex - 1);
+      else if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") seekToFrame(currentFrameIndex + 1);
+      else if (e.key === " ") { e.preventDefault(); togglePlay(); }
+      else if (e.key === "Enter") saveCurrentLabel();
+    });
+
+    // =========================================================================
+    // Tabs & deep-link routing
+    // =========================================================================
+    let activeTab = "review";
+    function switchTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll(".tab-btn").forEach(b => b.classList.toggle("active", b.dataset.tab === tab));
+      document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === `view-${tab}`));
+      document.getElementById("reviewHeaderControls").style.display = tab === "review" ? "" : "none";
+      if (tab !== "review") stopJobsPolling();
+      if (tab === "datasets") initDatasetsTab();
+      if (tab === "eval") initEvalTab();
+    }
+    document.querySelectorAll(".tab-btn").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+    function parseHash() {
+      const h = location.hash.replace(/^#/, "");
+      if (!h) return null;
+      const p = new URLSearchParams(h);
+      return { tab: p.get("tab"), dir: p.get("dir"), track: p.get("track"), dataset: p.get("dataset") };
+    }
+
+    function deepLinkToReview(dir, trackId) {
+      location.hash = `tab=review&dir=${encodeURIComponent(dir)}&track=${encodeURIComponent(trackId)}`;
+      switchTab("review");
+      loadArtifact(dir).then(() => {
+        if (trackId !== null && trackId !== undefined && dataset && dataset.tracks) {
+          selectTrack(trackId, true);
+        }
+      });
+    }
+
+    async function jsonFetch(url, opts) {
+      const res = await fetch(url, opts);
+      let body = null;
+      try { body = await res.json(); } catch (e) { /* non-JSON */ }
+      if (!res.ok) {
+        const msg = (body && (body.error || body.message)) || `HTTP ${res.status}`;
+        throw new Error(msg);
+      }
+      return body;
+    }
+
+    // =========================================================================
+    // Datasets tab
+    // =========================================================================
+    let currentDs = null;
+    let ytFetchedItems = [];
+    let dsPollTimer = null;
+
+    const dsSelect = document.getElementById("dsSelect");
+    const ytResults = document.getElementById("ytResults");
+    const ytTable = document.getElementById("ytTable");
+    const dsVideoTable = document.getElementById("dsVideoTable");
+
+    async function initDatasetsTab() {
+      await loadDatasetsList();
+    }
+
+    async function loadDatasetsList() {
+      try {
+        const data = await jsonFetch("/api/datasets");
+        const list = data.datasets || [];
+        dsSelect.innerHTML = '<option value="">— select dataset —</option>';
+        list.forEach(d => {
+          const opt = document.createElement("option");
+          opt.value = d.name;
+          opt.textContent = `${d.name} (${d.video_count} videos)`;
+          dsSelect.appendChild(opt);
+        });
+        if (currentDs) {
+          dsSelect.value = currentDs;
+          loadDatasetDetail(currentDs);
+        }
+      } catch (err) {
+        document.getElementById("dsDetailError").textContent = `Failed to list datasets: ${err.message}`;
+      }
+    }
+
+    dsSelect.addEventListener("change", () => {
+      currentDs = dsSelect.value || null;
+      if (currentDs) loadDatasetDetail(currentDs);
+    });
+
+    document.getElementById("dsCreateBtn").addEventListener("click", async () => {
+      const name = document.getElementById("dsNewName").value.trim();
+      const description = document.getElementById("dsNewDesc").value.trim();
+      if (!name) { showToast("Dataset name is required"); return; }
+      try {
+        await jsonFetch("/api/datasets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, description })
+        });
+        showToast(`Dataset '${name}' created`);
+        document.getElementById("dsNewName").value = "";
+        document.getElementById("dsNewDesc").value = "";
+        currentDs = name;
+        await loadDatasetsList();
+      } catch (err) {
+        showToast(`Create failed: ${err.message}`);
+      }
+    });
+
+    async function loadDatasetDetail(name) {
+      let data;
+      try {
+        data = await jsonFetch(`/api/datasets/${encodeURIComponent(name)}`);
+      } catch (err) {
+        document.getElementById("dsTitle").textContent = name;
+        document.getElementById("dsDetailError").textContent = err.message;
+        return;
+      }
+      document.getElementById("dsDetailError").textContent = "";
+      document.getElementById("dsTitle").textContent =
+        `${name} — ${data.videos.length} processed` + (data.frozen_at ? ` · frozen ${data.frozen_at}` : " · not frozen");
+
+      renderDsStats(data);
+      renderDsVideoTable(data);
+
+      const active = (data.job_stats?.queued || 0) + (data.job_stats?.running || 0);
+      if (active > 0) scheduleJobsPolling(name);
+      else stopJobsPolling();
+    }
+
+    function renderDsStats(data) {
+      const stats = data.job_stats || {};
+      const totalTracks = data.videos.reduce((s, v) => s + (v.total_tracks || 0), 0);
+      const labeled = data.videos.reduce((s, v) => s + (v.labeled_tracks || 0), 0);
+      const chips = [
+        ["Videos", data.videos.length],
+        ["Tracks", totalTracks],
+        ["Labeled", labeled],
+        ["Queued", stats.queued || 0],
+        ["Running", stats.running || 0],
+        ["Failed", stats.failed || 0],
+      ];
+      document.getElementById("dsStats").innerHTML = chips
+        .map(([l, v]) => `<div class="stat-chip"><strong>${v}</strong>${l}</div>`)
+        .join("");
+    }
+
+    function renderDsVideoTable(data) {
+      const jobs = data.jobs || [];
+      const jobByVid = {};
+      jobs.forEach(j => { jobByVid[j.video_id] = j; });
+      const entryByVid = {};
+      data.videos.forEach(v => { entryByVid[v.video_id] = v; });
+
+      const rows = [];
+      const seen = new Set();
+      jobs.forEach(j => { seen.add(j.video_id); rows.push({ vid: j.video_id, job: j, entry: entryByVid[j.video_id] }); });
+      data.videos.forEach(v => { if (!seen.has(v.video_id)) rows.push({ vid: v.video_id, job: null, entry: v }); });
+
+      let html = `<tr><th>Video</th><th>State</th><th>Progress</th><th>Tracks</th><th>Labeled</th><th>Split</th><th>Actions</th></tr>`;
+      if (!rows.length) {
+        html += `<tr><td colspan="7" style="color:var(--text-muted);font-style:italic;padding:16px">No videos yet — fetch a channel or add local paths, then queue.</td></tr>`;
+      }
+      rows.forEach(r => {
+        const j = r.job, e = r.entry;
+        const state = j ? j.state : "done";
+        const title = (j?.source?.title) || e?.title || r.vid;
+        const artPath = e ? `datasets/${data.name}/${e.artifact_dir}` : null;
+        const pct = j ? Math.round(j.percent || 0) : 100;
+        const errTip = j?.error ? ` title="${escapeHtml(j.error)}"` : "";
+        const stage = j && j.state === "running" ? escapeHtml(j.stage || "") : "";
+        const labeled = e?.labeled_tracks || 0;
+
+        let actions = "";
+        if (artPath) actions += `<button class="link-btn" data-review-dir="${escapeHtml(artPath)}" data-review-track="">Review →</button>`;
+        if (j && ["failed", "cancelled"].includes(j.state))
+          actions += `<button class="mini-btn" data-retry="${j.job_id}"${errTip}>Retry</button> `;
+        if (j && j.state === "done")
+          actions += `<button class="mini-btn" data-rerun="${j.job_id}"${labeled > 0 ? ` data-labeled="${labeled}"` : ""}>Re-run</button> `;
+        if (j && ["queued", "running"].includes(j.state))
+          actions += `<button class="mini-btn" data-cancel="${j.job_id}">Cancel</button>`;
+
+        const splitSel = e
+          ? `<select data-split="${escapeHtml(r.vid)}" class="mini-btn">
+               <option value="train"${e.split === "train" ? " selected" : ""}>train</option>
+               <option value="test"${e.split !== "train" ? " selected" : ""}>test</option>
+             </select>`
+          : `<span style="color:var(--text-muted)">—</span>`;
+
+        html += `<tr>
+          <td class="wrap"><strong>${escapeHtml(String(title).slice(0, 60))}</strong><br>
+              <span style="color:var(--text-muted);font-size:11px">${escapeHtml(r.vid)}</span></td>
+          <td><span class="state-chip state-${state}"${errTip}>${state}</span></td>
+          <td>${j && ["queued", "running"].includes(j.state)
+              ? `<span class="pbar"><div style="width:${pct}%"></div></span> ${pct}% <span style="font-size:11px;color:var(--text-muted)">${stage}</span>`
+              : (state === "failed" && j.failed_stage ? `<span style="font-size:11px;color:var(--channel)">at ${escapeHtml(j.failed_stage)}</span>` : "—")}</td>
+          <td>${e?.total_tracks ?? "—"}</td>
+          <td>${labeled || 0}</td>
+          <td>${splitSel}</td>
+          <td>${actions}</td>
+        </tr>`;
+      });
+      dsVideoTable.innerHTML = html;
+
+      dsVideoTable.querySelectorAll("[data-review-dir]").forEach(b =>
+        b.addEventListener("click", () => deepLinkToReview(b.dataset.reviewDir, b.dataset.reviewTrack || null)));
+      dsVideoTable.querySelectorAll("[data-retry]").forEach(b =>
+        b.addEventListener("click", () => jobAction(b.dataset.retry, "retry", {})));
+      dsVideoTable.querySelectorAll("[data-rerun]").forEach(b =>
+        b.addEventListener("click", () => {
+          const labeled = b.dataset.labeled;
+          const warn = labeled ? `This video has ${labeled} human labels. Re-running may shift track IDs and mis-align them.\n\n` : "";
+          if (confirm(`${warn}Force re-run this video?`)) jobAction(b.dataset.rerun, "retry", { force: true });
+        }));
+      dsVideoTable.querySelectorAll("[data-cancel]").forEach(b =>
+        b.addEventListener("click", () => jobAction(b.dataset.cancel, "cancel")));
+      dsVideoTable.querySelectorAll("[data-split]").forEach(sel =>
+        sel.addEventListener("change", async () => {
+          try {
+            await jsonFetch(`/api/datasets/${encodeURIComponent(currentDs)}/split`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ video_id: sel.dataset.split, split: sel.value })
+            });
+            showToast(`Split set to ${sel.value}`);
+          } catch (err) { showToast(`Split failed: ${err.message}`); }
+        }));
+    }
+
+    async function jobAction(jobId, action, payload) {
+      try {
+        await jsonFetch(`/api/jobs/${jobId}/${action}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload || {})
+        });
+        showToast(action === "cancel" ? "Job cancelled" : "Job re-queued");
+        if (currentDs) loadDatasetDetail(currentDs);
+      } catch (err) {
+        showToast(`${action} failed: ${err.message}`);
+      }
+    }
+
+    function scheduleJobsPolling(name) {
+      stopJobsPolling();
+      dsPollTimer = setInterval(() => {
+        if (activeTab !== "datasets" || currentDs !== name) { stopJobsPolling(); return; }
+        loadDatasetDetail(name);
+      }, 2000);
+    }
+    function stopJobsPolling() {
+      if (dsPollTimer) { clearInterval(dsPollTimer); dsPollTimer = null; }
+    }
+
+    // --- YouTube fetch & selection ---
+    document.getElementById("ytFetchBtn").addEventListener("click", async () => {
+      const url = document.getElementById("ytUrl").value.trim();
+      const limit = document.getElementById("ytLimit").value || "200";
+      const status = document.getElementById("ytStatus");
+      if (!url) { showToast("Paste a channel/playlist/watch URL first"); return; }
+      const btn = document.getElementById("ytFetchBtn");
+      btn.disabled = true;
+      status.innerHTML = `<span class="spinner-inline"></span> Listing videos (can take 10–60s)…`;
+      try {
+        const data = await jsonFetch(`/api/youtube/list?url=${encodeURIComponent(url)}&limit=${encodeURIComponent(limit)}`);
+        ytFetchedItems = data.items || [];
+        renderYtTable();
+        status.textContent = `${ytFetchedItems.length} videos found`;
+      } catch (err) {
+        status.textContent = "";
+        ytResults.style.display = "none";
+        showToast(`YouTube listing failed: ${err.message}`);
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    function renderYtTable() {
+      if (!ytFetchedItems.length) { ytResults.style.display = "none"; return; }
+      ytResults.style.display = "block";
+      let html = `<tr>
+        <th><input type="checkbox" id="ytSelectAll" checked></th>
+        <th>Title</th><th>Duration</th><th>ID</th></tr>`;
+      ytFetchedItems.forEach((v, i) => {
+        const dur = v.duration ? `${Math.floor(v.duration / 60)}:${String(Math.floor(v.duration % 60)).padStart(2, "0")}` : "?";
+        html += `<tr>
+          <td><input type="checkbox" class="yt-check" data-idx="${i}" checked></td>
+          <td class="wrap">${escapeHtml(v.title || "")}</td>
+          <td>${dur}</td>
+          <td style="color:var(--text-muted);font-size:11px">${escapeHtml(v.id)}</td></tr>`;
+      });
+      ytTable.innerHTML = html;
+      document.getElementById("ytSelectAll").addEventListener("change", e => {
+        ytTable.querySelectorAll(".yt-check").forEach(c => c.checked = e.target.checked);
+      });
+    }
+
+    // --- Queue ---
+    document.getElementById("optForce").addEventListener("change", e => {
+      document.getElementById("forceWarn").hidden = !e.target.checked;
+    });
+
+    document.getElementById("queueBtn").addEventListener("click", async () => {
+      if (!currentDs) { showToast("Select or create a dataset first"); return; }
+      const videos = [];
+      ytTable.querySelectorAll(".yt-check:checked").forEach(c => {
+        const v = ytFetchedItems[parseInt(c.dataset.idx)];
+        if (v) videos.push({ kind: "youtube", url: v.url || `https://www.youtube.com/watch?v=${v.id}`,
+                             yt_id: v.id, title: v.title || "", channel: v.channel || "", duration: v.duration });
+      });
+      document.getElementById("localPaths").value.split("\n").map(s => s.trim()).filter(Boolean)
+        .forEach(p => videos.push({ kind: "local", path: p }));
+
+      if (!videos.length) { showToast("Nothing selected — tick YouTube videos or add local paths"); return; }
+
+      const options = {
+        fps: parseFloat(document.getElementById("optFps").value) || 1.0,
+        tracker: document.getElementById("optTracker").value,
+        max_height: parseInt(document.getElementById("optMaxHeight").value) || null,
+        force: document.getElementById("optForce").checked,
+      };
+      try {
+        const res = await jsonFetch(`/api/datasets/${encodeURIComponent(currentDs)}/items`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ videos, options })
+        });
+        const n = (res.enqueued || []).length;
+        const rej = res.rejected || [];
+        showToast(n ? `Queued ${n} video(s)${rej.length ? ` · ${rej.length} rejected` : ""}` : `No new jobs (${rej.length} rejected)`);
+        if (rej.length) console.warn("Rejected sources:", rej);
+        if (n) {
+          document.getElementById("localPaths").value = "";
+          ytTable.querySelectorAll(".yt-check").forEach(c => c.checked = false);
+          loadDatasetDetail(currentDs);
+        } else if (rej.length) {
+          showToast(`Rejected: ${rej[0]}${rej.length > 1 ? ` (+${rej.length - 1} more)` : ""}`);
+        }
+      } catch (err) {
+        showToast(`Queue failed: ${err.message}`);
+      }
+    });
+
+    document.getElementById("dsRefreshBtn").addEventListener("click", () => { loadDatasetsList(); if (currentDs) loadDatasetDetail(currentDs); });
+
+    document.getElementById("dsFreezeBtn").addEventListener("click", async () => {
+      if (!currentDs) { showToast("No dataset selected"); return; }
+      try {
+        const res = await jsonFetch(`/api/datasets/${encodeURIComponent(currentDs)}/freeze`, { method: "POST" });
+        showToast(`Frozen: ${res.changed}/${res.videos} entries updated`);
+        loadDatasetDetail(currentDs);
+      } catch (err) { showToast(`Freeze failed: ${err.message}`); }
+    });
+
+    document.getElementById("dsEvalBtn").addEventListener("click", () => {
+      if (!currentDs) { showToast("No dataset selected"); return; }
+      evalPickFor(`datasets/${currentDs}`);
+    });
+
+    // =========================================================================
+    // Eval tab
+    // =========================================================================
+    let evalInitialized = false;
+
+    async function initEvalTab() {
+      await populateEvalDatasets();
+      evalInitialized = true;
+    }
+
+    async function populateEvalDatasets() {
+      const sel = document.getElementById("evalDatasetSelect");
+      try {
+        const data = await jsonFetch("/api/datasets");
+        const cur = sel.value;
+        sel.innerHTML = '<option value="golden/v1">golden/v1 (built-in)</option>';
+        (data.datasets || []).forEach(d => {
+          const opt = document.createElement("option");
+          opt.value = `datasets/${d.name}`;
+          opt.textContent = `${d.name} (${d.video_count} videos${d.frozen_at ? "" : ", not frozen"})`;
+          sel.appendChild(opt);
+        });
+        if (cur) sel.value = cur;
+      } catch (err) { /* keep static options */ }
+    }
+
+    async function evalPickFor(dir) {
+      await initEvalTab().catch(() => {});
+      switchTab("eval");
+      const sel = document.getElementById("evalDatasetSelect");
+      if (![...sel.options].some(o => o.value === dir)) {
+        const opt = document.createElement("option");
+        opt.value = dir; opt.textContent = dir;
+        sel.appendChild(opt);
+      }
+      sel.value = dir;
+      runEvaluation();
+    }
+
+    document.getElementById("evalRunBtn").addEventListener("click", runEvaluation);
+    document.getElementById("evalFreezeBtn").addEventListener("click", async () => {
+      const dir = document.getElementById("evalDatasetSelect").value;
+      if (dir.startsWith("datasets/")) {
+        const name = dir.split("/")[1];
+        try {
+          await jsonFetch(`/api/datasets/${encodeURIComponent(name)}/freeze`, { method: "POST" });
+          showToast("Frozen — evaluating…");
+        } catch (err) { showToast(`Freeze failed: ${err.message}`); }
+      }
+      runEvaluation();
+    });
+
+    const LABELS_ORDER = ["lyric", "channel", "song_title", "supplementary", "scene_text", "unknown"];
+
+    async function runEvaluation() {
+      const dir = document.getElementById("evalDatasetSelect").value;
+      const status = document.getElementById("evalStatus");
+      const content = document.getElementById("evalContent");
+      if (!dir) { showToast("Pick a dataset"); return; }
+      status.innerHTML = `<span class="spinner-inline"></span> Evaluating…`;
+      content.innerHTML = "";
+      try {
+        const [report, errData] = await Promise.all([
+          jsonFetch(`/api/eval?golden=${encodeURIComponent(dir)}`),
+          jsonFetch(`/api/eval/errors?golden=${encodeURIComponent(dir)}`).catch(() => ({ errors: [] })),
+        ]);
+        status.textContent = `Source: ${dir}`;
+        renderEvalReport(report, errData.errors || [], dir);
+      } catch (err) {
+        status.textContent = "";
+        content.innerHTML = `<div class="gate-banner gate-fail">Evaluation failed<ul><li>${escapeHtml(err.message)}</li></ul></div>`;
+      }
+    }
+
+    function renderEvalReport(rep, errors, dir) {
+      const content = document.getElementById("evalContent");
+      const ci = rep.binary_lyric_ci || {};
+      const ciStr = k => ci[k] ? ` [${ci[k][0].toFixed(2)}, ${ci[k][1].toFixed(2)}]` : "";
+
+      // Map video_id -> artifact dir for error deep links
+      const dsName = dir.startsWith("datasets/") ? dir.split("/")[1] : null;
+
+      let html = "";
+
+      // Gate banner
+      const gateCls = rep.gate_passed ? "gate-pass" : "gate-fail";
+      const reasons = (rep.gate_reasons || []).map(r => `<li>• ${escapeHtml(r)}</li>`).join("");
+      html += `<div class="gate-banner ${gateCls}">
+        ${rep.gate_passed ? "✅ GATE PASSED — rule engine meets Phase 1 targets" : "❌ GATE FAILED"}
+        ${reasons ? `<ul>${reasons}</ul>` : ""}
+      </div>`;
+
+      // Metric cards
+      const cards = [
+        ["Coverage", `${(rep.coverage_rate * 100).toFixed(1)}%`, `${rep.evaluated_tracks}/${rep.total_tracks} tracks labeled`],
+        ["Macro F1", rep.macro_f1.toFixed(3), `Micro F1: ${rep.micro_f1.toFixed(3)}`],
+        ["Lyric Precision", rep.binary_lyric.precision.toFixed(3), `95% CI${ciStr("precision")}`],
+        ["Lyric Recall", rep.binary_lyric.recall.toFixed(3), `95% CI${ciStr("recall")}`],
+        ["Lyric F1", rep.binary_lyric.f1.toFixed(3), `support: ${rep.binary_lyric.support_lyric} lyric / ${rep.binary_lyric.support_non_lyric} other`],
+        ["Distractor Leakage", `${(rep.leakage.count_rate * 100).toFixed(1)}%`, `${rep.leakage.leaked_tracks_count}/${rep.leakage.channel_count} non-lyric tracks classified lyric`],
+        ["False Drops", `${(rep.false_drop.rate * 100).toFixed(1)}%`, `${rep.false_drop.count}/${rep.false_drop.total_golden_lyrics} golden lyrics missed`],
+        ["Tracking Miss", `${(rep.tracking_miss_rate * 100).toFixed(1)}%`, `${rep.tracking_miss_tracks} tracks · ${rep.tracking_error_tracks} flagged fragmented`],
+        ["Unknown Rate", `${(rep.unknown_rate * 100).toFixed(1)}%`, `${rep.unlabeled_tracks} unlabeled`],
+      ];
+      html += `<div class="metrics-grid">` + cards.map(([l, v, s]) =>
+        `<div class="metric-card"><div class="m-label">${l}</div><div class="m-val">${v}</div><div class="m-sub">${escapeHtml(s)}</div></div>`).join("") + `</div>`;
+
+      // Confusion matrix (rows=human, cols=model)
+      const cm = rep.confusion_matrix || {};
+      let cmHtml = `<div class="section-title" style="margin-top:8px">Confusion Matrix <span style="font-weight:400;text-transform:none">(rows = human truth, columns = model)</span></div>
+        <div style="overflow-x:auto"><table class="data-table"><tr><th></th>${LABELS_ORDER.map(l => `<th class="cm-cell">${l}</th>`).join("")}</tr>`;
+      LABELS_ORDER.forEach(h => {
+        const row = cm[h] || {};
+        const rowTotal = LABELS_ORDER.reduce((s, m) => s + (row[m] || 0), 0);
+        cmHtml += `<tr><th>${h}${rowTotal ? ` <span style="color:var(--text-muted);font-weight:400">(${rowTotal})</span>` : ""}</th>` +
+          LABELS_ORDER.map(m => {
+            const n = row[m] || 0;
+            if (!n) return `<td class="cm-cell" style="color:var(--border)">·</td>`;
+            const cls = h === m ? "cm-diag" : "cm-off";
+            return `<td class="cm-cell ${cls}">${n}</td>`;
+          }).join("") + `</tr>`;
+      });
+      cmHtml += `</table></div>`;
+      html += cmHtml;
+
+      // Per-class table
+      const pc = rep.per_class || {};
+      let pcHtml = `<div class="section-title" style="margin-top:8px">Per-Class Metrics</div>
+        <table class="data-table"><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Support</th></tr>`;
+      LABELS_ORDER.forEach(l => {
+        const m = pc[l];
+        if (!m) return;
+        pcHtml += `<tr><td><span class="badge badge-${l}">${l}</span></td>
+          <td>${m.precision.toFixed(3)}</td><td>${m.recall.toFixed(3)}</td>
+          <td>${m.f1.toFixed(3)}</td><td>${m.support}</td></tr>`;
+      });
+      pcHtml += `</table>`;
+      html += pcHtml;
+
+      // Error list
+      const REAL_ERRORS = ["leakage", "false_drop", "misclassification", "tracking_miss", "missing_track"];
+      const shown = errors.filter(e => REAL_ERRORS.includes(e.error_type));
+      const unlabeledCount = errors.filter(e => e.error_type === "unlabeled").length;
+      let errHtml = `<div class="section-title" style="margin-top:8px">Errors (${shown.length})</div>`;
+      if (unlabeledCount) errHtml += `<div style="font-size:12px;color:var(--text-muted);margin-bottom:6px">${unlabeledCount} unlabeled track(s) — label them in Review to raise coverage.</div>`;
+      if (!shown.length) {
+        errHtml += `<div style="color:var(--lyric);padding:10px">No misclassified tracks 🎉</div>`;
+      } else {
+        errHtml += `<div style="overflow-x:auto"><table class="data-table"><tr>
+          <th>Video</th><th>Track</th><th>Text</th><th>Model</th><th>Human</th><th>Type</th><th>Conf</th><th></th></tr>`;
+        shown.slice(0, 200).forEach(e => {
+          const artDir = dsName ? `datasets/${dsName}/artifacts/${e.video_id}` : "";
+          const fix = artDir ? `<button class="link-btn" data-err-dir="${escapeHtml(artDir)}" data-err-track="${escapeHtml(String(e.track_id))}">Fix →</button>` : "";
+          errHtml += `<tr>
+            <td style="font-size:11px;color:var(--text-muted)">${escapeHtml(String(e.video_id).slice(-12))}</td>
+            <td>#${escapeHtml(String(e.track_id))}</td>
+            <td class="wrap">${escapeHtml((e.text || "").slice(0, 60))}</td>
+            <td>${escapeHtml(e.model_label || "")}</td>
+            <td>${escapeHtml(e.human_label || "")}</td>
+            <td><span class="err-reason" style="color:var(--channel)">${escapeHtml(e.error_type)}</span></td>
+            <td>${escapeHtml(String(e.model_confidence ?? ""))}</td>
+            <td>${fix}</td></tr>`;
+        });
+        errHtml += `</table></div>`;
+        if (shown.length > 200) errHtml += `<div style="font-size:12px;color:var(--text-muted)">… ${shown.length - 200} more</div>`;
+      }
+      html += errHtml;
+
+      content.innerHTML = html;
+      content.querySelectorAll("[data-err-dir]").forEach(b =>
+        b.addEventListener("click", () => deepLinkToReview(b.dataset.errDir, b.dataset.errTrack)));
+    }
+
+    // =========================================================================
+    // Deep-link entry: #tab=review&dir=...&track=...
+    // =========================================================================
+    function applyInitialHashRoute() {
+      const hl = parseHash();
+      if (!hl) return;
+      if (hl.tab && hl.tab !== "review") {
+        switchTab(hl.tab);
+        return;
+      }
+      if (hl.dir) {
+        switchTab("review");
+        loadArtifact(hl.dir).then(() => {
+          if (hl.track && dataset && dataset.tracks) selectTrack(hl.track, true);
+        });
+      }
+    }
+
+    // Start
+    init().then(applyInitialHashRoute);
+  </script>
+</body>
+</html>

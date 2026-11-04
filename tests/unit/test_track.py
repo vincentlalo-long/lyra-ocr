@@ -184,6 +184,84 @@ def test_tracker_invalid_schema_missing_text():
         tracker.update(invalid_frame)
 
 
+def make_occurrence(frame_id, timestamp_ms, text, bbox=(100, 100, 400, 150)):
+    from lyra_ocr.track import DetectionOccurrence
+
+    return DetectionOccurrence(
+        frame_id=frame_id,
+        timestamp_ms=timestamp_ms,
+        polygon=[[bbox[0], bbox[1]], [bbox[2], bbox[1]], [bbox[2], bbox[3]], [bbox[0], bbox[3]]],
+        bbox=list(bbox),
+        text_raw=text,
+        text_norm=text,
+        confidence=0.95,
+        model_id="PP-OCRv6_rec_small",
+        script="latin",
+    )
+
+
+def test_merge_fragmented_tracks_merges_short_gap_same_text():
+    from lyra_ocr.track import TextTrack, merge_fragmented_tracks
+
+    t1 = TextTrack(
+        track_id=1,
+        start_ms=1000,
+        end_ms=2000,
+        bbox=[100, 100, 400, 150],
+        occurrences=[
+            make_occurrence(0, 1000, "Hello world"),
+            make_occurrence(1, 2000, "Hello world"),
+        ],
+    )
+    t2 = TextTrack(
+        track_id=2,
+        start_ms=2500,
+        end_ms=3000,
+        bbox=[102, 101, 401, 151],
+        occurrences=[
+            make_occurrence(2, 2500, "Hello world"),
+            make_occurrence(3, 3000, "Hello world"),
+        ],
+    )
+
+    merged = merge_fragmented_tracks([t1, t2], video_duration_ms=60000)
+
+    assert len(merged) == 1
+    assert len(merged[0].occurrences) == 4
+    assert merged[0].start_ms == 1000
+    assert merged[0].end_ms == 3000
+
+
+def test_merge_fragmented_tracks_keeps_distinct_text_and_large_gaps():
+    from lyra_ocr.track import TextTrack, merge_fragmented_tracks
+
+    t1 = TextTrack(
+        track_id=1,
+        start_ms=1000,
+        end_ms=2000,
+        bbox=[100, 100, 400, 150],
+        occurrences=[make_occurrence(0, 1000, "Line one")],
+    )
+    t2 = TextTrack(
+        track_id=2,
+        start_ms=2500,
+        end_ms=3000,
+        bbox=[100, 100, 400, 150],
+        occurrences=[make_occurrence(2, 2500, "Totally different words")],
+    )
+    t3 = TextTrack(
+        track_id=3,
+        start_ms=5000,
+        end_ms=6000,
+        bbox=[100, 100, 400, 150],
+        occurrences=[make_occurrence(3, 5000, "Line one")],
+    )
+
+    merged = merge_fragmented_tracks([t1, t2, t3], video_duration_ms=60000)
+
+    assert len(merged) == 3
+
+
 def test_text_track_to_dict_includes_occurrences():
     from lyra_ocr.track import TextTrack, DetectionOccurrence
 

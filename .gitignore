@@ -1,4 +1,6 @@
-# Python
+# =============================================================================
+# 1. Python Environment & Build Artifacts
+# =============================================================================
 __pycache__/
 *.py[cod]
 *$py.class
@@ -27,19 +29,84 @@ env/
 venv/
 ENV/
 
-# Output and caches
-smoke_*/
-output_*/
+# =============================================================================
+# 2. Testing, Coverage & Profiling Caches
+# =============================================================================
 .pytest_cache/
 .coverage
 htmlcov/
 .mypy_cache/
+.ruff_cache/
 
-# Internal agent/developer workspace docs (public docs go into doc/)
-docs/
+# =============================================================================
+# 3. Dynamic Pipeline Outputs & Ground Truth Datasets
+# =============================================================================
+outputs/
+output/
+output_*/
+smoke_*/
+golden/
+datasets/
+runs/
+temp/
+tmp/
+*.log
+
+# Ad-hoc CSV export files from CLI labeling
+label_batch*.csv
+review_batch*.csv
+
+# Internal agent notes, plans & licenses
+.agent_notes/
 .licenses/
+doc/WEB_UI_PLAN.md
 
-# Test downloaded fixtures
-tests/fixtures/*.mp4
-tests/fixtures/*.m4a
+# =============================================================================
+# 4. Large Media Files & Binary Image Artifacts
+# =============================================================================
+*.mp4
+*.mkv
+*.webm
+*.avi
+*.mov
+*.flv
+*.m4a
+*.wav
+*.flac
+*.mp3
+*.aac
+*.opus
+
+# Block all binary images from git tracking (frames, overlays, charts)
+*.jpg
+*.jpeg
+*.png
+
+# Keep fixtures directory tracked
 !tests/fixtures/.gitkeep
+
+# =============================================================================
+# 5. LaTeX Build Artifacts & Sources (doc/research/)
+# =============================================================================
+*.aux
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.toc
+*.lot
+*.lof
+*.tex
+missfont.log
+
+# =============================================================================
+# 6. IDEs & Operating System Artifacts
+# =============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

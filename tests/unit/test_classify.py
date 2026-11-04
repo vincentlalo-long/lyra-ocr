@@ -128,6 +128,77 @@ def test_classify_recurring_lyric_stream():
     assert "recurring text changes" in result.reason.lower() or "lyric" in result.reason.lower()
 
 
+def test_classify_recurring_changes_in_intro_are_not_auto_accepted():
+    from lyra_ocr.classify import classify_track
+
+    # Credit carousel: 3 distinct texts inside the first 5 seconds of a 100s video.
+    track = create_mock_track(
+        track_id=10,
+        start_ms=0,
+        end_ms=5000,
+        texts=["CASTLE", "CLARX & HARDDOPE", "OFFICIAL VIDEO"],
+        bbox=[300, 200, 980, 250],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={})
+
+    assert result.label == "unknown"
+    assert result.decision == "review"
+    assert "only_intro_outro" in result.qa_flags
+
+
+def test_classify_all_caps_promo_is_not_auto_accepted_as_lyric():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=11,
+        start_ms=40000,
+        end_ms=45000,
+        texts=["NEW VIDEO EVERY WEEK"],
+        bbox=[300, 300, 900, 340],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={})
+
+    assert result.label != "lyric"
+    assert result.decision != "accept"
+
+
+def test_classify_sentence_case_single_cue_is_lyric():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=12,
+        start_ms=20000,
+        end_ms=24500,
+        texts=["We can be alone in the castle in the sky"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={})
+
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+
+
+def test_classify_isolated_single_frame_text_is_scene_text():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=13,
+        start_ms=20000,
+        end_ms=20000,
+        texts=["4ILCAR"],
+        bbox=[1025, 304, 1131, 391],
+        video_duration_ms=200000,
+    )
+    result = classify_track(track, metadata={})
+
+    assert result.label == "scene_text"
+    assert result.decision == "reject"
+    assert "single_frame_isolated" in result.qa_flags
+
+
 def test_classify_supplementary_subscribe_tag():
     from lyra_ocr.classify import classify_track
 

@@ -13,7 +13,31 @@ from typing import Any, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
+from lyra_ocr.labels import (
+    LabelRecord,
+    append_label_record,
+    load_labels_jsonl,
+)
 from lyra_ocr.track import TextTrack
+
+
+FONT_CANDIDATES = [
+    "/usr/share/fonts/google-noto-sans-mono-cjk-vf-fonts/NotoSansMonoCJK-VF.ttc",
+    "/usr/share/fonts/google-noto-vf/NotoSans[wght].ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+]
+
+
+def _find_unicode_font(size: int = 16) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    """Find a system font that can render Latin/Vietnamese/CJK overlay text."""
+    for font_path in FONT_CANDIDATES:
+        if os.path.isfile(font_path):
+            try:
+                return ImageFont.truetype(font_path, size=size)
+            except Exception:
+                continue
+    return ImageFont.load_default()
 
 
 LABEL_COLORS = {
@@ -37,57 +61,125 @@ def export_tracks_json(tracks: list[TextTrack], out_path: str) -> None:
         json.dump(payload, f, indent=2, ensure_ascii=False)
 
 
-def load_human_labels(labels_path: str) -> dict[str, dict[str, Any]]:
+def load_human_labels(labels_path: str, video_id: Optional[str] = None) -> dict[str, dict[str, Any]]:
     """Load human labels from labels.jsonl, indexing latest entry by track_id."""
-    if not os.path.exists(labels_path):
-        return {}
-    labels: dict[str, dict[str, Any]] = {}
-    with open(labels_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                record = json.loads(line)
-                tid = str(record.get("track_id", ""))
-                if tid:
-                    labels[tid] = record
-            except json.JSONDecodeError:
-                continue
-    return labels
+    records = load_labels_jsonl(labels_path)
+    res: dict[str, dict[str, Any]] = {}
+    for (vid, tid), rec in records.items():
+        if video_id is None or vid == video_id or not vid:
+            res[tid] = rec
+    return res
 
 
 def append_human_label(
     labels_path: str,
     track_id: str,
     human_label: str,
-    human_decision: str,
+    human_decision: str = "",
     annotator: str = "human",
     note: str = "",
+    video_id: str = "unknown_video",
+    tracking_error: bool = False,
 ) -> None:
-    """Append a human annotation record to labels.jsonl."""
-    import time
-    os.makedirs(os.path.dirname(os.path.abspath(labels_path)), exist_ok=True)
-    record = {
-        "track_id": str(track_id),
-        "human_label": human_label,
-        "human_decision": human_decision,
-        "annotator": annotator,
-        "note": note,
-        "timestamp": int(time.time()),
-    }
-    with open(labels_path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+    """Append a validated human annotation record to labels.jsonl."""
+    rec = LabelRecord(
+        video_id=video_id,
+        track_id=str(track_id),
+        human_label=human_label,
+        human_decision=human_decision,
+        annotator=annotator,
+        notes=note,
+        tracking_error=tracking_error,
+    )
+    append_label_record(labels_path, rec)
+
+
+def export_review_tracks_csv(
+    tracks: list[TextTrack],
+    out_path: str,
+    video_id: str = "unknown_video",
+    labels_jsonl_path: Optional[str] = None,
+) -> None:
+    """Export 1 row per track to review_tracks.csv for track-level Phase 1 ground truth."""
+    os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
+    human_annotations = load_human_labels(labels_jsonl_path, video_id=video_id) if labels_jsonl_path else {}
+
+    fieldnames = [
+        "video_id",
+        "track_id",
+        "start_ms",
+        "end_ms",
+        "duration_ms",
+        "dominant_text",
+        "machine_label",
+        "machine_decision",
+        "confidence",
+        "machine_reason",
+        "qa_flags",
+        "suggested_text",
+        "human_label",
+        "human_decision",
+        "corrected_text",
+        "tracking_error",
+        "notes",
+        "annotator",
+        "reviewed_at",
+    ]
+
+    rows = []
+    for tr in tracks:
+        tid_str = str(tr.track_id)
+        label = tr.classification.label if tr.classification else "unknown"
+        confidence = tr.classification.confidence if tr.classification else 0.50
+        decision = tr.classification.decision if tr.classification else "review"
+        reason = tr.classification.reason if tr.classification else ""
+        flags = ";".join(tr.classification.qa_flags) if tr.classification else ""
+        h_annot = human_annotations.get(tid_str, {})
+
+        dur_ms = max(0, tr.end_ms - tr.start_ms)
+        rows.append(
+            {
+                "video_id": video_id,
+                "track_id": tid_str,
+                "start_ms": tr.start_ms,
+                "end_ms": tr.end_ms,
+                "duration_ms": dur_ms,
+                "dominant_text": tr.features.get("dominant_text", ""),
+                "machine_label": label,
+                "machine_decision": decision,
+                "confidence": f"{confidence:.2f}",
+                "machine_reason": reason,
+                "qa_flags": flags,
+                "suggested_text": tr.features.get("dominant_text", ""),
+                "human_label": h_annot.get("human_label", ""),
+                "human_decision": h_annot.get("human_decision", ""),
+                "corrected_text": h_annot.get("corrected_text") or "",
+                "tracking_error": "true" if h_annot.get("tracking_error") else "false",
+                "notes": h_annot.get("notes", ""),
+                "annotator": h_annot.get("annotator", ""),
+                "reviewed_at": h_annot.get("reviewed_at", ""),
+            }
+        )
+
+    with open(out_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 def export_review_csv(
     tracks: list[TextTrack],
     out_path: str,
     labels_jsonl_path: Optional[str] = None,
+    video_id: Optional[str] = None,
 ) -> None:
     """Export human-in-the-loop audit rows to review.csv matching formal data contract."""
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
-    human_annotations = load_human_labels(labels_jsonl_path) if labels_jsonl_path else {}
+    human_annotations = (
+        load_human_labels(labels_jsonl_path, video_id=video_id)
+        if labels_jsonl_path
+        else {}
+    )
 
     fieldnames = [
         "track_id",
@@ -97,8 +189,10 @@ def export_review_csv(
         "machine_decision",
         "confidence",
         "suggested_text",
+        "qa_flags",
         "human_label",
         "human_decision",
+        "corrected_text",
         "review_note",
     ]
 
@@ -108,6 +202,7 @@ def export_review_csv(
         confidence = tr.classification.confidence if tr.classification else 0.50
         decision = tr.classification.decision if tr.classification else "review"
         reason = tr.classification.reason if tr.classification else ""
+        flags = ";".join(tr.classification.qa_flags) if tr.classification else ""
 
         # If a track has distinct segments (e.g. lyrics advancing over time), export each segment
         if tr.segments:
@@ -127,8 +222,10 @@ def export_review_csv(
                         "machine_decision": decision,
                         "confidence": f"{confidence:.2f}",
                         "suggested_text": seg.text,
+                        "qa_flags": flags,
                         "human_label": h_annot.get("human_label", ""),
                         "human_decision": h_annot.get("human_decision", ""),
+                        "corrected_text": h_annot.get("corrected_text") or "",
                         "review_note": reason,
                     }
                 )
@@ -148,8 +245,10 @@ def export_review_csv(
                     "machine_decision": decision,
                     "confidence": f"{confidence:.2f}",
                     "suggested_text": suggested,
+                    "qa_flags": flags,
                     "human_label": h_annot.get("human_label", ""),
                     "human_decision": h_annot.get("human_decision", ""),
+                    "corrected_text": h_annot.get("corrected_text") or "",
                     "review_note": reason,
                 }
             )
@@ -173,6 +272,7 @@ def render_phase1_overlay(
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     img = Image.open(image_path).convert("RGB")
     draw = ImageDraw.Draw(img)
+    font = _find_unicode_font(size=16)
 
     for tr in tracks:
         label = tr.classification.label if tr.classification else "unknown"
@@ -202,13 +302,15 @@ def render_phase1_overlay(
             box_text = tr.features.get("dominant_text", "")
             top_left = (bbox[0], bbox[1])
 
-        # Draw tag header
+        # Draw tag header with a Unicode-capable font (JP/VI glyphs must render).
         tag = f"[{label.upper()}] {box_text}"
         tag_x = max(0, top_left[0])
-        tag_y = max(0, top_left[1] - 18)
+        text_bbox = draw.textbbox((0, 0), tag, font=font)
+        tag_w = text_bbox[2] - text_bbox[0]
+        tag_h = text_bbox[3] - text_bbox[1]
+        tag_y = max(0, top_left[1] - tag_h - 6)
 
-        # Draw background rectangle for readability
-        draw.rectangle([tag_x, tag_y, tag_x + len(tag) * 8 + 6, tag_y + 16], fill=(20, 20, 20))
-        draw.text((tag_x + 3, tag_y + 1), tag, fill=color)
+        draw.rectangle([tag_x, tag_y, tag_x + tag_w + 6, tag_y + tag_h + 4], fill=(20, 20, 20))
+        draw.text((tag_x + 3, tag_y + 1), tag, fill=color, font=font)
 
     img.save(out_path, quality=92)

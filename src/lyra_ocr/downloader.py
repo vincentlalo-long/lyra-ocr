@@ -27,8 +27,12 @@ def download_video(
     url: str,
     output_dir: str,
     progress: ProgressCallback | None = None,
+    max_height: int | None = None,
 ) -> dict[str, Any]:
-    """Download one YouTube video as a playable MP4."""
+    """Download one YouTube video as a playable MP4.
+
+    max_height caps video resolution (e.g. 720) to save disk/OCR time.
+    """
     url = url.strip()
     if not url:
         raise ValueError("YouTube URL is required")
@@ -59,9 +63,17 @@ def download_video(
         elif status == "finished":
             emit({"stage": "processing", "message": "Merging video and audio into MP4"})
 
+    if max_height:
+        fmt = (
+            f"bestvideo[ext=mp4][height<={max_height}]+bestaudio[ext=m4a]"
+            f"/best[ext=mp4][height<={max_height}]/best[height<={max_height}]/best"
+        )
+    else:
+        fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+
     options: dict[str, Any] = {
         # Prefer separate MP4/M4A streams, then fall back to a ready MP4.
-        "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best",
+        "format": fmt,
         "merge_output_format": "mp4",
         "outtmpl": str(destination / "%(title)s [%(id)s].%(ext)s"),
         "noplaylist": True,

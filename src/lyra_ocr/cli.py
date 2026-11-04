@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import platform
 import shutil
 import subprocess
@@ -13,16 +12,12 @@ import time
 from pathlib import Path
 from typing import Any
 
-import cv2
 from PIL import Image, ImageDraw, ImageFont
 
-from .detect import TextDetector
-from .frames import sample_frames
-from .ocr import OCREngine, TextLine
-from .probe import probe_video
-from .track import track_ocr_results
+from .ocr import TextLine
+from .pipeline import run_phase1_pipeline
+from .track import merge_fragmented_tracks, track_ocr_results
 from .classify import classify_all_tracks
-from .review import export_tracks_json, export_review_csv, render_phase1_overlay
 
 
 def get_tool_versions() -> dict[str, str]:
@@ -109,151 +104,40 @@ def render_roi_preview(
 
 
 def run_smoke(args: argparse.Namespace) -> int:
-    """Execute smoke test verifying probe, frames (PTS), det-only, and ocr rec."""
+    """Execute smoke test / Phase-1 identification on a local video."""
     video_path = Path(args.video).resolve()
     out_dir = Path(args.out).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"=== [Lyra OCR Smoke Test — Phase 0] ===")
+    print("=== [Lyra OCR Smoke Test — Phase 0/1] ===")
     print(f"Video : {video_path}")
     print(f"Output: {out_dir}")
 
-    # 1. Probe video
-    print("\n1. Probing video metadata...")
-    meta = probe_video(video_path)
-    print(
-        f"   Resolution: {meta['width']}x{meta['height']} | "
-        f"FPS: {meta['fps']} | "
-        f"Duration: {meta['duration']}s | "
-        f"Audio: {'Yes' if meta['has_audio'] else 'No'}"
-    )
+    tracker_name = getattr(args, "tracker", "greedy") or "greedy"
 
-    # 2. Extract frames with accurate PTS
-    sample_count = args.sample_frames
-    start_sec = args.start_sec
-    sample_fps = args.fps
-    print(f"\n2. Sampling {sample_count} frames (from t={start_sec}s at {sample_fps} fps)...")
-    frame_entries = sample_frames(
-        video_path=video_path,
-        output_dir=out_dir,
-        fps=sample_fps,
-        max_frames=sample_count,
-        start_sec=start_sec,
-    )
-    print(f"   Extracted {len(frame_entries)} frames into {out_dir / 'frames'}")
-
-    # 3. Detect and Recognize text using separated modules
-    print("\n3. Initializing TextDetector (DBNet det-only) & OCREngine (PP-OCRv6 REC)...")
-    detector = TextDetector()
-    ocr_engine = OCREngine()
-
-    print("   Running detection + recognition per frame...")
-    processed_frames: list[dict[str, Any]] = []
-    total_time_ms = 0.0
-    best_frame_path: Path | None = None
-    best_frame_lines: list[TextLine] = []
-    max_box_count = -1
-
-    for frame in frame_entries:
-        rel_fpath = frame["image_path"]
-        abs_fpath = out_dir / rel_fpath
-        fid = frame["frame_id"]
-        t_ms = frame["timestamp_ms"]
-
-        img_bgr = cv2.imread(str(abs_fpath))
-        if img_bgr is None:
-            continue
-
-        t0 = time.perf_counter()
-        detections = detector.detect(img_bgr)
-        text_lines = ocr_engine.process_detections(img_bgr, detections)
-        elapsed_ms = round((time.perf_counter() - t0) * 1000.0, 2)
-        total_time_ms += elapsed_ms
-
+    def on_frame(fid: int, t_ms: int, text_lines: list, elapsed_ms: float) -> None:
         print(f"   - Frame {fid} (PTS={t_ms}ms): {len(text_lines)} boxes in {elapsed_ms:.1f}ms")
         for line in text_lines:
             print(f"       [{line.script}] \"{line.text_norm}\" (conf: {line.confidence:.2f}, model: {line.model_id})")
 
-        frame_data = {
-            "frame_id": fid,
-            "timestamp_ms": t_ms,
-            "pts_time": frame.get("pts_time", round(t_ms / 1000.0, 4)),
-            "image_path": rel_fpath,
-            "elapsed_ms": elapsed_ms,
-            "boxes": [line.to_dict() for line in text_lines],
-        }
-        processed_frames.append(frame_data)
+    def on_progress(stage: str, percent: float, message: str) -> None:
+        print(f"   [{stage}] {message}")
 
-        if len(text_lines) > max_box_count:
-            max_box_count = len(text_lines)
-            best_frame_path = abs_fpath
-            best_frame_lines = text_lines
-
-    avg_time_ms = round(total_time_ms / max(1, len(processed_frames)), 2)
-    print(f"\n   Average OCR time per frame: {avg_time_ms}ms (~{1000.0/max(1.0, avg_time_ms):.1f} FPS)")
-
-    # 4. Save manifest.json
-    manifest_data = {
-        "video_path": str(video_path),
-        "probe": meta,
-        "config": {
-            "sample_fps": sample_fps,
-            "start_sec": start_sec,
-            "sample_frames": sample_count,
-        },
-        "tool_versions": get_tool_versions(),
-        "models": {
-            "det": "PP-OCRv6_det_small",
-            "rec": ocr_engine.DEFAULT_MODEL,
-        },
-        "timestamp_created": int(time.time()),
-    }
-    manifest_path = out_dir / "manifest.json"
-    with open(manifest_path, "w", encoding="utf-8") as f:
-        json.dump(manifest_data, f, indent=2, ensure_ascii=False)
-    print(f"\n4. Saved manifest data to: {manifest_path}")
-
-    # 5. Save ocr_raw.json
-    ocr_raw_data = {
-        "video_path": str(video_path),
-        "manifest_path": "manifest.json",
-        "total_frames_processed": len(processed_frames),
-        "avg_frame_time_ms": avg_time_ms,
-        "frames": processed_frames,
-    }
-    raw_json_path = out_dir / "ocr_raw.json"
-    with open(raw_json_path, "w", encoding="utf-8") as f:
-        json.dump(ocr_raw_data, f, indent=2, ensure_ascii=False)
-    print(f"5. Saved OCR raw data to: {raw_json_path}")
-
-    # 6. Temporal Tracking (Phase 1)
-    print("\n6. Running Temporal Tracking across frames...")
-    v_dur_ms = int(meta.get("duration", 0) * 1000)
-    tracks = track_ocr_results(
-        frames_ocr_data=processed_frames,
-        video_duration_ms=v_dur_ms,
-        frame_width=meta["width"],
-        frame_height=meta["height"],
-        iou_threshold=0.30,
-        max_gap_ms=2000,
-    )
-    print(f"   Clustered {len(tracks)} TextTrack stream(s).")
-
-    # 7. Rule-based Classification (Phase 1)
-    print("\n7. Classifying TextTracks (Rule Engine)...")
-    track_meta = {
-        "title": getattr(args, "title", "") or "",
-        "channel": getattr(args, "channel", "") or "",
-        "duration": meta["duration"],
-    }
-    classify_all_tracks(
-        tracks=tracks,
-        metadata=track_meta,
-        video_duration_ms=v_dur_ms,
-        frame_width=meta["width"],
-        frame_height=meta["height"],
+    result = run_phase1_pipeline(
+        video_path,
+        out_dir,
+        title=getattr(args, "title", "") or "",
+        channel=getattr(args, "channel", "") or "",
+        fps=args.fps,
+        start_sec=args.start_sec,
+        max_frames=args.sample_frames,
+        tracker=tracker_name,
+        progress=on_progress,
+        on_frame=on_frame,
+        force=True,
     )
 
+    tracks = result["tracks"]
+    print(f"\nClassified {len(tracks)} track(s):")
     for tr in tracks:
         lbl = tr.classification.label if tr.classification else "unknown"
         dec = tr.classification.decision if tr.classification else "review"
@@ -261,34 +145,241 @@ def run_smoke(args: argparse.Namespace) -> int:
         txt = tr.features.get("dominant_text", "")
         print(f"   - Track #{tr.track_id} [{lbl.upper()}] ({dec}): \"{txt}\" — {rsn}")
 
-    # 8. Export Phase 1 Artifacts: tracks.json & review.csv
-    tracks_json_path = out_dir / "tracks.json"
-    export_tracks_json(tracks, str(tracks_json_path))
-    print(f"\n8. Saved tracks data to: {tracks_json_path}")
-
-    review_csv_path = out_dir / "review.csv"
-    labels_jsonl_path = out_dir / "labels.jsonl"
-    export_review_csv(
-        tracks,
-        str(review_csv_path),
-        labels_jsonl_path=str(labels_jsonl_path) if labels_jsonl_path.exists() else None,
-    )
-    print(f"9. Saved human review sheet to: {review_csv_path}")
-
-    # 10. Render roi_preview.jpg (Color-coded by classification category)
-    preview_path = out_dir / "roi_preview.jpg"
-    target_img = best_frame_path or (out_dir / frame_entries[0]["image_path"] if frame_entries else None)
-    if target_img and target_img.exists():
-        best_ts = frame_entries[0]["timestamp_ms"] if frame_entries else 0
-        render_phase1_overlay(
-            image_path=str(target_img),
-            tracks=tracks,
-            out_path=str(preview_path),
-            target_timestamp_ms=best_ts,
-        )
-        print(f"10. Generated color-coded visual audit preview: {preview_path}")
-
+    print(f"\nArtifacts saved to: {out_dir}")
     print("\n=== Lyra OCR Smoke & Identification Completed Successfully! ===")
+    return 0
+
+
+def run_label(args: argparse.Namespace) -> int:
+    """Handle human labeling workflows (export, ingest, status)."""
+    from lyra_ocr.labels import (
+        export_label_batch_csv,
+        get_label_status,
+        ingest_label_batch_csv,
+    )
+
+    action = getattr(args, "label_action", None)
+    if action == "export":
+        out_csv = args.out or (Path(args.artifacts) / "label_batch.csv")
+        blind = not getattr(args, "no_blind", False)
+        count = export_label_batch_csv(
+            artifacts_dir=args.artifacts,
+            out_csv=out_csv,
+            blind=blind,
+        )
+        print(f"Exported {count} tracks to label sheet: {out_csv} (blind={blind})")
+        return 0
+
+    elif action == "ingest":
+        stats = ingest_label_batch_csv(
+            artifacts_dir=args.artifacts,
+            csv_path=args.csv,
+            annotator=args.annotator,
+        )
+        print(
+            f"Ingested labels from {args.csv}:\n"
+            f"  - Appended/Updated : {stats['ingested']}\n"
+            f"  - Skipped (empty)  : {stats['skipped_empty']}\n"
+            f"  - Errors/Rejected  : {stats['errors']}"
+        )
+        return 0
+
+    elif action == "status":
+        status = get_label_status(args.artifacts)
+        print(f"\n=== Label Status for Video [{status['video_id']}] ===")
+        print(f"Total Tracks     : {status['total_tracks']}")
+        print(f"Labeled Tracks   : {status['labeled_tracks']} ({status['coverage_percent']}%)")
+        print(f"Unlabeled Tracks : {status['unlabeled_tracks']}")
+        print(f"Tracking Errors  : {status['tracking_error_count']}")
+        print("Taxonomy Distribution:")
+        for k, v in status["distribution"].items():
+            print(f"  - {k:<15}: {v}")
+        return 0
+
+    else:
+        print("Please specify a label action: export, ingest, or status (use -h for help).")
+        return 1
+
+
+def run_eval(args: argparse.Namespace) -> int:
+    """Handle evaluation against ground truth labels and Quality Gate verification."""
+    from lyra_ocr.eval import (
+        evaluate_predictions,
+        load_artifacts_evaluation_items,
+        load_golden_dataset,
+        match_predictions_to_golden,
+        render_evaluation_charts,
+        save_evaluation_report,
+        TrackPrediction,
+    )
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.golden:
+        print(f"\n1. Loading golden dataset from: {args.golden}...")
+        golden_items = load_golden_dataset(args.golden)
+        eval_items = golden_items
+    elif args.artifacts:
+        print(f"\n1. Loading evaluation items from artifact: {args.artifacts}...")
+        eval_items = load_artifacts_evaluation_items(args.artifacts)
+        golden_items = eval_items
+    else:
+        print("Error: Either --golden or --artifacts must be specified.")
+        return 1
+
+    print(f"   Loaded {len(eval_items)} candidate track items.")
+
+    # Multi-tracker comparison on golden dataset
+    tracker_results: list[dict[str, Any]] = []
+    if getattr(args, "compare_trackers", False) and args.golden:
+        print("\n2a. Running multi-tracker comparison on golden OCR raw data...")
+        from lyra_ocr.track import track_ocr_results
+        from lyra_ocr.classify import classify_all_tracks
+
+        g_manifest_path = Path(args.golden) / "manifest.json"
+        with open(g_manifest_path, "r", encoding="utf-8") as f:
+            g_manifest = json.load(f)
+        video_entries = g_manifest.get("videos", [])
+
+        for tr_name in ["greedy", "bytetrack", "sort", "dbscan"]:
+            all_tr_pairs = []
+            t0 = time.perf_counter()
+
+            for ventry in video_entries:
+                vid = ventry.get("video_id")
+                art_p = Path(ventry.get("artifact_dir"))
+                if not art_p.is_absolute():
+                    if not art_p.exists():
+                        art_p = Path(args.golden) / ventry.get("artifact_dir")
+
+                ocr_file = art_p / "ocr_raw.json"
+                if not ocr_file.exists():
+                    continue
+
+                with open(ocr_file, "r", encoding="utf-8") as f:
+                    ocr_data = json.load(f)
+
+                # Use the same duration/frame geometry metadata as the original
+                # artifact run so all trackers are compared under identical rules.
+                meta_file = art_p / "manifest.json"
+                art_manifest: dict[str, Any] = {}
+                if meta_file.exists():
+                    with open(meta_file, "r", encoding="utf-8") as f:
+                        art_manifest = json.load(f)
+                probe = art_manifest.get("probe", {})
+                meta_dict = art_manifest.get("metadata", {})
+                v_dur_ms = int(float(probe.get("duration", 0)) * 1000)
+                frame_w = int(probe.get("width", 1280))
+                frame_h = int(probe.get("height", 720))
+
+                # Re-run tracker on existing OCR frames (no re-OCR!)
+                re_tracks = track_ocr_results(
+                    frames_ocr_data=ocr_data.get("frames", []),
+                    video_duration_ms=v_dur_ms,
+                    frame_width=frame_w,
+                    frame_height=frame_h,
+                    tracker_name=tr_name,
+                )
+                re_tracks = merge_fragmented_tracks(
+                    re_tracks,
+                    video_duration_ms=v_dur_ms,
+                    frame_width=frame_w,
+                    frame_height=frame_h,
+                )
+
+                # Re-run rule-based classifier with full geometry metadata
+                classify_all_tracks(
+                    re_tracks,
+                    metadata=meta_dict,
+                    video_duration_ms=v_dur_ms,
+                    frame_width=frame_w,
+                    frame_height=frame_h,
+                )
+
+                # Build TrackPredictions
+                preds = [
+                    TrackPrediction(
+                        video_id=vid,
+                        track_id=str(t.track_id),
+                        model_label=t.classification.label if t.classification else "unknown",
+                        model_confidence=t.classification.confidence if t.classification else 0.5,
+                        model_decision=t.classification.decision if t.classification else "review",
+                        start_ms=t.start_ms,
+                        end_ms=t.end_ms,
+                        duration_ms=max(0, t.end_ms - t.start_ms),
+                        dominant_text=t.features.get("dominant_text", ""),
+                        bbox=t.bbox,
+                    )
+                    for t in re_tracks
+                ]
+
+                # Match with golden reference tracks
+                paired, _, _ = match_predictions_to_golden(preds, golden_items)
+                all_tr_pairs.extend(paired)
+
+            elapsed_ms = (time.perf_counter() - t0) * 1000.0
+            # Unmatched fragment predictions legitimately dilute label
+            # coverage here; the coverage gate only applies to the primary
+            # report so comparison gates stay meaningful.
+            tr_rep = evaluate_predictions(all_tr_pairs, gate_min_coverage=0.0)
+            tracker_results.append({
+                "tracker": tr_name,
+                "n_tracks": tr_rep.total_tracks,
+                "macro_f1": tr_rep.macro_f1,
+                "binary_lyric_f1": tr_rep.binary_lyric.f1,
+                "binary_lyric_precision": tr_rep.binary_lyric.precision,
+                "binary_lyric_recall": tr_rep.binary_lyric.recall,
+                "leakage_count_rate": tr_rep.leakage.count_rate,
+                "false_drop_rate": tr_rep.false_drop.rate,
+                "coverage_rate": tr_rep.coverage_rate,
+                "tracking_miss_rate": tr_rep.tracking_miss_rate,
+                "gate_passed": tr_rep.gate_passed,
+                "latency_ms": round(elapsed_ms, 2),
+            })
+
+            print(
+                f"   [{tr_name.upper():>9}] Tracks: {tr_rep.total_tracks:2d} | "
+                f"Lyric F1: {tr_rep.binary_lyric.f1:.4f} | "
+                f"Coverage: {tr_rep.coverage_rate*100:5.1f}% | "
+                f"Leakage: {tr_rep.leakage.count_rate*100:.1f}% | "
+                f"Gate: {'PASS' if tr_rep.gate_passed else 'FAIL'} | "
+                f"Latency: {elapsed_ms:.1f}ms"
+            )
+
+    print("\n2. Computing primary evaluation metrics & Quality Gate...")
+    report = evaluate_predictions(eval_items)
+
+    print("\n3. Saving evaluation reports...")
+    out_files = save_evaluation_report(report, eval_items, out_dir)
+    print(f"   - Metrics JSON : {out_files['metrics_json']}")
+    print(f"   - Markdown     : {out_files['report_md']}")
+    print(f"   - Predictions  : {out_files['predictions_csv']}")
+    print(f"   - Errors       : {out_files['errors_csv']}")
+
+    if getattr(args, "charts", False):
+        print("\n4. Generating publication-quality charts...")
+        charts_dir = out_dir / "charts"
+        rendered = render_evaluation_charts(report, charts_dir, tracker_results=tracker_results)
+        if rendered:
+            print(f"   Saved charts to {charts_dir}")
+        else:
+            print("   Skipped charts (matplotlib not installed).")
+
+    print(f"\n=== Evaluation Finished: {'GATE PASSED' if report.gate_passed else 'GATE FAILED'} ===")
+    print(
+        f"Coverage: {report.coverage_rate*100:.1f}% | "
+        f"Lyric Precision: {report.binary_lyric.precision:.4f} | "
+        f"Lyric Recall: {report.binary_lyric.recall:.4f} | "
+        f"Distractor Leakage: {report.leakage.count_rate*100:.1f}%"
+    )
+    return 0 if report.gate_passed else 2
+
+
+def run_review_ui(args: argparse.Namespace) -> int:
+    """Start local web review UI."""
+    from lyra_ocr.web.server import run_server
+    run_server(host=args.host, port=args.port, open_browser=args.open)
     return 0
 
 
@@ -338,10 +429,63 @@ def main(argv: list[str] | None = None) -> int:
             default="",
             help="Channel/Artist metadata (used for persistent watermark discrimination)",
         )
+        p.add_argument(
+            "--tracker",
+            choices=["greedy", "bytetrack", "sort", "dbscan"],
+            default="greedy",
+            help="Text tracking algorithm strategy (default: greedy)",
+        )
+
+    # Subcommand: label
+    p_label = subparsers.add_parser("label", help="Manage ground truth labels")
+    label_sub = p_label.add_subparsers(dest="label_action", help="Label action")
+
+    # label export
+    p_lexport = label_sub.add_parser("export", help="Export label batch CSV")
+    p_lexport.add_argument("--artifacts", required=True, help="Directory containing tracks.json and manifest.json")
+    p_lexport.add_argument("--out", "-o", default=None, help="Output CSV path (default: {artifacts}/label_batch.csv)")
+    p_lexport.add_argument("--blind", action="store_true", default=True, help="Omit machine predictions (default: True)")
+    p_lexport.add_argument("--no-blind", dest="no_blind", action="store_true", help="Include machine predictions in export")
+    p_lexport.add_argument("--per-track", action="store_true", default=True, help="One row per track (default: True)")
+
+    # label ingest
+    p_lingest = label_sub.add_parser("ingest", help="Ingest reviewed CSV into labels.jsonl")
+    p_lingest.add_argument("--artifacts", required=True, help="Directory containing tracks.json")
+    p_lingest.add_argument("--csv", required=True, help="Path to reviewed CSV file")
+    p_lingest.add_argument("--annotator", default="human", help="Annotator name/handle (default: human)")
+
+    # label status
+    p_lstatus = label_sub.add_parser("status", help="Show labeling coverage and status")
+    p_lstatus.add_argument("--artifacts", required=True, help="Directory containing tracks.json and labels.jsonl")
+
+    # Subcommand: eval
+    p_eval = subparsers.add_parser("eval", help="Evaluate tracking & classification against ground truth")
+    p_eval.add_argument("--golden", default=None, help="Path to golden dataset directory (e.g. golden/v1)")
+    p_eval.add_argument("--artifacts", default=None, help="Path to single artifacts directory")
+    p_eval.add_argument(
+        "--out",
+        "-o",
+        default="./reports/phase1_eval",
+        help="Output directory for reports (default: ./reports/phase1_eval)",
+    )
+    p_eval.add_argument("--charts", action="store_true", help="Generate publication-grade PNG charts")
+    p_eval.add_argument("--compare-trackers", action="store_true", help="Run multi-tracker comparison on golden dataset")
+
+    # Subcommand: review-ui
+    p_ui = subparsers.add_parser("review-ui", help="Start interactive web review and labeling UI")
+    p_ui.add_argument("--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
+    p_ui.add_argument("--port", "-p", type=int, default=8000, help="Port (default: 8000)")
+    p_ui.add_argument("--open", action="store_true", help="Automatically open browser")
 
     args = parser.parse_args(argv)
     if args.command in ("smoke", "identify"):
         return run_smoke(args)
+    elif args.command == "label":
+        return run_label(args)
+    elif args.command == "eval":
+        return run_eval(args)
+    elif args.command == "review-ui":
+        return run_review_ui(args)
 
     parser.print_help()
     return 1

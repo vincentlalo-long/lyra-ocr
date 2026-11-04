@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import difflib
 import math
-import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -205,11 +204,20 @@ def compute_track_features(
         else 0.0
     )
 
+    distinct_changes = 0
+    if len(track.segments) >= 2:
+        for idx in range(1, len(track.segments)):
+            prev_t = track.segments[idx - 1].text
+            curr_t = track.segments[idx].text
+            if string_similarity(prev_t, curr_t) < 0.65:
+                distinct_changes += 1
+
     features = {
         "lifetime_ms": lifetime_ms,
         "lifetime_ratio": round(lifetime_ratio, 4),
         "start_time_ratio": round(start_time_ratio, 4),
         "n_text_changes": track.n_text_changes,
+        "distinct_text_changes": distinct_changes,
         "spatial_variance": round(spatial_variance, 6),
         "mean_centroid": [round(mean_cx, 4), round(mean_cy, 4)],
         "aspect_ratio": round(mean_aspect_ratio, 3),
@@ -222,180 +230,145 @@ def compute_track_features(
     return features
 
 
-class Tracker:
-    """Frame-by-frame tracker associating bounding geometries across temporal samples."""
+def _track_dominant_text(track: TextTrack) -> str:
+    feat_text = (track.features or {}).get("dominant_text", "")
+    if feat_text:
+        return feat_text
+    if track.segments:
+        return max(track.segments, key=lambda s: s.num_occurrences).text
+    if track.occurrences:
+        return track.occurrences[0].text_norm
+    return ""
 
-    def __init__(
-        self,
-        frame_width: int = 1280,
-        frame_height: int = 720,
-        iou_threshold: float = 0.30,
-        centroid_threshold: float = 0.08,
-        max_gap_ms: int = 2000,
-    ) -> None:
-        self.frame_width = frame_width
-        self.frame_height = frame_height
-        self.iou_threshold = iou_threshold
-        self.centroid_threshold = centroid_threshold
-        self.max_gap_ms = max_gap_ms
 
-        self.next_track_id = 1
-        self.active_tracks: list[TextTrack] = []
-        self.finished_tracks: list[TextTrack] = []
+def _merge_occurrences(dst: TextTrack, src: TextTrack) -> None:
+    combined = sorted(
+        dst.occurrences + src.occurrences,
+        key=lambda o: (o.timestamp_ms, o.frame_id),
+    )
+    seen: set[tuple[int, tuple[int, ...]]] = set()
+    occurrences: list[DetectionOccurrence] = []
+    for occ in combined:
+        key = (occ.frame_id, tuple(occ.bbox))
+        if key in seen:
+            continue
+        seen.add(key)
+        occurrences.append(occ)
 
-    def update(self, frame_data: dict[str, Any]) -> None:
-        """Process a single frame OCR result and associate boxes to tracks."""
-        frame_id = frame_data.get("frame_id", 0)
-        timestamp_ms = frame_data.get("timestamp_ms", 0)
-        raw_boxes = frame_data.get("boxes", [])
+    dst.occurrences = occurrences
+    dst.start_ms = min(o.timestamp_ms for o in occurrences)
+    dst.end_ms = max(o.timestamp_ms for o in occurrences)
+    dst.bbox = occurrences[-1].bbox
+    dst.segments = []
+    dst.n_text_changes = 0
 
-        # Parse detections (backward-compatible with legacy schema providing 'text')
-        detections: list[DetectionOccurrence] = []
-        for b in raw_boxes:
-            if "text_raw" not in b and "text" not in b:
-                raise ValueError(
-                    f"Invalid detection schema in frame {frame_id}: missing 'text' or 'text_raw' in {b}"
-                )
-            raw_text = b.get("text_raw") or b.get("text") or ""
-            norm_text = b.get("text_norm") or unicodedata.normalize("NFC", raw_text)
-            model_id = b.get("model_id", "unknown")
-
-            detections.append(
-                DetectionOccurrence(
-                    frame_id=frame_id,
-                    timestamp_ms=timestamp_ms,
-                    polygon=b.get("polygon", []),
-                    bbox=b.get("bbox", [0, 0, 0, 0]),
-                    text_raw=raw_text,
-                    text_norm=norm_text,
-                    confidence=float(b.get("confidence", 0.0)),
-                    model_id=model_id,
-                    script=b.get("script", "latin"),
-                )
-            )
-
-        matched_tracks: set[int] = set()
-        unmatched_detections: list[DetectionOccurrence] = []
-
-        # Greedy bipartite matching based on spatial similarity
-        for det in detections:
-            best_track: Optional[TextTrack] = None
-            best_score = -1.0
-
-            for tr in self.active_tracks:
-                if tr.track_id in matched_tracks:
-                    continue
-
-                iou = bbox_iou(det.bbox, tr.bbox)
-                c_dist = centroid_distance(
-                    det.bbox, tr.bbox, self.frame_width, self.frame_height
-                )
-
-                # Matching condition: high IoU OR very close centroids
-                if iou >= self.iou_threshold or (
-                    iou >= 0.15 and c_dist <= self.centroid_threshold
-                ):
-                    score = iou + (1.0 - c_dist)
-                    if score > best_score:
-                        best_score = score
-                        best_track = tr
-
-            if best_track is not None:
-                matched_tracks.add(best_track.track_id)
-                self._add_occurrence_to_track(best_track, det)
-            else:
-                unmatched_detections.append(det)
-
-        # Handle active tracks that were NOT matched in this frame
-        still_active: list[TextTrack] = []
-        for tr in self.active_tracks:
-            if tr.track_id not in matched_tracks:
-                if (timestamp_ms - tr.end_ms) > self.max_gap_ms:
-                    self.finished_tracks.append(tr)
-                else:
-                    still_active.append(tr)
-            else:
-                still_active.append(tr)
-        self.active_tracks = still_active
-
-        # Spawn new tracks for unmatched detections
-        for det in unmatched_detections:
-            new_track = TextTrack(
-                track_id=self.next_track_id,
-                start_ms=det.timestamp_ms,
-                end_ms=det.timestamp_ms,
-                bbox=det.bbox,
-                occurrences=[det],
-                segments=[
-                    TextSegment(
-                        segment_id=0,
-                        start_ms=det.timestamp_ms,
-                        end_ms=det.timestamp_ms,
-                        text=det.text_norm,
-                        confidence=det.confidence,
-                        num_occurrences=1,
-                    )
-                ],
-                n_text_changes=0,
-            )
-            self.next_track_id += 1
-            self.active_tracks.append(new_track)
-
-    def _add_occurrence_to_track(
-        self, track: TextTrack, det: DetectionOccurrence
-    ) -> None:
-        track.occurrences.append(det)
-        track.end_ms = det.timestamp_ms
-        track.bbox = det.bbox
-
-        # Check text continuity with latest segment
-        if track.segments:
-            latest_seg = track.segments[-1]
-            sim = string_similarity(det.text_norm, latest_seg.text)
-
-            # Same text continuing (allow minor OCR character jitter >= 0.85)
-            if sim >= 0.85 or det.text_norm == latest_seg.text:
-                latest_seg.end_ms = det.timestamp_ms
-                latest_seg.num_occurrences += 1
-                latest_seg.confidence = (
-                    latest_seg.confidence * (latest_seg.num_occurrences - 1)
-                    + det.confidence
-                ) / latest_seg.num_occurrences
-            else:
-                # Text content changed within this spatial region!
-                track.n_text_changes += 1
-                new_seg = TextSegment(
-                    segment_id=len(track.segments),
-                    start_ms=det.timestamp_ms,
-                    end_ms=det.timestamp_ms,
-                    text=det.text_norm,
-                    confidence=det.confidence,
+    for occ in occurrences:
+        if not dst.segments:
+            dst.segments.append(
+                TextSegment(
+                    segment_id=0,
+                    start_ms=occ.timestamp_ms,
+                    end_ms=occ.timestamp_ms,
+                    text=occ.text_norm,
+                    confidence=occ.confidence,
                     num_occurrences=1,
                 )
-                track.segments.append(new_seg)
+            )
+            continue
 
-    def finalize(self, video_duration_ms: int = 0) -> list[TextTrack]:
-        """Close all remaining active tracks and compute statistical features."""
-        for tr in self.active_tracks:
-            self.finished_tracks.append(tr)
-        self.active_tracks = []
-
-        # Sort by start_ms
-        self.finished_tracks.sort(key=lambda t: t.start_ms)
-
-        for tr in self.finished_tracks:
-            compute_track_features(
-                tr,
-                video_duration_ms=video_duration_ms,
-                frame_width=self.frame_width,
-                frame_height=self.frame_height,
+        latest = dst.segments[-1]
+        if string_similarity(occ.text_norm, latest.text) >= 0.85:
+            latest.end_ms = occ.timestamp_ms
+            latest.num_occurrences += 1
+            latest.confidence = (
+                latest.confidence * (latest.num_occurrences - 1) + occ.confidence
+            ) / latest.num_occurrences
+        else:
+            dst.n_text_changes += 1
+            dst.segments.append(
+                TextSegment(
+                    segment_id=len(dst.segments),
+                    start_ms=occ.timestamp_ms,
+                    end_ms=occ.timestamp_ms,
+                    text=occ.text_norm,
+                    confidence=occ.confidence,
+                    num_occurrences=1,
+                )
             )
 
-        return self.finished_tracks
 
-    @property
-    def all_tracks(self) -> list[TextTrack]:
-        return self.finished_tracks + self.active_tracks
+def merge_fragmented_tracks(
+    tracks: list[TextTrack],
+    video_duration_ms: int = 0,
+    frame_width: int = 1280,
+    frame_height: int = 720,
+    max_gap_ms: int = 800,
+    iou_threshold: float = 0.35,
+    centroid_threshold: float = 0.04,
+    text_similarity_threshold: float = 0.90,
+) -> list[TextTrack]:
+    """Conservatively merge track fragments caused by short detection gaps.
+
+    A merge requires the same spatial region *and* either near-identical text or
+    a tiny OCR fragment, with a temporal gap no larger than ``max_gap_ms``. This
+    removes 1-frame flicker fragments without collapsing repeated chorus lines
+    that are separated by a longer gap.
+    """
+    if not tracks:
+        return []
+
+    ordered = sorted(tracks, key=lambda t: (t.start_ms, t.track_id))
+    groups: list[TextTrack] = []
+
+    for track in ordered:
+        if not track.occurrences:
+            continue
+
+        track_text = _track_dominant_text(track)
+        merged = False
+
+        for group in reversed(groups):
+            gap = track.start_ms - group.end_ms
+            if gap > max_gap_ms or gap < -max_gap_ms:
+                continue
+
+            spatial_match = (
+                bbox_iou(track.bbox, group.bbox) >= iou_threshold
+                or centroid_distance(track.bbox, group.bbox, frame_width, frame_height)
+                <= centroid_threshold
+            )
+            text_sim = string_similarity(track_text, _track_dominant_text(group))
+            tiny_fragment = min(len(track_text.strip()), len(_track_dominant_text(group).strip())) <= 2
+
+            if spatial_match and (text_sim >= text_similarity_threshold or tiny_fragment):
+                _merge_occurrences(group, track)
+                merged = True
+                break
+
+        if not merged:
+            groups.append(track)
+
+    groups.sort(key=lambda t: t.start_ms)
+    for track in groups:
+        compute_track_features(
+            track,
+            video_duration_ms=video_duration_ms,
+            frame_width=frame_width,
+            frame_height=frame_height,
+        )
+    return groups
+
+
+class Tracker:
+    """Frame-by-frame tracker associating bounding geometries across temporal samples.
+
+    Maintained for backward compatibility. Instantiates GreedyTracker.
+    """
+
+    def __new__(cls, *args: Any, **kwargs: Any) -> Any:
+        from lyra_ocr.trackers.greedy import GreedyTracker
+
+        return GreedyTracker(*args, **kwargs)
 
 
 def track_ocr_results(
@@ -405,22 +378,28 @@ def track_ocr_results(
     frame_height: int = 720,
     iou_threshold: float = 0.30,
     max_gap_ms: int = 2000,
+    tracker_name: str = "greedy",
+    **kwargs: Any,
 ) -> list[TextTrack]:
-    """Convenience helper to run Tracker over a list of frame OCR dictionaries (or the full ocr_raw payload)."""
+    """Convenience helper to run a tracker over frame OCR data (list or ocr_raw dict)."""
+    from lyra_ocr.trackers import get_tracker
+
     if isinstance(frames_ocr_data, dict):
-        frames_list = frames_ocr_data.get("frames", [])
+        frames = frames_ocr_data.get("frames", [])
         if not video_duration_ms and "probe" in frames_ocr_data:
             dur_sec = frames_ocr_data["probe"].get("duration", 0)
             video_duration_ms = int(dur_sec * 1000)
     else:
-        frames_list = frames_ocr_data
+        frames = frames_ocr_data
 
-    tracker = Tracker(
+    tracker = get_tracker(
+        name=tracker_name,
         frame_width=frame_width,
         frame_height=frame_height,
         iou_threshold=iou_threshold,
         max_gap_ms=max_gap_ms,
+        **kwargs,
     )
-    for frame in frames_list:
+    for frame in frames:
         tracker.update(frame)
     return tracker.finalize(video_duration_ms=video_duration_ms)

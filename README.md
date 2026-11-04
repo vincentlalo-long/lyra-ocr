@@ -6,12 +6,12 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 
 ## 🗺️ Roadmap & Phases
 
-> **Current Progress:** **Phase 1 (Lyric Identification & Tracking) — Completed ✅**
+> **Current Progress:** **Phase 1 (Lyric Identification & Tracking) — Implemented (Pending Expanded Golden Set Gate) 🟡**
 
 | Phase | Milestone | Purpose | Status |
 |:---:|---|---|:---:|
 | **0** | **Foundations** | Video probing, PTS frame extraction, full-frame detection, and decoupled OCR engine. | Completed ✅ |
-| **1** | **Lyric Identification** | Temporal text tracking to filter out watermarks, channel logos, and title cards from actual lyrics. | Completed ✅ |
+| **1** | **Lyric Identification** | Temporal text tracking to filter out watermarks, channel logos, and title cards from actual lyrics. | Implemented (Pending Expanded Gate) 🟡 |
 | **2** | **Timing & LRC** | Refining cue timestamps and exporting standard line-level `.lrc` lyric files. | Upcoming ⏳ |
 | **3** | **Trained Classifier** | Training lightweight models on user-confirmed review data to automate filtering. | Planned 📋 |
 | **4** | **Audio & Karaoke** | Voice alignment and syllable tracking for word-by-word karaoke synchronization. | Planned 📋 |
@@ -21,8 +21,11 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 ## 📖 Documentation
 
 - [System Architecture & Design Philosophy](doc/ARCHITECTURE.md): Layered subsystem decomposition, domain entities, decoupled vision pipeline, and fundamental architectural decisions (ADRs).
-- [Data Contracts & Artifact Specifications](doc/SPECIFICATION.md): Formal schemas, coordinate systems, and serialization contracts for all pipeline artifacts (`manifest.json`, `frame_index.json`, `ocr_raw.json`, `tracks.json`, `review.csv`).
+- [Data Contracts & Artifact Specifications](doc/SPECIFICATION.md): Formal schemas, coordinate systems, and serialization contracts for all pipeline artifacts (`manifest.json`, `frame_index.json`, `ocr_raw.json`, `tracks.json`, `review.csv`, `labels.jsonl`).
 - [Mathematical Foundations of DBNet (PDF)](doc/research/dbnet-mathematics.pdf): Theoretical monograph covering Differentiable Binarization, gradient mechanics, adaptive threshold calibration, and polygon decoding geometry.
+- [Video Text Tracking & Semantic Discrimination (PDF)](doc/research/video-text-tracking-and-identification.pdf): Academic monograph covering two-level hierarchical tracking, ByteTrack/SORT/DBSCAN formulations, the negative elimination cascade, and CLEAR MOT evaluation metrics.
+- [Phase 1 Tracker Benchmark Report](reports/tracker_benchmark/benchmark_report.md): Empirical benchmark comparing `greedy`, `bytetrack`, `sort`, and `dbscan` on real video fixtures and synthetic stress scenarios.
+- [Phase 1 Evaluation & Quality Gate Report](reports/golden_v1/report.md): Ground-truth evaluation metrics, confusion matrix, and taxonomy breakdown on Golden Set v1.
 
 ---
 
@@ -43,8 +46,7 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 - **Rule-Based Distractor Discrimination** ([`src/lyra_ocr/classify.py`](src/lyra_ocr/classify.py)): Accurately discriminates lyrics (`lyric`) from persistent channel logos (`channel`), intro title cards (`song_title`), and scenery text (`scene_text`).
 - **Human-in-the-Loop Review & Audit** ([`src/lyra_ocr/review.py`](src/lyra_ocr/review.py)): Automatically exports structured `tracks.json`, human-auditable `review.csv`, and color-coded visual verification overlays (`roi_preview.jpg`).
 - **Lyric Identification & Smoke CLI** (`lyra-ocr identify` / `lyra-ocr smoke`): Complete command-line pipeline from raw video to classified lyric tracks.
-- **Local Video Downloader** ([`src/lyra_ocr/web.py`](src/lyra_ocr/web.py)): A lightweight local server providing background job management for video downloads.
-- **Automated Test Suite**: 30 unit tests covering probe extraction, PTS indexing, Unicode normalization, tracking association, rule classification, and artifact serialization.
+- **Automated Test Suite**: 79 unit and evaluation tests covering probe extraction, PTS indexing, Unicode normalization, tracking association, rule classification, label persistence, Hungarian track matching, and metric calculations.
 
 ---
 
@@ -52,7 +54,8 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 
 - **Python**: 3.11 or 3.12
 - **System Tools**: `ffmpeg` and `ffprobe` available on `PATH`
-- **Core Dependencies**: `rapidocr>=3.0.0`, `onnxruntime>=1.17.0`, `opencv-python>=4.8.0`, `numpy>=1.24.0`, `pillow>=10.0.0`, `yt-dlp>=2024.0.0`, `pytest>=8.0.0`
+- **Core Dependencies**: `rapidocr>=3.0.0`, `onnxruntime>=1.17.0`, `opencv-python>=4.8.0`, `numpy>=1.24.0`, `pillow>=10.0.0`, `yt-dlp>=2024.0.0`, `pytest>=8.0.0`, `scipy>=1.12.0`, `scikit-learn>=1.4.0`
+- **Optional Dependencies**: `matplotlib>=3.8.0` (for publication evaluation charts)
 
 ---
 
@@ -65,7 +68,7 @@ cd /home/danglong/projects/lyra-ocr
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-pip install -e .
+pip install -e ".[eval]"
 ```
 
 ### 2. Run Lyric Identification (Phase 1)
@@ -73,28 +76,61 @@ pip install -e .
 Execute full-frame detection, recognition, temporal tracking, and rule-based lyric discrimination:
 
 ```bash
-lyra-ocr identify path/to/video.mp4 --out ./output --title "Song Title" --channel "Channel Name" -n 10 -s 20.0
+lyra-ocr identify path/to/video.mp4 \
+  --out ./output \
+  --title "Song Title" \
+  --channel "Channel Name" \
+  --tracker bytetrack \
+  -n 10 -s 20.0
 ```
 
+#### Supported Tracking Strategies (`--tracker`):
+- `greedy` (default baseline): Spatial IoU + centroid distance greedy association.
+- `bytetrack`: 2-stage association (Zhang et al., ECCV 2022) recovering low-confidence blurred detections via Hungarian assignment.
+- `sort`: 8D Linear Kalman Filter motion prediction (Bewley et al., ICIP 2016) for kinetic/moving typography and camera pan/zoom.
+- `dbscan`: Spatio-temporal tube density clustering (Sakaguchi et al., 2020) across $[cx/W, cy/H, t/T, \log(\text{area})]$.
+
+See [`reports/tracker_benchmark/benchmark_report.md`](reports/tracker_benchmark/benchmark_report.md) for full benchmark results and latency comparison.
+
 Outputs generated in `./output`:
-- `tracks.json`: Clustered `TextTrack` entities with temporal statistics, segment breakdown, assigned taxonomy labels (`lyric`, `channel`, `song_title`, `supplementary`, `scene_text`, `unknown`), and decision rationales.
-- `review.csv`: Tabular spreadsheet for human-in-the-loop audit (`track_id,start_ms,end_ms,label,confidence,suggested_text,decision,review_note`).
-- `manifest.json`: Tool versions, model metadata, and video configuration.
+- `tracks.json`: Clustered `TextTrack` entities with frame-level `occurrences`, temporal statistics, segment transitions, and assigned taxonomy labels (`lyric`, `channel`, `song_title`, `supplementary`, `scene_text`, `unknown`).
+- `review.csv`: Tabular spreadsheet for human-in-the-loop audit (`track_id,start_ms,end_ms,machine_label,machine_decision,confidence,suggested_text,human_label,human_decision,review_note`).
+- `labels.jsonl`: Append-only human annotation audit trail with hash provenance.
+- `manifest.json`: Tool versions, model metadata, config hash, and video configuration.
 - `ocr_raw.json`: Frame-by-frame text lines with 4-point polygons, bounding boxes, raw/normalized text, and confidence scores.
 - `frame_index.json`: Extracted frame indices mapped to millisecond PTS timestamps.
 - `roi_preview.jpg`: Color-coded visual audit preview (Green = Lyric, Red = Channel/Watermark, Yellow = Song Title).
 - `frames/`: Directory containing extracted JPEG frames.
 
-### 3. Run Unit Tests
+### 3. Human Review & Annotation CLI
+
+Export blind batch CSV for offline labeling, inspect status, or ingest annotations:
 
 ```bash
-pytest tests/unit
+# Check labeling coverage
+lyra-ocr label status --artifacts ./output
+
+# Export blind review CSV (machine labels omitted to prevent bias)
+lyra-ocr label export --artifacts ./output --out label_batch.csv --blind
+
+# Ingest completed annotations into labels.jsonl
+lyra-ocr label ingest --artifacts ./output --csv label_batch.csv --annotator reviewer_name
 ```
 
-### 4. Run Local Web Interface
+### 4. Run Quality Gate & Benchmark Evaluation
+
+Evaluate predictions against a Golden Dataset with Hungarian matching and optional charts:
 
 ```bash
-python -m lyra_ocr
+# Evaluate against golden dataset
+lyra-ocr eval --golden golden/v1 --out reports/golden_v1 --charts --compare-trackers
+
+# Run multi-tracker benchmark suite
+python scripts/benchmark_trackers.py
 ```
 
-Access the web interface at <http://127.0.0.1:8765>.
+### 5. Run Automated Tests
+
+```bash
+pytest
+```
