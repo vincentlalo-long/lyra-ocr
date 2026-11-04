@@ -29,6 +29,7 @@ ENV/
 
 # Output and caches
 smoke_*/
+output_*/
 .pytest_cache/
 .coverage
 htmlcov/
@@ -36,6 +37,7 @@ htmlcov/
 
 # Internal agent/developer workspace docs (public docs go into doc/)
 docs/
+.licenses/
 
 # Test downloaded fixtures
 tests/fixtures/*.mp4

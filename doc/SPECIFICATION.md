@@ -133,9 +133,64 @@ Stores verbatim OCR outputs and spatial coordinates for every processed frame.
 
 ## 4. Forward Specifications (Phase 1)
 
-### 4.1. Label Taxonomy for `tracks.json`
+### 4.1. `tracks.json` Structure & Label Taxonomy
 
-During Phase 1, text boxes across frames will be clustered into continuous tracks and assigned a categorical classification label:
+Each text box across temporal frames is clustered into a continuous `TextTrack` stream containing spatial-temporal features, segment transitions, and full frame-level `occurrences`:
+
+```json
+{
+  "total_tracks": 1,
+  "tracks": [
+    {
+      "track_id": 1,
+      "start_ms": 20000,
+      "end_ms": 24500,
+      "duration_ms": 4500,
+      "bbox": [274, 2, 1001, 55],
+      "n_text_changes": 0,
+      "features": {
+        "lifetime_ratio": 0.05,
+        "spatial_variance": 0.0,
+        "is_corner": false,
+        "dominant_text": "We can be alone in the castle in the sky"
+      },
+      "segments": [
+        {
+          "segment_id": 0,
+          "start_ms": 20000,
+          "end_ms": 24500,
+          "text": "We can be alone in the castle in the sky",
+          "confidence": 0.9957,
+          "num_occurrences": 10
+        }
+      ],
+      "occurrences": [
+        {
+          "frame_id": 0,
+          "timestamp_ms": 20000,
+          "polygon": [[274, 2], [1001, 2], [1001, 55], [274, 55]],
+          "bbox": [274, 2, 1001, 55],
+          "text_raw": "We can be alone in the castle in the sky",
+          "text_norm": "We can be alone in the castle in the sky",
+          "confidence": 0.9957,
+          "model_id": "PP-OCRv6_rec_small",
+          "script": "latin"
+        }
+      ],
+      "num_occurrences": 10,
+      "label": "lyric",
+      "confidence": 0.99,
+      "reason": "Recurring text changes in stable subtitle zone",
+      "decision": "accept",
+      "qa_flags": []
+    }
+  ]
+}
+```
+
+> **Note on `occurrences`**: Storing full per-frame detection occurrences preserves exact frame-level spatial mapping, allowing interactive UI tools to link any bounding box on any frame directly to its corresponding `track_id`.
+
+#### Label Taxonomy:
 
 | Label | Description | Example Pattern |
 |---|---|---|
@@ -147,10 +202,24 @@ During Phase 1, text boxes across frames will be clustered into continuous track
 | `unknown` | Ambiguous items routed to human verification. | Short-lived, low-confidence, or contradictory features. |
 
 ### 4.2. `review.csv` Structure
-Tabular format for rapid human-in-the-loop review:
+
+Tabular format for rapid human-in-the-loop review. Machine predictions and human verification decisions are explicitly decoupled into separate columns to preserve baseline evaluation records and support confusion matrix computation:
 
 ```csv
-track_id,start_ms,end_ms,label,confidence,suggested_text,decision,review_note
-1,20000,24500,lyric,0.99,"We can be alone in the castle in the sky",accept,
-2,0,140000,channel,0.98,"CLARX & HARDDOPE",reject,Matched persistent artist watermark
+track_id,start_ms,end_ms,machine_label,machine_decision,confidence,suggested_text,human_label,human_decision,review_note
+1,20000,24500,lyric,accept,0.99,"We can be alone in the castle in the sky",,,
+2,0,140000,channel,reject,0.98,"CLARX & HARDDOPE",,,Matched persistent artist watermark
 ```
+
+- `machine_label` & `machine_decision`: Model prediction baseline (`accept`, `reject`, `review`).
+- `human_label` & `human_decision`: Populated by reviewers (`accept`, `reject`). Empty by default upon initial export.
+
+### 4.3. `labels.jsonl` Audit Trail Specification
+
+To support reproducible active learning and reviewer auditing without mutating the base machine output, human annotations can be recorded in an append-only JSON Lines file:
+
+```json
+{"track_id": "1", "human_label": "lyric", "human_decision": "accept", "annotator": "reviewer_alice", "note": "verified subtitle line", "timestamp": 1730700000}
+```
+
+When present, `export_review_csv()` ingests `labels.jsonl` to pre-populate `human_label` and `human_decision`.

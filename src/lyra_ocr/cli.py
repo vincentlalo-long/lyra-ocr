@@ -20,6 +20,9 @@ from .detect import TextDetector
 from .frames import sample_frames
 from .ocr import OCREngine, TextLine
 from .probe import probe_video
+from .track import track_ocr_results
+from .classify import classify_all_tracks
+from .review import export_tracks_json, export_review_csv, render_phase1_overlay
 
 
 def get_tool_versions() -> dict[str, str]:
@@ -223,18 +226,69 @@ def run_smoke(args: argparse.Namespace) -> int:
         json.dump(ocr_raw_data, f, indent=2, ensure_ascii=False)
     print(f"5. Saved OCR raw data to: {raw_json_path}")
 
-    # 6. Render roi_preview.jpg
+    # 6. Temporal Tracking (Phase 1)
+    print("\n6. Running Temporal Tracking across frames...")
+    v_dur_ms = int(meta.get("duration", 0) * 1000)
+    tracks = track_ocr_results(
+        frames_ocr_data=processed_frames,
+        video_duration_ms=v_dur_ms,
+        frame_width=meta["width"],
+        frame_height=meta["height"],
+        iou_threshold=0.30,
+        max_gap_ms=2000,
+    )
+    print(f"   Clustered {len(tracks)} TextTrack stream(s).")
+
+    # 7. Rule-based Classification (Phase 1)
+    print("\n7. Classifying TextTracks (Rule Engine)...")
+    track_meta = {
+        "title": getattr(args, "title", "") or "",
+        "channel": getattr(args, "channel", "") or "",
+        "duration": meta["duration"],
+    }
+    classify_all_tracks(
+        tracks=tracks,
+        metadata=track_meta,
+        video_duration_ms=v_dur_ms,
+        frame_width=meta["width"],
+        frame_height=meta["height"],
+    )
+
+    for tr in tracks:
+        lbl = tr.classification.label if tr.classification else "unknown"
+        dec = tr.classification.decision if tr.classification else "review"
+        rsn = tr.classification.reason if tr.classification else ""
+        txt = tr.features.get("dominant_text", "")
+        print(f"   - Track #{tr.track_id} [{lbl.upper()}] ({dec}): \"{txt}\" — {rsn}")
+
+    # 8. Export Phase 1 Artifacts: tracks.json & review.csv
+    tracks_json_path = out_dir / "tracks.json"
+    export_tracks_json(tracks, str(tracks_json_path))
+    print(f"\n8. Saved tracks data to: {tracks_json_path}")
+
+    review_csv_path = out_dir / "review.csv"
+    labels_jsonl_path = out_dir / "labels.jsonl"
+    export_review_csv(
+        tracks,
+        str(review_csv_path),
+        labels_jsonl_path=str(labels_jsonl_path) if labels_jsonl_path.exists() else None,
+    )
+    print(f"9. Saved human review sheet to: {review_csv_path}")
+
+    # 10. Render roi_preview.jpg (Color-coded by classification category)
     preview_path = out_dir / "roi_preview.jpg"
     target_img = best_frame_path or (out_dir / frame_entries[0]["image_path"] if frame_entries else None)
     if target_img and target_img.exists():
-        render_roi_preview(
-            image_path=target_img,
-            boxes=best_frame_lines,
-            output_path=preview_path,
+        best_ts = frame_entries[0]["timestamp_ms"] if frame_entries else 0
+        render_phase1_overlay(
+            image_path=str(target_img),
+            tracks=tracks,
+            out_path=str(preview_path),
+            target_timestamp_ms=best_ts,
         )
-        print(f"6. Generated visual audit preview: {preview_path}")
+        print(f"10. Generated color-coded visual audit preview: {preview_path}")
 
-    print("\n=== Phase 0 Smoke Test Completed Successfully! ===")
+    print("\n=== Lyra OCR Smoke & Identification Completed Successfully! ===")
     return 0
 
 
@@ -242,37 +296,51 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lyra-ocr", description="Lyra OCR CLI")
     subparsers = parser.add_subparsers(dest="command", help="Sub-command to run")
 
-    smoke_parser = subparsers.add_parser("smoke", help="Run OCR smoke test on a local video")
-    smoke_parser.add_argument("video", help="Path to input video file")
-    smoke_parser.add_argument(
-        "--out",
-        "-o",
-        default="./smoke_output",
-        help="Output directory (default: ./smoke_output)",
-    )
-    smoke_parser.add_argument(
-        "--sample-frames",
-        "-n",
-        type=int,
-        default=5,
-        help="Number of frames to sample (default: 5)",
-    )
-    smoke_parser.add_argument(
-        "--start-sec",
-        "-s",
-        type=float,
-        default=0.0,
-        help="Seconds offset to start sampling frames (default: 0.0)",
-    )
-    smoke_parser.add_argument(
-        "--fps",
-        type=float,
-        default=2.0,
-        help="Sample FPS (default: 2.0)",
-    )
+    for cmd_name, cmd_help in [
+        ("smoke", "Run OCR smoke test on a local video"),
+        ("identify", "Run Phase 1 lyric identification and tracking on a video"),
+    ]:
+        p = subparsers.add_parser(cmd_name, help=cmd_help)
+        p.add_argument("video", help="Path to input video file")
+        p.add_argument(
+            "--out",
+            "-o",
+            default="./smoke_output",
+            help="Output directory (default: ./smoke_output)",
+        )
+        p.add_argument(
+            "--sample-frames",
+            "-n",
+            type=int,
+            default=5,
+            help="Number of frames to sample (default: 5)",
+        )
+        p.add_argument(
+            "--start-sec",
+            "-s",
+            type=float,
+            default=0.0,
+            help="Seconds offset to start sampling frames (default: 0.0)",
+        )
+        p.add_argument(
+            "--fps",
+            type=float,
+            default=2.0,
+            help="Sample FPS (default: 2.0)",
+        )
+        p.add_argument(
+            "--title",
+            default="",
+            help="Song title metadata (used for intro title card discrimination)",
+        )
+        p.add_argument(
+            "--channel",
+            default="",
+            help="Channel/Artist metadata (used for persistent watermark discrimination)",
+        )
 
     args = parser.parse_args(argv)
-    if args.command == "smoke":
+    if args.command in ("smoke", "identify"):
         return run_smoke(args)
 
     parser.print_help()
