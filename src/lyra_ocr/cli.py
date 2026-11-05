@@ -459,7 +459,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Subcommand: eval
     p_eval = subparsers.add_parser("eval", help="Evaluate tracking & classification against ground truth")
-    p_eval.add_argument("--golden", default=None, help="Path to golden dataset directory (e.g. golden/v1)")
+    p_eval.add_argument("--golden", default=None, help="Path to labeled dataset directory")
     p_eval.add_argument("--artifacts", default=None, help="Path to single artifacts directory")
     p_eval.add_argument(
         "--out",
@@ -468,7 +468,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Output directory for reports (default: ./reports/phase1_eval)",
     )
     p_eval.add_argument("--charts", action="store_true", help="Generate publication-grade PNG charts")
-    p_eval.add_argument("--compare-trackers", action="store_true", help="Run multi-tracker comparison on golden dataset")
+    p_eval.add_argument("--compare-trackers", action="store_true", help="Run multi-tracker comparison on the labeled dataset")
 
     # Subcommand: review-ui
     p_ui = subparsers.add_parser("review-ui", help="Start interactive web review and labeling UI")

@@ -9,8 +9,7 @@ from lyra_ocr.dataset import registry
 from lyra_ocr.dataset.models import VideoSource
 
 GOLDEN_MANIFEST = Path(__file__).resolve().parents[2] / "golden" / "v1" / "manifest.json"
-
-pytestmark = pytest.mark.skipif(
+requires_golden = pytest.mark.skipif(
     not GOLDEN_MANIFEST.is_file(), reason="golden/v1 manifest not present"
 )
 
@@ -21,6 +20,7 @@ def golden_entry_keys():
     return set(data.keys()), set(data["videos"][0].keys())
 
 
+@requires_golden
 def test_create_dataset_schema_matches_golden(tmp_path, golden_entry_keys):
     top_keys, entry_keys = golden_entry_keys
     registry.create_dataset(tmp_path, "demo", description="unit test")

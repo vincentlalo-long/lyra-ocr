@@ -38,7 +38,7 @@ def test_ocr_line_schema():
 def test_manifest_schema_keys():
     # Verify structure matches PLAN.md Section 3 and Audit M3
     sample_manifest = {
-        "video_path": "tests/fixtures/castle_en.mp4",
+        "video_path": "path/to/video.mp4",
         "probe": {
             "duration": 141.2,
             "fps": 60.0,
@@ -74,7 +74,7 @@ def test_manifest_schema_keys():
 
 def test_ocr_raw_schema_structure():
     sample_ocr_raw = {
-        "video_path": "tests/fixtures/castle_en.mp4",
+        "video_path": "path/to/video.mp4",
         "manifest_path": "manifest.json",
         "total_frames_processed": 1,
         "avg_frame_time_ms": 320.5,

@@ -18,7 +18,8 @@ from lyra_ocr.pipeline import (
 FIXTURE_VIDEO = Path(__file__).resolve().parents[1] / "fixtures" / "castle_en.mp4"
 
 pytestmark = pytest.mark.skipif(
-    shutil.which("ffmpeg") is None, reason="pipeline test requires ffmpeg"
+    shutil.which("ffmpeg") is None or not FIXTURE_VIDEO.is_file(),
+    reason="pipeline test requires ffmpeg and a test video fixture",
 )
 
 

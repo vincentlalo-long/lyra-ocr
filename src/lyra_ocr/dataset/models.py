@@ -32,7 +32,11 @@ TERMINAL_STATES = ("done", "failed", "cancelled", "skipped")
 
 @dataclass
 class JobRecord:
-    """One queued dataset item with progress and failure bookkeeping."""
+    """One queued dataset item with progress and failure bookkeeping.
+
+    ``kind`` distinguishes media ingestion (``ingest``) from pipeline runs
+    (``run``). The legacy ``pipeline`` kind is retained for old clients.
+    """
 
     job_id: str
     dataset: str
@@ -48,6 +52,8 @@ class JobRecord:
     updated_at: int = 0
     artifact_dir: str = ""
     video_path: str = ""
+    kind: str = "pipeline"
+    run_id: str = ""
     options: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -60,3 +66,23 @@ class JobRecord:
     @property
     def is_terminal(self) -> bool:
         return self.state in TERMINAL_STATES
+
+
+@dataclass
+class RunRecord:
+    """A pipeline configuration run over one dataset."""
+
+    run_id: str
+    dataset: str
+    tracker: str = "greedy"
+    fps: float = 1.0
+    options: dict[str, Any] = field(default_factory=dict)
+    created_at: int = 0
+    videos: list[dict[str, Any]] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "RunRecord":
+        return cls(**{k: v for k, v in d.items() if k in cls.__dataclass_fields__})

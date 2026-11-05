@@ -1,4 +1,4 @@
-"""Background job queue for dataset building: download → Phase-1 pipeline.
+"""Background job queue for dataset building: download -> Phase-1 pipeline.
 
 A single worker thread serializes OCR (CPU-bound, onnxruntime already saturates
 cores) so models load once and are reused across all queued videos. Job state is
@@ -18,106 +18,13 @@ from typing import Any, Callable, Optional
 from lyra_ocr.dataset import registry
 from lyra_ocr.dataset.models import JobRecord, VideoSource
 from lyra_ocr.pipeline import PipelineCancelled, PipelineEngines
-
-PipelineRunner = Callable[[JobRecord, VideoSource, threading.Event, Callable[[str, float, str], None]], dict[str, Any]]
-
-
-def _make_default_runner(workspace_root: Path, engines: PipelineEngines) -> PipelineRunner:
-    """Build the production runner: download (YouTube) then run Phase-1 pipeline.
-
-    The runner sets ``rec.video_path`` and ``rec.artifact_dir`` as it progresses
-    so cancellation/restart can resume and the manifest sync knows the target.
-    """
-    from lyra_ocr.downloader import download_video
-    from lyra_ocr.pipeline import run_phase1_pipeline
-
-    def runner(
-        rec: JobRecord,
-        src: VideoSource,
-        cancel_event: threading.Event,
-        progress: Callable[[str, float, str], None],
-    ) -> dict[str, Any]:
-        ds_dir = registry.dataset_dir(workspace_root, rec.dataset)
-        out_dir = ds_dir / "artifacts" / rec.video_id
-        rec.artifact_dir = f"artifacts/{rec.video_id}"
-
-        title = src.title or ""
-        channel = src.channel or ""
-        fps = float(rec.options.get("fps", 1.0))
-        tracker = str(rec.options.get("tracker", "greedy"))
-        force = bool(rec.options.get("force", False))
-
-        if src.kind == "youtube":
-            videos_dir = ds_dir / "videos"
-            existing = sorted(videos_dir.glob(f"*[{src.yt_id}].mp4")) if src.yt_id else []
-            if existing:
-                video_path = existing[-1]
-            else:
-                video_path = _download_with_retry(
-                    src.url, videos_dir, progress, max_height=int(rec.options.get("max_height", 720))
-                )
-            rec.video_path = str(video_path)
-            src.title = src.title or title
-            src.channel = src.channel or channel
-        else:
-            video_path = Path(src.path)
-            rec.video_path = str(video_path)
-
-        def pipeline_progress(stage: str, percent: float, message: str = "") -> None:
-            progress(stage, 40.0 + 0.6 * percent, message)
-
-        result = run_phase1_pipeline(
-            video_path,
-            out_dir,
-            title=src.title or title,
-            channel=src.channel or channel,
-            fps=fps,
-            tracker=tracker,
-            video_id=rec.video_id,
-            source_url=src.url,
-            engines=engines,
-            progress=pipeline_progress,
-            cancel_event=cancel_event,
-            force=force,
-        )
-        return {
-            "video_id": result["video_id"],
-            "title": src.title or title,
-            "channel": src.channel or channel,
-        }
-
-    return runner
-
-
-def _download_with_retry(
-    url: str,
-    videos_dir: Path,
-    progress: Callable[[str, float, str], None],
-    max_height: int,
-    attempts: int = 3,
-) -> Path:
-    from lyra_ocr.downloader import download_video
-
-    backoffs = [0, 5, 15]
-    last_err: Optional[Exception] = None
-    for i in range(attempts):
-        if i:
-            time.sleep(backoffs[min(i, len(backoffs) - 1)])
-        try:
-            progress("download", 0.0, f"downloading (attempt {i + 1}/{attempts})")
-
-            def dl_hook(evt: dict[str, Any]) -> None:
-                if evt.get("stage") == "downloading":
-                    progress("download", 40.0 * (evt.get("percent", 0.0) / 100.0), "downloading")
-                else:
-                    progress("download", 20.0, str(evt.get("message", evt.get("stage", ""))))
-
-            info = download_video(url, str(videos_dir), progress=dl_hook, max_height=max_height)
-            return Path(info["video_path"])
-        except Exception as exc:  # noqa: BLE001
-            last_err = exc
-    raise RuntimeError(f"download failed after {attempts} attempts: {last_err}")
-
+from lyra_ocr.web.runners import (
+    PipelineRunner,
+    _download_with_retry,
+    _make_default_runner,
+    _make_ingest_runner,
+    _make_run_runner,
+)
 
 class JobQueue:
     def __init__(
@@ -125,10 +32,14 @@ class JobQueue:
         workspace_root: str | Path,
         pipeline_runner: Optional[PipelineRunner] = None,
         engines: Optional[PipelineEngines] = None,
+        ingest_runner: Optional[PipelineRunner] = None,
+        run_runner: Optional[PipelineRunner] = None,
     ) -> None:
         self.workspace_root = Path(workspace_root).resolve()
         self._engines = engines or PipelineEngines()
         self._runner = pipeline_runner or _make_default_runner(self.workspace_root, self._engines)
+        self._ingest_runner = ingest_runner or _make_ingest_runner(self.workspace_root)
+        self._run_runner = run_runner or _make_run_runner(self.workspace_root, self._engines)
 
         self._lock = threading.Lock()
         self._jobs: dict[str, JobRecord] = {}
@@ -228,12 +139,105 @@ class JobQueue:
                     state="queued",
                     created_at=now,
                     updated_at=now,
+                    kind="pipeline",
                     options=dict(options or {}),
                 )
                 self._jobs[rec.job_id] = rec
                 self._order.append(rec.job_id)
                 self._cancel_events[rec.job_id] = threading.Event()
                 existing_ids.add(vid)
+                created.append(rec)
+            if created:
+                self._persist_dataset(dataset, force=True)
+        self._wake.set()
+        return created
+
+    def enqueue_ingest(
+        self,
+        dataset: str,
+        sources: list[VideoSource],
+        options: Optional[dict[str, Any]] = None,
+    ) -> list[JobRecord]:
+        """Queue download/copy jobs only; no OCR or tracking is performed."""
+        registry.get_dataset(self.workspace_root, dataset)
+        created: list[JobRecord] = []
+        existing_ids = {
+            j.video_id
+            for j in self._jobs.values()
+            if j.dataset == dataset and j.kind == "ingest" and j.state not in ("failed", "cancelled")
+        }
+        now = int(time.time())
+        with self._lock:
+            for src in sources:
+                vid = registry.derive_video_id(src)
+                if vid in existing_ids:
+                    continue
+                rec = JobRecord(
+                    job_id=uuid.uuid4().hex,
+                    dataset=dataset,
+                    video_id=vid,
+                    source=src.to_dict(),
+                    state="queued",
+                    created_at=now,
+                    updated_at=now,
+                    kind="ingest",
+                    options=dict(options or {}),
+                )
+                self._jobs[rec.job_id] = rec
+                self._order.append(rec.job_id)
+                self._cancel_events[rec.job_id] = threading.Event()
+                existing_ids.add(vid)
+                created.append(rec)
+            if created:
+                self._persist_dataset(dataset, force=True)
+        self._wake.set()
+        return created
+
+    def enqueue_run(
+        self,
+        dataset: str,
+        run_id: str,
+        video_ids: Optional[list[str]] = None,
+        options: Optional[dict[str, Any]] = None,
+    ) -> list[JobRecord]:
+        """Queue a pipeline run for selected/all dataset videos."""
+        run = registry.get_run(self.workspace_root, dataset, run_id)
+        data = registry.get_dataset(self.workspace_root, dataset)
+        selected = set(video_ids) if video_ids else None
+        existing = {
+            (j.run_id, j.video_id)
+            for j in self._jobs.values()
+            if j.dataset == dataset and j.kind == "run" and j.state not in ("failed", "cancelled")
+        }
+        created: list[JobRecord] = []
+        now = int(time.time())
+        with self._lock:
+            for video in data.get("videos", []):
+                vid = str(video.get("video_id", ""))
+                if not vid or (selected is not None and vid not in selected):
+                    continue
+                if (run_id, vid) in existing:
+                    continue
+                source = dict(video.get("source") or {})
+                if not source:
+                    video_path = str(video.get("video_path", ""))
+                    source = {"kind": "local", "path": video_path}
+                rec = JobRecord(
+                    job_id=uuid.uuid4().hex,
+                    dataset=dataset,
+                    video_id=vid,
+                    source=source,
+                    state="queued",
+                    created_at=now,
+                    updated_at=now,
+                    kind="run",
+                    run_id=run_id,
+                    options={**dict(run.get("options") or {}), **dict(options or {})},
+                )
+                self._jobs[rec.job_id] = rec
+                self._order.append(rec.job_id)
+                self._cancel_events[rec.job_id] = threading.Event()
+                existing.add((run_id, vid))
                 created.append(rec)
             if created:
                 self._persist_dataset(dataset, force=True)
@@ -329,7 +333,12 @@ class JobQueue:
             self._persist_dataset(rec.dataset)
 
         try:
-            result = self._runner(rec, src, cancel_event, progress)
+            if rec.kind == "ingest":
+                result = self._ingest_runner(rec, src, cancel_event, progress)
+            elif rec.kind == "run":
+                result = self._run_runner(rec, src, cancel_event, progress)
+            else:
+                result = self._runner(rec, src, cancel_event, progress)
             with self._lock:
                 rec.state = "done"
                 rec.stage = "done"
@@ -338,7 +347,10 @@ class JobQueue:
                 rec.updated_at = int(time.time())
                 if rec.artifact_dir:
                     rec.options["force"] = False
-            self._sync_manifest(rec, result or {})
+            if rec.kind == "run":
+                self._sync_run(rec, result or {})
+            elif rec.kind == "pipeline":
+                self._sync_manifest(rec, result or {})
         except PipelineCancelled:
             with self._lock:
                 rec.state = "cancelled"
@@ -359,6 +371,22 @@ class JobQueue:
             registry.sync_entry(
                 self.workspace_root,
                 rec.dataset,
+                video_id=result.get("video_id", rec.video_id),
+                artifact_dir=rec.artifact_dir,
+                title=result.get("title", rec.source.get("title", "")),
+                channel=result.get("channel", rec.source.get("channel", "")),
+            )
+        except (FileNotFoundError, OSError):
+            pass
+
+    def _sync_run(self, rec: JobRecord, result: dict[str, Any]) -> None:
+        if not rec.run_id or not rec.artifact_dir:
+            return
+        try:
+            registry.sync_run_entry(
+                self.workspace_root,
+                rec.dataset,
+                rec.run_id,
                 video_id=result.get("video_id", rec.video_id),
                 artifact_dir=rec.artifact_dir,
                 title=result.get("title", rec.source.get("title", "")),
