@@ -22,8 +22,6 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 
 - [System Architecture & Design Philosophy](doc/ARCHITECTURE.md): Layered subsystem decomposition, domain entities, decoupled vision pipeline, and fundamental architectural decisions (ADRs).
 - [Data Contracts & Artifact Specifications](doc/SPECIFICATION.md): Formal schemas, coordinate systems, and serialization contracts for all pipeline artifacts (`manifest.json`, `frame_index.json`, `ocr_raw.json`, `tracks.json`, `review.csv`, `labels.jsonl`).
-- [Mathematical Foundations of DBNet (PDF)](doc/research/dbnet-mathematics.pdf): Theoretical monograph covering Differentiable Binarization, gradient mechanics, adaptive threshold calibration, and polygon decoding geometry.
-- [Video Text Tracking & Semantic Discrimination (PDF)](doc/research/video-text-tracking-and-identification.pdf): Academic monograph covering two-level hierarchical tracking, ByteTrack/SORT/DBSCAN formulations, the negative elimination cascade, and CLEAR MOT evaluation metrics.
 
 ---
 
@@ -85,9 +83,7 @@ lyra-ocr identify path/to/video.mp4 \
 
 #### Supported Tracking Strategies (`--tracker`):
 - `greedy` (default baseline): Spatial IoU + centroid distance greedy association.
-- `bytetrack`: 2-stage association (Zhang et al., ECCV 2022) recovering low-confidence blurred detections via Hungarian assignment.
-- `sort`: 8D Linear Kalman Filter motion prediction (Bewley et al., ICIP 2016) for kinetic/moving typography and camera pan/zoom.
-- `dbscan`: Spatio-temporal tube density clustering (Sakaguchi et al., 2020) across $[cx/W, cy/H, t/T, \log(\text{area})]$.
+- `bytetrack` (experimental, not default): Two-stage confidence association — stage 1 matches high-confidence detections, stage 2 matches leftover tracks against low-confidence boxes so a track survives a blurred or low-OCR frame. Never spawns tracks from low-confidence detections.
 
 Outputs generated in `./output`:
 - `tracks.json`: Clustered `TextTrack` entities with frame-level `occurrences`, temporal statistics, segment transitions, and binary labels (`lyric`, `non_lyric`).

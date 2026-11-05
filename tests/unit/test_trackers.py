@@ -1,12 +1,9 @@
-"""Unit tests for tracking algorithms: Greedy, ByteTrack, SORT, and ST-DBSCAN."""
+"""Unit tests for tracking algorithms: Greedy baseline and two-stage ByteTrack-style tracker."""
 
 import pytest
 from lyra_ocr.trackers import (
-    BaseTracker,
     ByteTextTracker,
     GreedyTracker,
-    KalmanSORTTracker,
-    ST_DBSCANTracker,
     get_tracker,
 )
 
@@ -26,8 +23,11 @@ def make_box(xmin, ymin, xmax, ymax, text, conf=0.98, script="latin"):
 def test_tracker_factory_resolution():
     assert isinstance(get_tracker("greedy"), GreedyTracker)
     assert isinstance(get_tracker("bytetrack"), ByteTextTracker)
-    assert isinstance(get_tracker("sort"), KalmanSORTTracker)
-    assert isinstance(get_tracker("dbscan"), ST_DBSCANTracker)
+    assert isinstance(get_tracker("byte"), ByteTextTracker)
+
+    for removed in ("sort", "kalman", "dbscan", "st_dbscan", "tube"):
+        with pytest.raises(ValueError, match="Unknown tracker"):
+            get_tracker(removed)
 
     with pytest.raises(ValueError, match="Unknown tracker"):
         get_tracker("non_existent_tracker")
@@ -84,67 +84,29 @@ def test_bytetrack_discards_isolated_low_confidence_noise():
     assert len(tracker.active_tracks) == 0
 
 
-def test_sort_tracker_tracks_moving_kinetic_text():
-    """Verify KalmanSORTTracker tracks moving text across frames where static IoU would drift."""
-    tracker = KalmanSORTTracker(frame_width=1280, frame_height=720, iou_threshold=0.20)
+def test_twostage_absorbs_low_confidence_ghost_that_greedy_turns_into_a_track():
+    """Differential test against the greedy baseline on the failure mode two-stage exists for.
 
-    # Moving lyric line traveling horizontally by 30px per frame
-    # Frame 0: x in [100, 400]
-    tracker.update({
-        "frame_id": 0,
-        "timestamp_ms": 1000,
-        "boxes": [make_box(100, 600, 400, 650, "Moving Lyric")],
-    })
-    t_id = tracker.active_tracks[0].track_id
+    A low-confidence box overlapping an already-matched lyric track (OCR ghost of
+    the previous line, translucent watermark) must not become its own track and
+    must not pollute the lyric track. Greedy has no confidence tiering: the box
+    is unmatched, so it spawns a second track. This is the mechanism behind the
+    golden-set observation of greedy emitting more tracks than bytetrack.
+    """
+    lyric_hi = make_box(300, 600, 800, 650, "We can be alone in the castle in the sky", conf=0.95)
+    lyric_hi2 = make_box(300, 600, 800, 650, "We can be alone in the castle in the sky", conf=0.93)
+    ghost_lo = make_box(302, 596, 798, 646, "CASTLE IN THE SKY", conf=0.40)
 
-    # Frame 1: shifted to [130, 430]
-    tracker.update({
-        "frame_id": 1,
-        "timestamp_ms": 1500,
-        "boxes": [make_box(130, 600, 430, 650, "Moving Lyric")],
-    })
-    assert len(tracker.active_tracks) == 1
-    assert tracker.active_tracks[0].track_id == t_id
+    def run(tracker):
+        tracker.update({"frame_id": 0, "timestamp_ms": 1000, "boxes": [lyric_hi]})
+        tracker.update({"frame_id": 1, "timestamp_ms": 1500, "boxes": [lyric_hi2, ghost_lo]})
+        tracker.finalize(video_duration_ms=5000)
+        return tracker.all_tracks
 
-    # Frame 2: shifted to [160, 460]
-    tracker.update({
-        "frame_id": 2,
-        "timestamp_ms": 2000,
-        "boxes": [make_box(160, 600, 460, 650, "Moving Lyric")],
-    })
-    assert len(tracker.active_tracks) == 1
-    assert tracker.active_tracks[0].track_id == t_id
+    bt_tracks = run(ByteTextTracker(frame_width=1280, frame_height=720))
+    assert len(bt_tracks) == 1, "two-stage must drop the low-confidence ghost"
+    assert len(bt_tracks[0].occurrences) == 2
+    assert {o.text_norm for o in bt_tracks[0].occurrences} == {"We can be alone in the castle in the sky"}
 
-    tracker.finalize(video_duration_ms=5000)
-    assert len(tracker.all_tracks) == 1
-    assert len(tracker.all_tracks[0].occurrences) == 3
-
-
-def test_st_dbscan_tube_clustering():
-    """Verify ST_DBSCAN discovers spatio-temporal text tubes and filters isolated noise."""
-    tracker = ST_DBSCANTracker(frame_width=1280, frame_height=720, min_samples=2, eps=0.25)
-
-    # 1. Consistent lyric tube at bottom (t = 1000, 1500, 2000)
-    for fid, t_ms in enumerate([1000, 1500, 2000]):
-        tracker.update({
-            "frame_id": fid,
-            "timestamp_ms": t_ms,
-            "boxes": [
-                make_box(300, 600, 800, 650, "Bottom Subtitle Line", conf=0.95),
-                make_box(50, 50, 200, 80, "CHANNEL_LOGO", conf=0.98),
-            ],
-        })
-
-    # Isolated 1-frame noise in middle of screen (should be treated as noise or outlier)
-    tracker.update({
-        "frame_id": 3,
-        "timestamp_ms": 2500,
-        "boxes": [make_box(500, 300, 600, 350, "RANDOM_FLICKER", conf=0.90)],
-    })
-
-    tracks = tracker.finalize(video_duration_ms=5000)
-    # Should discover 2 primary tubes: Subtitle Line and CHANNEL_LOGO
-    assert len(tracks) == 2
-    dominant_texts = {t.features["dominant_text"] for t in tracks}
-    assert "Bottom Subtitle Line" in dominant_texts
-    assert "CHANNEL_LOGO" in dominant_texts
+    greedy_tracks = run(GreedyTracker(frame_width=1280, frame_height=720))
+    assert len(greedy_tracks) == 2, "baseline behaviour being documented: ghost spawns a track"

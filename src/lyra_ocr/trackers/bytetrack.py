@@ -1,8 +1,16 @@
-"""ByteTrack-style two-stage association text tracker.
+"""Two-stage confidence association tracker (experimental, not the default).
 
-Academic Reference:
-Y. Zhang et al., "ByteTrack: Multi-Object Tracking by Associating Every Detection Box",
-ECCV 2022. https://arxiv.org/abs/2110.06864
+Associates every detection box, including low-confidence ones, instead of
+discarding them: stage 1 matches high-confidence detections to live tracks,
+stage 2 matches the leftover tracks against low-confidence detections. This is
+what lets a track survive a blurred or transition frame that OCR reads at low
+confidence, without letting a low-confidence false positive spawn a new track.
+
+Inspired by, but not a full implementation of, ByteTrack (Y. Zhang et al., ECCV
+2022, https://arxiv.org/abs/2110.06864): there is no ReID feature, no track
+motion prediction, and no k-best assignment. The name ``ByteTextTracker`` is
+kept for registry compatibility; the mechanism it implements is the
+two-stage association only.
 """
 
 from __future__ import annotations

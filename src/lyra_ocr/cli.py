@@ -242,7 +242,7 @@ def run_eval(args: argparse.Namespace) -> int:
             g_manifest = json.load(f)
         video_entries = g_manifest.get("videos", [])
 
-        for tr_name in ["greedy", "bytetrack", "sort", "dbscan"]:
+        for tr_name in ["greedy", "bytetrack"]:
             all_tr_pairs = []
             t0 = time.perf_counter()
 
@@ -436,7 +436,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         p.add_argument(
             "--tracker",
-            choices=["greedy", "bytetrack", "sort", "dbscan"],
+            choices=["greedy", "bytetrack"],
             default="greedy",
             help="Text tracking algorithm strategy (default: greedy)",
         )
