@@ -41,7 +41,6 @@ def make_gold_item(
         video_id=vid,
         track_id=tid,
         human_label=human_label,
-        binary="lyric" if human_label == "lyric" else "non_lyric",
         tracking_error=tracking_error,
     )
     return EvaluationItem(pred=p, label=lbl)
@@ -144,7 +143,7 @@ def test_unmatched_golden_track_becomes_missing_false_drop():
         "v1", "g1", 1000, 5000, [300, 600, 850, 650], "Never gonna give you up", human_label="lyric"
     )
     gold_channel = make_gold_item(
-        "v1", "g2", 1000, 5000, [50, 50, 200, 80], "CLARX", human_label="channel"
+        "v1", "g2", 1000, 5000, [50, 50, 200, 80], "CLARX", human_label="non_lyric"
     )
 
     paired, matches, unmatched = match_predictions_to_golden(

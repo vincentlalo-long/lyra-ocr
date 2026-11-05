@@ -89,7 +89,6 @@ def generate_motion_blur_sequence() -> tuple[list[dict[str, Any]], list[Evaluati
                 video_id="synthetic_blur",
                 track_id="gold_lyric",
                 human_label="lyric",
-                binary="lyric",
                 tracking_error=False,
             ),
         ),
@@ -97,7 +96,7 @@ def generate_motion_blur_sequence() -> tuple[list[dict[str, Any]], list[Evaluati
             pred=TrackPrediction(
                 video_id="synthetic_blur",
                 track_id="gold_channel",
-                model_label="channel",
+                model_label="non_lyric",
                 model_confidence=0.98,
                 model_decision="reject",
                 start_ms=15000,
@@ -109,8 +108,7 @@ def generate_motion_blur_sequence() -> tuple[list[dict[str, Any]], list[Evaluati
             label=TrackLabel(
                 video_id="synthetic_blur",
                 track_id="gold_channel",
-                human_label="channel",
-                binary="non_lyric",
+                human_label="non_lyric",
                 tracking_error=False,
             ),
         ),
@@ -152,7 +150,6 @@ def generate_kinetic_motion_sequence() -> tuple[list[dict[str, Any]], list[Evalu
                 video_id="synthetic_kinetic",
                 track_id="gold_kinetic",
                 human_label="lyric",
-                binary="lyric",
                 tracking_error=False,
             ),
         ),
@@ -160,7 +157,7 @@ def generate_kinetic_motion_sequence() -> tuple[list[dict[str, Any]], list[Evalu
             pred=TrackPrediction(
                 video_id="synthetic_kinetic",
                 track_id="gold_watermark",
-                model_label="channel",
+                model_label="non_lyric",
                 model_confidence=0.98,
                 model_decision="reject",
                 start_ms=15000,
@@ -172,8 +169,7 @@ def generate_kinetic_motion_sequence() -> tuple[list[dict[str, Any]], list[Evalu
             label=TrackLabel(
                 video_id="synthetic_kinetic",
                 track_id="gold_watermark",
-                human_label="channel",
-                binary="non_lyric",
+                human_label="non_lyric",
                 tracking_error=False,
             ),
         ),
@@ -224,7 +220,7 @@ def benchmark_synthetic_case(
         TrackPrediction(
             video_id=gold_items[0].pred.video_id,
             track_id=str(t.track_id),
-            model_label=t.classification.label if t.classification else "unknown",
+            model_label=t.classification.label if t.classification else "non_lyric",
             model_confidence=t.classification.confidence if t.classification else 0.5,
             model_decision=t.classification.decision if t.classification else "review",
             start_ms=t.start_ms,
@@ -242,7 +238,6 @@ def benchmark_synthetic_case(
     return {
         "tracker": tracker_name,
         "n_tracks": len(tracks),
-        "macro_f1": report.macro_f1,
         "binary_lyric_f1": report.binary_lyric.f1,
         "binary_lyric_precision": report.binary_lyric.precision,
         "binary_lyric_recall": report.binary_lyric.recall,
@@ -325,7 +320,7 @@ def main() -> None:
                     TrackPrediction(
                         video_id=vid,
                         track_id=str(t.track_id),
-                        model_label=t.classification.label if t.classification else "unknown",
+                        model_label=t.classification.label if t.classification else "non_lyric",
                         model_confidence=t.classification.confidence if t.classification else 0.5,
                         model_decision=t.classification.decision if t.classification else "review",
                         start_ms=t.start_ms,
@@ -345,7 +340,6 @@ def main() -> None:
             res = {
                 "tracker": tr_name,
                 "n_tracks": rep.total_tracks,
-                "macro_f1": rep.macro_f1,
                 "binary_lyric_f1": rep.binary_lyric.f1,
                 "binary_lyric_precision": rep.binary_lyric.precision,
                 "binary_lyric_recall": rep.binary_lyric.recall,

@@ -13,30 +13,30 @@ Benchmarking 4 Multi-Object Video Text Tracking strategies across real and synth
 
 | Tracker | Tracks | Lyric F1 | Lyric Precision | Lyric Recall | Distractor Leakage | False Drop Rate | Latency | Gate Status |
 |---|---|---|---|---|---|---|---|---|
-| `greedy` | 8 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 9.33 ms | FAIL |
-| `bytetrack` | 6 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 3.60 ms | **PASS** |
-| `sort` | 9 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 7.64 ms | FAIL |
-| `dbscan` | 7 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 9.88 ms | FAIL |
+| `greedy` | 8 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 10.25 ms | FAIL |
+| `bytetrack` | 6 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 3.59 ms | **PASS** |
+| `sort` | 9 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 7.62 ms | FAIL |
+| `dbscan` | 7 | 1.0000 | 1.0000 | 1.0000 | 0.0% | 0.0% | 11.90 ms | FAIL |
 
 
 ## 2. Synthetic Challenge: Intermittent Motion Blur (Drop to conf 0.38)
 
 | Tracker | Tracks Created | Lyric F1 | Distractor Leakage | False Drop Rate | CPU Latency |
 |---|---|---|---|---|---|
-| `greedy` | 2 | 1.0000 | 0.0% | 0.0% | 0.493 ms |
-| `bytetrack` | 2 | 1.0000 | 0.0% | 0.0% | 0.785 ms |
-| `sort` | 2 | 0.0000 | 0.0% | 100.0% | 2.200 ms |
-| `dbscan` | 2 | 1.0000 | 0.0% | 0.0% | 1.584 ms |
+| `greedy` | 2 | 1.0000 | 0.0% | 0.0% | 0.527 ms |
+| `bytetrack` | 2 | 1.0000 | 0.0% | 0.0% | 0.912 ms |
+| `sort` | 2 | 0.0000 | 0.0% | 100.0% | 2.100 ms |
+| `dbscan` | 2 | 1.0000 | 0.0% | 0.0% | 1.628 ms |
 
 
 ## 3. Synthetic Challenge: Kinetic Typography (Shift 50px/frame)
 
 | Tracker | Tracks Created | Lyric F1 | Distractor Leakage | False Drop Rate | CPU Latency |
 |---|---|---|---|---|---|
-| `greedy` | 2 | 0.0000 | 0.0% | 100.0% | 0.212 ms |
-| `bytetrack` | 2 | 0.0000 | 0.0% | 100.0% | 0.411 ms |
-| `sort` | 2 | 0.0000 | 0.0% | 100.0% | 1.552 ms |
-| `dbscan` | 2 | 0.0000 | 0.0% | 100.0% | 1.241 ms |
+| `greedy` | 2 | 0.0000 | 0.0% | 100.0% | 0.209 ms |
+| `bytetrack` | 2 | 0.0000 | 0.0% | 100.0% | 0.412 ms |
+| `sort` | 2 | 0.0000 | 0.0% | 100.0% | 1.583 ms |
+| `dbscan` | 2 | 0.0000 | 0.0% | 100.0% | 1.240 ms |
 
 
 ## 4. Key Findings & Architecture Recommendation

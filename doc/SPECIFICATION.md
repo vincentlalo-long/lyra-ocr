@@ -192,23 +192,21 @@ Each text box across temporal frames is clustered into a continuous `TextTrack` 
 
 #### Label Taxonomy:
 
+The final label space is binary. Diagnostic subtype information lives in `reason` and `qa_flags`, not in the label itself.
+
 | Label | Description | Example Pattern |
 |---|---|---|
 | `lyric` | Core song lyrics intended for subtitle/LRC output. | Recurring text changes within a stable spatial region. |
-| `channel` | Channel handle, logo, artist watermarks. | Text matching video metadata, static position throughout video. |
-| `song_title` | Title cards, introductory credit text. | Static text appearing strictly during the initial 5% of duration. |
-| `supplementary` | Static overlays, subscribe prompts, social icons. | Static text clustered in corner regions. |
-| `scene_text` | Text occurring inside video scenery (e.g. posters). | Significant trajectory drift corresponding to camera motion. |
-| `unknown` | Ambiguous items routed to human verification. | Short-lived, low-confidence, or contradictory features. |
+| `non_lyric` | Every distractor: watermarks, title cards, social tags, scene text, or ambiguous tracks. | Metadata match, long invariant lifetime, high trajectory drift, or low confidence. |
 
 ### 4.2. `review.csv` Structure
 
-Tabular format for rapid human-in-the-loop review. Machine predictions and human verification decisions are explicitly decoupled into separate columns to preserve baseline evaluation records and support confusion matrix computation:
+Tabular format for rapid human-in-the-loop review. Machine predictions and human verification decisions are explicitly decoupled into separate columns to preserve baseline evaluation records:
 
 ```csv
 track_id,start_ms,end_ms,machine_label,machine_decision,confidence,suggested_text,human_label,human_decision,review_note
 1,20000,24500,lyric,accept,0.99,"We can be alone in the castle in the sky",,,
-2,0,140000,channel,reject,0.98,"CLARX & HARDDOPE",,,Matched persistent artist watermark
+2,0,140000,non_lyric,reject,0.98,"CLARX & HARDDOPE",,,Matched persistent artist watermark
 ```
 
 - `machine_label` & `machine_decision`: Model prediction baseline (`accept`, `reject`, `review`).

@@ -12,16 +12,27 @@ from pathlib import Path
 from typing import Any, Optional
 
 
-VALID_LABELS = (
-    "lyric",
-    "channel",
-    "song_title",
-    "supplementary",
-    "scene_text",
-    "unknown",
-)
+VALID_LABELS = ("lyric", "non_lyric")
 
 VALID_DECISIONS = ("accept", "reject", "review")
+
+# Read-time migration map for artifacts/labels produced by the old 6-class
+# taxonomy. Only ``lyric`` survives as a positive label; every distractor
+# subtype collapses to ``non_lyric``.
+LEGACY_LABEL_MAP = {
+    "lyric": "lyric",
+    "non_lyric": "non_lyric",
+    "channel": "non_lyric",
+    "song_title": "non_lyric",
+    "supplementary": "non_lyric",
+    "scene_text": "non_lyric",
+    "unknown": "non_lyric",
+}
+
+
+def normalize_label(value: str | None) -> str:
+    """Map any legacy taxonomy value onto the binary lyric/non-lyric schema."""
+    return LEGACY_LABEL_MAP.get(str(value or "").strip().lower(), "non_lyric")
 
 
 def sha256_prefix(path: str | Path, length: int = 12) -> str:
@@ -41,7 +52,6 @@ class LabelRecord:
     video_id: str
     track_id: str | int
     human_label: str
-    binary: str = "non_lyric"
     tracking_error: bool = False
     human_decision: str = ""
     corrected_text: Optional[str] = None
@@ -56,24 +66,16 @@ class LabelRecord:
 
     def __post_init__(self) -> None:
         self.track_id = str(self.track_id)
-        hl = self.human_label.strip().lower()
-        if hl not in VALID_LABELS:
+        hl = LEGACY_LABEL_MAP.get(self.human_label.strip().lower())
+        if hl is None:
             raise ValueError(
                 f"Invalid human_label '{self.human_label}'. Allowed: {VALID_LABELS}"
             )
         self.human_label = hl
 
-        # Derive binary label
-        self.binary = "lyric" if self.human_label == "lyric" else "non_lyric"
-
         # Derive human_decision if empty
         if not self.human_decision:
-            if self.human_label == "lyric":
-                self.human_decision = "accept"
-            elif self.human_label in ("channel", "song_title", "supplementary", "scene_text"):
-                self.human_decision = "reject"
-            else:
-                self.human_decision = "review"
+            self.human_decision = "accept" if self.human_label == "lyric" else "reject"
         elif self.human_decision not in VALID_DECISIONS:
             raise ValueError(
                 f"Invalid human_decision '{self.human_decision}'. Allowed: {VALID_DECISIONS}"
@@ -104,6 +106,9 @@ def load_labels_jsonl(labels_path: str | Path) -> dict[tuple[str, str], dict[str
                 vid = str(row.get("video_id", ""))
                 tid = str(row.get("track_id", ""))
                 if vid and tid:
+                    if "human_label" in row:
+                        row["human_label"] = normalize_label(row["human_label"])
+                    row.pop("binary", None)
                     records[(vid, tid)] = row
             except json.JSONDecodeError:
                 continue
@@ -188,7 +193,7 @@ def export_label_batch_csv(
         key = (video_id, tid_str)
         existing = existing_labels.get(key, {})
 
-        m_label = tr.get("label", "unknown")
+        m_label = normalize_label(tr.get("label", "non_lyric"))
         m_decision = tr.get("decision", "review")
         m_conf = tr.get("confidence", 0.0)
 
@@ -262,13 +267,14 @@ def ingest_label_batch_csv(
         for row in reader:
             stats["total"] += 1
             tid = str(row.get("track_id", "")).strip()
-            hl = str(row.get("human_label", "")).strip().lower()
+            hl_raw = str(row.get("human_label", "")).strip().lower()
 
-            if not hl:
+            if not hl_raw:
                 stats["skipped_empty"] += 1
                 continue
 
-            if hl not in VALID_LABELS:
+            hl = LEGACY_LABEL_MAP.get(hl_raw)
+            if hl is None:
                 stats["errors"] += 1
                 continue
 
@@ -345,7 +351,7 @@ def get_label_status(artifacts_dir: str | Path) -> dict[str, Any]:
         lbl = labels_map.get(key)
         if lbl and lbl.get("human_label"):
             labeled_count += 1
-            hl = lbl["human_label"]
+            hl = normalize_label(lbl["human_label"])
             distribution[hl] = distribution.get(hl, 0) + 1
             if lbl.get("tracking_error"):
                 tracking_error_count += 1

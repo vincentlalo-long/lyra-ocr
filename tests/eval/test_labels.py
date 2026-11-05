@@ -18,20 +18,21 @@ from lyra_ocr.labels import (
 
 
 def test_label_record_valid_derivation():
-    """Verify LabelRecord properly sets defaults, binary labels, and decisions."""
+    """Verify LabelRecord sets binary labels and decisions."""
     rec = LabelRecord(video_id="vid1", track_id=1, human_label="lyric")
     assert rec.track_id == "1"
-    assert rec.binary == "lyric"
+    assert rec.human_label == "lyric"
     assert rec.human_decision == "accept"
     assert rec.reviewed_at != ""
 
-    rec_channel = LabelRecord(video_id="vid1", track_id="2", human_label="channel")
-    assert rec_channel.binary == "non_lyric"
-    assert rec_channel.human_decision == "reject"
+    rec_non = LabelRecord(video_id="vid1", track_id="2", human_label="non_lyric")
+    assert rec_non.human_label == "non_lyric"
+    assert rec_non.human_decision == "reject"
 
-    rec_unknown = LabelRecord(video_id="vid1", track_id="3", human_label="unknown")
-    assert rec_unknown.binary == "non_lyric"
-    assert rec_unknown.human_decision == "review"
+    # Legacy subtype labels are migrated to non_lyric on read.
+    rec_legacy = LabelRecord(video_id="vid1", track_id="3", human_label="unknown")
+    assert rec_legacy.human_label == "non_lyric"
+    assert rec_legacy.human_decision == "reject"
 
 
 def test_label_record_invalid_label_rejection():
@@ -47,7 +48,7 @@ def test_append_and_load_latest_wins(tmp_path: Path):
     rec1 = LabelRecord(
         video_id="v1",
         track_id="t1",
-        human_label="unknown",
+        human_label="non_lyric",
         notes="initial uncertain label",
     )
     rec2 = LabelRecord(
@@ -71,7 +72,7 @@ def test_load_multi_video_isolation(tmp_path: Path):
     labels_file = tmp_path / "labels.jsonl"
 
     rec_v1 = LabelRecord(video_id="video_A", track_id="track_1", human_label="lyric")
-    rec_v2 = LabelRecord(video_id="video_B", track_id="track_1", human_label="channel")
+    rec_v2 = LabelRecord(video_id="video_B", track_id="track_1", human_label="non_lyric")
 
     append_label_record(labels_file, rec_v1)
     append_label_record(labels_file, rec_v2)
@@ -79,7 +80,7 @@ def test_load_multi_video_isolation(tmp_path: Path):
     loaded = load_labels_jsonl(labels_file)
     assert len(loaded) == 2
     assert loaded[("video_A", "track_1")]["human_label"] == "lyric"
-    assert loaded[("video_B", "track_1")]["human_label"] == "channel"
+    assert loaded[("video_B", "track_1")]["human_label"] == "non_lyric"
 
 
 @pytest.fixture
@@ -110,7 +111,7 @@ def mock_artifacts(tmp_path: Path) -> Path:
             },
             {
                 "track_id": 2,
-                "label": "channel",
+                "label": "non_lyric",
                 "decision": "reject",
                 "confidence": 0.88,
                 "start_ms": 0,
@@ -230,7 +231,7 @@ def test_ingest_label_batch_csv(mock_artifacts: Path, tmp_path: Path):
         {
             "video_id": "test_song",
             "track_id": "2",
-            "human_label": "channel",
+            "human_label": "non_lyric",
             "human_decision": "reject",
             "tracking_error": "1",
             "notes": "watermark with split track",
@@ -279,4 +280,4 @@ def test_ingest_label_batch_csv(mock_artifacts: Path, tmp_path: Path):
     assert status["coverage_percent"] == 100.0
     assert status["tracking_error_count"] == 1
     assert status["distribution"]["lyric"] == 1
-    assert status["distribution"]["channel"] == 1
+    assert status["distribution"]["non_lyric"] == 1

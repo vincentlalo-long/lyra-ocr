@@ -139,7 +139,7 @@ def run_smoke(args: argparse.Namespace) -> int:
     tracks = result["tracks"]
     print(f"\nClassified {len(tracks)} track(s):")
     for tr in tracks:
-        lbl = tr.classification.label if tr.classification else "unknown"
+        lbl = tr.classification.label if tr.classification else "non_lyric"
         dec = tr.classification.decision if tr.classification else "review"
         rsn = tr.classification.reason if tr.classification else ""
         txt = tr.features.get("dominant_text", "")
@@ -191,7 +191,7 @@ def run_label(args: argparse.Namespace) -> int:
         print(f"Labeled Tracks   : {status['labeled_tracks']} ({status['coverage_percent']}%)")
         print(f"Unlabeled Tracks : {status['unlabeled_tracks']}")
         print(f"Tracking Errors  : {status['tracking_error_count']}")
-        print("Taxonomy Distribution:")
+        print("Label Distribution:")
         for k, v in status["distribution"].items():
             print(f"  - {k:<15}: {v}")
         return 0
@@ -302,7 +302,7 @@ def run_eval(args: argparse.Namespace) -> int:
                     TrackPrediction(
                         video_id=vid,
                         track_id=str(t.track_id),
-                        model_label=t.classification.label if t.classification else "unknown",
+                        model_label=t.classification.label if t.classification else "non_lyric",
                         model_confidence=t.classification.confidence if t.classification else 0.5,
                         model_decision=t.classification.decision if t.classification else "review",
                         start_ms=t.start_ms,
@@ -326,7 +326,6 @@ def run_eval(args: argparse.Namespace) -> int:
             tracker_results.append({
                 "tracker": tr_name,
                 "n_tracks": tr_rep.total_tracks,
-                "macro_f1": tr_rep.macro_f1,
                 "binary_lyric_f1": tr_rep.binary_lyric.f1,
                 "binary_lyric_precision": tr_rep.binary_lyric.precision,
                 "binary_lyric_recall": tr_rep.binary_lyric.recall,

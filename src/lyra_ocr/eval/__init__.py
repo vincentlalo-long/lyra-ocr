@@ -10,11 +10,8 @@ from lyra_ocr.eval.loader import (
 from lyra_ocr.eval.matching import match_predictions_to_golden
 from lyra_ocr.eval.metrics import (
     compute_binary_lyric_metrics,
-    compute_confusion_matrix,
     compute_false_drop_metrics,
     compute_leakage_metrics,
-    compute_macro_micro_f1,
-    compute_per_class_metrics,
     evaluate_predictions,
     wilson_score_interval,
 )
@@ -31,7 +28,6 @@ from lyra_ocr.eval.types import (
     EvaluationReport,
     FalseDropMetrics,
     LeakageMetrics,
-    PerClassMetrics,
     TrackLabel,
     TrackPrediction,
 )
@@ -41,13 +37,9 @@ __all__ = [
     "EvaluationItem",
     "TrackPrediction",
     "TrackLabel",
-    "PerClassMetrics",
     "BinaryLyricMetrics",
     "LeakageMetrics",
     "FalseDropMetrics",
-    "compute_confusion_matrix",
-    "compute_per_class_metrics",
-    "compute_macro_micro_f1",
     "compute_binary_lyric_metrics",
     "compute_leakage_metrics",
     "compute_false_drop_metrics",

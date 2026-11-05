@@ -38,7 +38,6 @@ def make_item(
             video_id=vid,
             track_id=tid,
             human_label=gold_label,
-            binary="lyric" if gold_label == "lyric" else "non_lyric",
             tracking_error=tracking_err,
         )
         if gold_label
@@ -51,10 +50,10 @@ def test_generate_predictions_and_errors_csv(tmp_path: Path):
     """Test classification of error_type and filtering into errors.csv."""
     items = [
         make_item("v1", "t1", "lyric", "lyric"),  # correct
-        make_item("v1", "t2", "lyric", "channel"),  # leakage
-        make_item("v1", "t3", "channel", "lyric"),  # false_drop
-        make_item("v1", "t4", "song_title", "channel"),  # misclassification
-        make_item("v1", "t5", "channel", "channel", tracking_err=True),  # tracking_error
+        make_item("v1", "t2", "lyric", "non_lyric"),  # leakage
+        make_item("v1", "t3", "non_lyric", "lyric"),  # false_drop
+        make_item("v1", "t4", "lyric", "non_lyric"),  # leakage
+        make_item("v1", "t5", "non_lyric", "non_lyric", tracking_err=True),  # tracking_error
         make_item("v1", "t6", "lyric", None),  # unlabeled
     ]
 
@@ -68,7 +67,7 @@ def test_generate_predictions_and_errors_csv(tmp_path: Path):
     assert error_types["t1"] == "correct"
     assert error_types["t2"] == "leakage"
     assert error_types["t3"] == "false_drop"
-    assert error_types["t4"] == "misclassification"
+    assert error_types["t4"] == "leakage"
     assert error_types["t5"] == "tracking_error"
     assert error_types["t6"] == "unlabeled"
 
@@ -76,7 +75,7 @@ def test_generate_predictions_and_errors_csv(tmp_path: Path):
     num_errs = generate_errors_csv(pred_rows, errs_csv)
 
     assert errs_csv.exists()
-    # leakage, false_drop, and misclassification -> 3 errors
+    # leakage x2 and false_drop -> 3 errors
     assert num_errs == 3
 
 
@@ -84,8 +83,8 @@ def test_save_evaluation_report_full(tmp_path: Path):
     """Test saving complete bundle: metrics.json, report.md, predictions.csv, errors.csv."""
     items = [
         make_item("song_a", "1", "lyric", "lyric"),
-        make_item("song_a", "2", "channel", "channel"),
-        make_item("song_b", "1", "song_title", "song_title"),
+        make_item("song_a", "2", "non_lyric", "non_lyric"),
+        make_item("song_b", "1", "non_lyric", "non_lyric"),
     ]
 
     report = evaluate_predictions(items)
@@ -107,15 +106,13 @@ def test_save_evaluation_report_full(tmp_path: Path):
     md_content = saved["report_md"].read_text(encoding="utf-8")
     assert "# Phase 1 Evaluation & Quality Gate Report" in md_content
     assert "PHASE 1 QUALITY GATE: PASSED" in md_content
-    assert "Per-Class Taxonomy Breakdown" in md_content
-    assert "Confusion Matrix" in md_content
     assert "Per-Video Performance" in md_content
 
 
 def test_custom_gate_threshold_is_reflected_in_markdown(tmp_path: Path):
     items = [
         make_item("song_a", "1", "lyric", "lyric"),
-        make_item("song_a", "2", "channel", "channel"),
+        make_item("song_a", "2", "non_lyric", "non_lyric"),
     ]
     report = evaluate_predictions(items, gate_min_precision=1.01)
     assert report.gate_passed is False
@@ -156,8 +153,8 @@ def test_render_evaluation_charts(tmp_path: Path):
     """Test rendering of all 4 charts via matplotlib."""
     items = [
         make_item("song_a", "1", "lyric", "lyric"),
-        make_item("song_a", "2", "channel", "channel"),
-        make_item("song_a", "3", "song_title", "song_title"),
+        make_item("song_a", "2", "non_lyric", "non_lyric"),
+        make_item("song_a", "3", "non_lyric", "non_lyric"),
     ]
     report = evaluate_predictions(items)
 
@@ -170,7 +167,5 @@ def test_render_evaluation_charts(tmp_path: Path):
     rendered = render_evaluation_charts(report, chart_dir, tracker_results=tracker_results)
 
     assert rendered is True
-    assert (chart_dir / "confusion_matrix.png").exists()
-    assert (chart_dir / "per_class_prf.png").exists()
     assert (chart_dir / "leakage_false_drop.png").exists()
     assert (chart_dir / "tracker_comparison.png").exists()

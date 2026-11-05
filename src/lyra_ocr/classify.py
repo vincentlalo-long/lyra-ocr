@@ -1,12 +1,12 @@
 """Rule-based track classifier for Phase 1.
 
-Classifies TextTrack instances into standardized taxonomy:
+Classifies TextTrack instances into the final binary schema:
 - lyric: core song lyrics (decision: accept)
-- channel: watermark, channel logo, artist handle (decision: reject)
-- song_title: introductory title cards (decision: reject)
-- supplementary: UI text, subscribe buttons, credit blocks (decision: reject)
-- scene_text: text on background scenery moving with camera (decision: reject)
-- unknown: ambiguous items routed to human verification (decision: review)
+- non_lyric: every distractor subtype (decision: reject or review)
+
+The ``reason`` and ``qa_flags`` fields preserve the diagnostic subtype
+(watermark, title card, supplementary text, scene text, ambiguous) without
+making it part of the ground-truth label space.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ from lyra_ocr.track import TextTrack, compute_track_features, string_similarity
 
 @dataclass
 class ClassificationResult:
-    label: str  # lyric, channel, song_title, supplementary, scene_text, unknown
+    label: str  # lyric, non_lyric
     confidence: float
     reason: str
     decision: str  # accept, reject, review
@@ -65,7 +65,7 @@ def classify_track(
     frame_width: int = 1280,
     frame_height: int = 720,
 ) -> ClassificationResult:
-    """Classify a single TextTrack into the standardized taxonomy using rule heuristics."""
+    """Classify a single TextTrack into lyric vs non-lyric using rule heuristics."""
     meta = metadata or {}
     v_channel = meta.get("channel", "").strip().lower()
     v_title = meta.get("title", "").strip().lower()
@@ -104,7 +104,7 @@ def classify_track(
     for kw in SUPPLEMENTARY_KEYWORDS:
         if kw in dom_lower:
             res = ClassificationResult(
-                label="supplementary",
+                label="non_lyric",
                 confidence=0.96,
                 reason=f"Contains supplementary/social/credit keyword '{kw}'",
                 decision="reject",
@@ -116,7 +116,7 @@ def classify_track(
     # Rule 2: Erratic Scene Text (High Spatial Variance)
     if spatial_variance > 0.04:
         res = ClassificationResult(
-            label="scene_text",
+            label="non_lyric",
             confidence=0.92,
             reason=f"High spatial variance ({spatial_variance:.4f}) indicating trajectory drift",
             decision="reject",
@@ -144,7 +144,7 @@ def classify_track(
         chan_len_ratio = len(v_channel) / max(1, len(dom_lower))
         if sim_chan >= 0.75 or token_chan_match or (v_channel in dom_lower and chan_len_ratio >= 0.4):
             res = ClassificationResult(
-                label="channel",
+                label="non_lyric",
                 confidence=0.98,
                 reason=f"Matched video channel/artist metadata '{v_channel}'",
                 decision="reject",
@@ -156,7 +156,7 @@ def classify_track(
     # Persistent invariant text (> 45% of total video)
     if lifetime_ratio >= 0.45 and n_text_changes <= 1:
         res = ClassificationResult(
-            label="channel",
+            label="non_lyric",
             confidence=0.95,
             reason=f"Persistent invariant text across {lifetime_ratio*100:.1f}% of video duration",
             decision="reject",
@@ -168,7 +168,7 @@ def classify_track(
     # Channel handle symbols (@handle or #handle)
     if dominant_text.startswith("@") or (dominant_text.startswith("#") and len(dominant_text) > 3):
         res = ClassificationResult(
-            label="channel",
+            label="non_lyric",
             confidence=0.90,
             reason="Contains channel handle prefix (@ or #)",
             decision="reject",
@@ -198,7 +198,7 @@ def classify_track(
         )
         if is_title_match and (start_time_ratio <= 0.25 or n_text_changes == 0):
             res = ClassificationResult(
-                label="song_title",
+                label="non_lyric",
                 confidence=0.98,
                 reason=f"Title text matching video title metadata '{v_title}'",
                 decision="reject",
@@ -211,7 +211,7 @@ def classify_track(
     if start_time_ratio <= 0.05 and track.end_ms <= 15000 and n_text_changes <= 1 and duration_ms <= 10000:
         if 2000 <= duration_ms <= 9000 and not is_corner:
             res = ClassificationResult(
-                label="song_title",
+                label="non_lyric",
                 confidence=0.88,
                 reason="Static title card bounded strictly within video intro",
                 decision="reject",
@@ -225,7 +225,7 @@ def classify_track(
         if only_intro_outro:
             # Intro/credit carousels also change text; never auto-accept them.
             res = ClassificationResult(
-                label="unknown",
+                label="non_lyric",
                 confidence=0.55,
                 reason="Recurring text change confined to intro/outro (possible credit carousel)",
                 decision="review",
@@ -243,11 +243,11 @@ def classify_track(
         return res
 
     # Rule 5b: Static text with OCR character fluctuation in a corner/side region.
-    # Without metadata title evidence this is not confidently channel/song_title,
-    # so route it to review instead of guessing a taxonomy label.
+    # Without metadata title evidence this is not confidently non-lyric,
+    # so route it to review instead of guessing.
     if distinct_changes == 0 and n_text_changes >= 1 and (mean_cx < 0.25 or is_corner or mean_cy > 0.85):
         res = ClassificationResult(
-            label="unknown",
+            label="non_lyric",
             confidence=0.60,
             reason="Static corner/side text with OCR character fluctuation; needs review",
             decision="review",
@@ -260,7 +260,7 @@ def classify_track(
     if n_text_changes <= 1:
         # Typical lyric line duration is 1.5s - 8.5s. A single cue is only
         # auto-accepted when the text itself looks like a sung line; short
-        # all-caps promo cards fall through to unknown/review.
+        # all-caps promo cards fall through to non_lyric/review.
         word_count = len(dominant_text.split())
         is_all_caps = dominant_text.isupper() and len(dom_tokens) >= 2
         lyric_like_text = (
@@ -290,7 +290,7 @@ def classify_track(
     # one-frame detection is background noise or transient scene text.
     if len(track.occurrences) <= 1 and n_text_changes == 0 and not is_corner:
         res = ClassificationResult(
-            label="scene_text",
+            label="non_lyric",
             confidence=0.80,
             reason="Isolated single-frame text with no temporal persistence",
             decision="reject",
@@ -299,9 +299,9 @@ def classify_track(
         track.classification = res
         return res
 
-    # Rule 7: Ambiguous / Unknown Fallback
+    # Rule 7: Ambiguous Fallback
     res = ClassificationResult(
-        label="unknown",
+        label="non_lyric",
         confidence=0.50,
         reason="Ambiguous trajectory / insufficient observations for deterministic rule match",
         decision="review",

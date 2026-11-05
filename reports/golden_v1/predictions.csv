@@ -1,7 +1,7 @@
-video_id,track_id,start_ms,end_ms,duration_ms,text,model_label,model_confidence,model_decision,human_label,binary,tracking_error,is_missing,is_correct,binary_correct,error_type
-castle_en_9cac48e3,1,20000,24500,4500,We can be alone in the castle in the sky,lyric,0.90,accept,lyric,lyric,false,false,true,true,correct
-castle_en_9cac48e3,2,20000,24500,4500,CLARX & HARDDOPE,channel,0.98,reject,channel,non_lyric,false,false,true,true,correct
-castle_en_9cac48e3,3,20000,24500,4500,CASTLE,song_title,0.98,reject,song_title,non_lyric,false,false,true,true,correct
-song3_en_78305c47,1,20000,20000,0,4ILCAR,scene_text,0.80,reject,scene_text,non_lyric,false,false,true,true,correct
-song3_en_78305c47,2,20000,24500,4500,ESUCARTIMe,unknown,0.60,review,song_title,non_lyric,false,false,false,true,misclassification
-song3_en_78305c47,3,20000,24500,4500,"Watch me, watch me now and",lyric,0.98,accept,lyric,lyric,false,false,true,true,correct
+video_id,track_id,start_ms,end_ms,duration_ms,text,model_label,model_confidence,model_decision,human_label,tracking_error,is_missing,is_correct,error_type
+castle_en_9cac48e3,1,20000,24500,4500,We can be alone in the castle in the sky,lyric,0.90,accept,lyric,false,false,true,correct
+castle_en_9cac48e3,2,20000,24500,4500,CLARX & HARDDOPE,non_lyric,0.98,reject,non_lyric,false,false,true,correct
+castle_en_9cac48e3,3,20000,24500,4500,CASTLE,non_lyric,0.98,reject,non_lyric,false,false,true,correct
+song3_en_78305c47,1,20000,20000,0,4ILCAR,non_lyric,0.80,reject,non_lyric,false,false,true,correct
+song3_en_78305c47,2,20000,24500,4500,ESUCARTIMe,non_lyric,0.60,review,non_lyric,false,false,true,correct
+song3_en_78305c47,3,20000,24500,4500,"Watch me, watch me now and",lyric,0.98,accept,lyric,false,false,true,correct

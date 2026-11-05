@@ -25,7 +25,7 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 - [Mathematical Foundations of DBNet (PDF)](doc/research/dbnet-mathematics.pdf): Theoretical monograph covering Differentiable Binarization, gradient mechanics, adaptive threshold calibration, and polygon decoding geometry.
 - [Video Text Tracking & Semantic Discrimination (PDF)](doc/research/video-text-tracking-and-identification.pdf): Academic monograph covering two-level hierarchical tracking, ByteTrack/SORT/DBSCAN formulations, the negative elimination cascade, and CLEAR MOT evaluation metrics.
 - [Phase 1 Tracker Benchmark Report](reports/tracker_benchmark/benchmark_report.md): Empirical benchmark comparing `greedy`, `bytetrack`, `sort`, and `dbscan` on real video fixtures and synthetic stress scenarios.
-- [Phase 1 Evaluation & Quality Gate Report](reports/golden_v1/report.md): Ground-truth evaluation metrics, confusion matrix, and taxonomy breakdown on Golden Set v1.
+- [Phase 1 Evaluation & Quality Gate Report](reports/golden_v1/report.md): Binary lyric/non-lyric ground-truth evaluation metrics and quality gate status on Golden Set v1.
 
 ---
 
@@ -43,7 +43,7 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 - **Full-Frame Scene Text Detection** ([`src/lyra_ocr/detect.py`](src/lyra_ocr/detect.py)): Detects text boxes across the entire frame without hardcoded region-of-interest assumptions using DBNet (`PP-OCRv6_det_small`).
 - **Text Recognition & Normalization** ([`src/lyra_ocr/ocr.py`](src/lyra_ocr/ocr.py)): Crops and recognizes text lines with RapidOCR (`PP-OCRv6_rec_small`), normalizes Unicode text to NFC, and classifies script types (`latin`, `japan`, `mixed`).
 - **Temporal Text Tracking** ([`src/lyra_ocr/track.py`](src/lyra_ocr/track.py)): Clusters frame-level OCR detections across time into continuous `TextTrack` streams via spatial IoU and string edit-distance continuity.
-- **Rule-Based Distractor Discrimination** ([`src/lyra_ocr/classify.py`](src/lyra_ocr/classify.py)): Accurately discriminates lyrics (`lyric`) from persistent channel logos (`channel`), intro title cards (`song_title`), and scenery text (`scene_text`).
+- **Rule-Based Distractor Discrimination** ([`src/lyra_ocr/classify.py`](src/lyra_ocr/classify.py)): Classifies each track as `lyric` or `non_lyric`, while retaining diagnostic reasons for watermarks, title cards, and scenery text.
 - **Human-in-the-Loop Review & Audit** ([`src/lyra_ocr/review.py`](src/lyra_ocr/review.py)): Automatically exports structured `tracks.json`, human-auditable `review.csv`, and color-coded visual verification overlays (`roi_preview.jpg`).
 - **Lyric Identification & Smoke CLI** (`lyra-ocr identify` / `lyra-ocr smoke`): Complete command-line pipeline from raw video to classified lyric tracks.
 - **Automated Test Suite**: 79 unit and evaluation tests covering probe extraction, PTS indexing, Unicode normalization, tracking association, rule classification, label persistence, Hungarian track matching, and metric calculations.
@@ -94,13 +94,13 @@ lyra-ocr identify path/to/video.mp4 \
 See [`reports/tracker_benchmark/benchmark_report.md`](reports/tracker_benchmark/benchmark_report.md) for full benchmark results and latency comparison.
 
 Outputs generated in `./output`:
-- `tracks.json`: Clustered `TextTrack` entities with frame-level `occurrences`, temporal statistics, segment transitions, and assigned taxonomy labels (`lyric`, `channel`, `song_title`, `supplementary`, `scene_text`, `unknown`).
+- `tracks.json`: Clustered `TextTrack` entities with frame-level `occurrences`, temporal statistics, segment transitions, and binary labels (`lyric`, `non_lyric`).
 - `review.csv`: Tabular spreadsheet for human-in-the-loop audit (`track_id,start_ms,end_ms,machine_label,machine_decision,confidence,suggested_text,human_label,human_decision,review_note`).
 - `labels.jsonl`: Append-only human annotation audit trail with hash provenance.
 - `manifest.json`: Tool versions, model metadata, config hash, and video configuration.
 - `ocr_raw.json`: Frame-by-frame text lines with 4-point polygons, bounding boxes, raw/normalized text, and confidence scores.
 - `frame_index.json`: Extracted frame indices mapped to millisecond PTS timestamps.
-- `roi_preview.jpg`: Color-coded visual audit preview (Green = Lyric, Red = Channel/Watermark, Yellow = Song Title).
+- `roi_preview.jpg`: Color-coded visual audit preview (Green = Lyric, Red = Non-Lyric).
 - `frames/`: Directory containing extracted JPEG frames.
 
 ### 3. Human Review & Annotation CLI

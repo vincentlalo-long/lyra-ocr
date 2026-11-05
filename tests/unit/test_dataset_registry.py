@@ -113,7 +113,7 @@ def test_get_dataset_enriches_track_counts(tmp_path):
     art = ds_dir / "artifacts" / "v1"
     (art / "labels.jsonl").write_text(
         '{"video_id": "v1", "track_id": "1", "human_label": "lyric"}\n'
-        '{"video_id": "v1", "track_id": "2", "human_label": "channel"}\n',
+        '{"video_id": "v1", "track_id": "2", "human_label": "non_lyric"}\n',
         encoding="utf-8",
     )
     registry.sync_entry(tmp_path, "dse", video_id="v1", artifact_dir="artifacts/v1")

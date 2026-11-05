@@ -26,6 +26,7 @@ from lyra_ocr.labels import (
     append_label_record,
     get_label_status,
     load_labels_jsonl,
+    normalize_label,
 )
 from lyra_ocr.web.jobs import JobQueue
 
@@ -328,10 +329,14 @@ class LyraReviewHandler(BaseHTTPRequestHandler):
 
         status = get_label_status(art_path)
 
+        tracks_payload = tracks_data.get("tracks", [])
+        for tr in tracks_payload:
+            tr["label"] = normalize_label(tr.get("label"))
+
         self._send_json({
             "artifact_dir": str(art_dir_str),
             "manifest": manifest_data,
-            "tracks": tracks_data.get("tracks", []),
+            "tracks": tracks_payload,
             "frame_index": normalized_frames,
             "labels": labels_map,
             "status": status,
@@ -452,7 +457,7 @@ class LyraReviewHandler(BaseHTTPRequestHandler):
                 td = json.load(f)
                 for tr in td.get("tracks", []):
                     if str(tr.get("track_id")) == str(track_id):
-                        model_label = tr.get("label")
+                        model_label = normalize_label(tr.get("label"))
                         model_confidence = tr.get("confidence")
                         break
 

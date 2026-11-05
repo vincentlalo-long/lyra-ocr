@@ -80,7 +80,7 @@ def test_classify_persistent_channel_watermark():
     )
     result = classify_track(track, metadata={"channel": "Clarx & Harddope", "title": "Castle"})
 
-    assert result.label == "channel"
+    assert result.label == "non_lyric"
     assert result.decision == "reject"
     assert "Persistent" in result.reason or "channel" in result.reason.lower()
 
@@ -99,7 +99,7 @@ def test_classify_intro_title_card():
     )
     result = classify_track(track, metadata={"channel": "Clarx & Harddope", "title": "Castle"})
 
-    assert result.label == "song_title"
+    assert result.label == "non_lyric"
     assert result.decision == "reject"
     assert "title" in result.reason.lower() or "intro" in result.reason.lower()
 
@@ -142,7 +142,7 @@ def test_classify_recurring_changes_in_intro_are_not_auto_accepted():
     )
     result = classify_track(track, metadata={})
 
-    assert result.label == "unknown"
+    assert result.label == "non_lyric"
     assert result.decision == "review"
     assert "only_intro_outro" in result.qa_flags
 
@@ -194,7 +194,7 @@ def test_classify_isolated_single_frame_text_is_scene_text():
     )
     result = classify_track(track, metadata={})
 
-    assert result.label == "scene_text"
+    assert result.label == "non_lyric"
     assert result.decision == "reject"
     assert "single_frame_isolated" in result.qa_flags
 
@@ -212,7 +212,7 @@ def test_classify_supplementary_subscribe_tag():
     )
     result = classify_track(track)
 
-    assert result.label == "supplementary"
+    assert result.label == "non_lyric"
     assert result.decision == "reject"
     assert "subscribe" in result.reason.lower() or "keyword" in result.reason.lower()
 
@@ -231,6 +231,6 @@ def test_classify_erratic_scene_text():
     )
     result = classify_track(track)
 
-    assert result.label == "scene_text"
+    assert result.label == "non_lyric"
     assert result.decision == "reject"
     assert "variance" in result.reason.lower() or "drift" in result.reason.lower()

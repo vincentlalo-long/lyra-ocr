@@ -122,7 +122,6 @@ def match_predictions_to_golden(
                 video_id=pred.video_id,
                 track_id=pred.track_id,
                 human_label=gold_lbl.human_label,
-                binary=gold_lbl.binary,
                 tracking_error=gold_lbl.tracking_error,
                 notes=f"Matched to golden track {gold_item.pred.track_id} (score={score:.2f})",
                 annotator=gold_lbl.annotator,

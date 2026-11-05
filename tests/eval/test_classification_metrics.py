@@ -1,18 +1,14 @@
-"""Unit tests for Phase 1 classification and asymmetric evaluation metrics."""
+"""Unit tests for Phase 1 binary lyric classification and evaluation metrics."""
 
 import pytest
 from lyra_ocr.eval.metrics import (
     compute_binary_lyric_metrics,
-    compute_confusion_matrix,
     compute_false_drop_metrics,
     compute_leakage_metrics,
-    compute_macro_micro_f1,
-    compute_per_class_metrics,
     evaluate_predictions,
     wilson_score_interval,
 )
 from lyra_ocr.eval.types import EvaluationItem, TrackLabel, TrackPrediction
-from lyra_ocr.labels import VALID_LABELS
 
 
 def make_eval_item(
@@ -39,7 +35,6 @@ def make_eval_item(
             video_id=video_id,
             track_id=track_id,
             human_label=human_label,
-            binary="lyric" if human_label == "lyric" else "non_lyric",
             tracking_error=tracking_error,
         )
         if human_label
@@ -51,8 +46,8 @@ def make_eval_item(
 def test_perfect_predictions():
     items = [
         make_eval_item("v1", "1", "lyric", "lyric"),
-        make_eval_item("v1", "2", "channel", "channel"),
-        make_eval_item("v1", "3", "song_title", "song_title"),
+        make_eval_item("v1", "2", "non_lyric", "non_lyric"),
+        make_eval_item("v1", "3", "non_lyric", "non_lyric"),
     ]
     report = evaluate_predictions(items)
 
@@ -62,30 +57,37 @@ def test_perfect_predictions():
     assert report.binary_lyric.f1 == 1.0
     assert report.leakage.count_rate == 0.0
     assert report.leakage.duration_rate == 0.0
-    assert report.leakage.channel_count == 0
     assert report.false_drop.rate == 0.0
     assert report.tracking_error_tracks == 0
     assert report.gate_passed is True
 
 
+def test_binary_metric_counts():
+    pairs = [
+        ("lyric", "lyric"),
+        ("lyric", "non_lyric"),
+        ("non_lyric", "lyric"),
+        ("non_lyric", "non_lyric"),
+    ]
+    metrics = compute_binary_lyric_metrics(pairs)
+    assert metrics.precision == pytest.approx(0.5)
+    assert metrics.recall == pytest.approx(0.5)
+    assert metrics.f1 == pytest.approx(0.5)
+    assert metrics.support_lyric == 2
+    assert metrics.support_non_lyric == 2
+
+
 def test_leakage_denominator_exactness():
     """Verify formula: leakage_count_rate = #(model=lyric & human!=lyric) / #(model=lyric)."""
-    # 4 items:
-    # Item 1: model=lyric, human=lyric (True positive)
-    # Item 2: model=lyric, human=channel (LEAKAGE distractor 1)
-    # Item 3: model=lyric, human=song_title (LEAKAGE distractor 2)
-    # Item 4: model=channel, human=channel (True negative)
-    # Total predicted lyrics = 3. Leaked = 2. Expected rate = 2/3 = 0.6667
     items = [
         make_eval_item("v1", "1", "lyric", "lyric", duration_ms=2000),
-        make_eval_item("v1", "2", "lyric", "channel", duration_ms=4000),
-        make_eval_item("v1", "3", "lyric", "song_title", duration_ms=4000),
-        make_eval_item("v1", "4", "channel", "channel", duration_ms=10000),
+        make_eval_item("v1", "2", "lyric", "non_lyric", duration_ms=4000),
+        make_eval_item("v1", "3", "lyric", "non_lyric", duration_ms=4000),
+        make_eval_item("v1", "4", "non_lyric", "non_lyric", duration_ms=10000),
     ]
     leak = compute_leakage_metrics(items)
 
     assert leak.leaked_tracks_count == 2
-    assert leak.channel_count == 1
     assert leak.count_rate == pytest.approx(2.0 / 3.0, abs=1e-4)
 
     # Duration: total predicted lyric duration = 2000 + 4000 + 4000 = 10000ms.
@@ -94,10 +96,9 @@ def test_leakage_denominator_exactness():
 
 
 def test_leakage_zero_predictions():
-    """Verify denominator safety when model predicts zero lyrics."""
     items = [
-        make_eval_item("v1", "1", "channel", "channel"),
-        make_eval_item("v1", "2", "song_title", "song_title"),
+        make_eval_item("v1", "1", "non_lyric", "non_lyric"),
+        make_eval_item("v1", "2", "non_lyric", "non_lyric"),
     ]
     leak = compute_leakage_metrics(items)
     assert leak.count_rate == 0.0
@@ -106,14 +107,12 @@ def test_leakage_zero_predictions():
 
 def test_false_drop_denominator_exactness():
     """Verify formula: false_drop_rate = #(human=lyric & model!=lyric) / #(human=lyric)."""
-    # Golden has 4 lyrics:
-    # 3 found by model, 1 missed (model=channel)
     items = [
         make_eval_item("v1", "1", "lyric", "lyric"),
         make_eval_item("v1", "2", "lyric", "lyric"),
         make_eval_item("v1", "3", "lyric", "lyric"),
-        make_eval_item("v1", "4", "channel", "lyric"),  # False drop
-        make_eval_item("v1", "5", "channel", "channel"),
+        make_eval_item("v1", "4", "non_lyric", "lyric"),  # False drop
+        make_eval_item("v1", "5", "non_lyric", "non_lyric"),
     ]
     fdrop = compute_false_drop_metrics(items)
     assert fdrop.total_golden_lyrics == 4
@@ -125,9 +124,9 @@ def test_tracking_error_excluded_from_classification():
     """Verify that tracks with tracking_error=True are excluded from classification metrics."""
     items = [
         make_eval_item("v1", "1", "lyric", "lyric"),
-        make_eval_item("v1", "2", "channel", "channel"),
+        make_eval_item("v1", "2", "non_lyric", "non_lyric"),
         # Item 3 is a tracking failure (e.g. merge of logo and lyric), so human flagged tracking_error
-        make_eval_item("v1", "3", "lyric", "channel", tracking_error=True),
+        make_eval_item("v1", "3", "lyric", "non_lyric", tracking_error=True),
     ]
     report = evaluate_predictions(items)
 
@@ -142,7 +141,7 @@ def test_tracking_error_excluded_from_classification():
 def test_unlabeled_tracks_counted_separately():
     items = [
         make_eval_item("v1", "1", "lyric", "lyric"),
-        make_eval_item("v1", "2", "channel", ""),  # Unlabeled
+        make_eval_item("v1", "2", "non_lyric", ""),  # Unlabeled
     ]
     report = evaluate_predictions(items)
 
@@ -150,26 +149,6 @@ def test_unlabeled_tracks_counted_separately():
     assert report.evaluated_tracks == 1
     assert report.unlabeled_tracks == 1
     assert report.coverage_rate == 0.5
-
-
-def test_confusion_matrix_shape_and_counts():
-    pairs = [
-        ("lyric", "lyric"),
-        ("lyric", "lyric"),
-        ("channel", "channel"),
-        ("song_title", "lyric"),
-    ]
-    matrix = compute_confusion_matrix(pairs, labels=VALID_LABELS)
-
-    assert matrix["lyric"]["lyric"] == 2
-    assert matrix["channel"]["channel"] == 1
-    assert matrix["song_title"]["lyric"] == 1
-    assert matrix["song_title"]["song_title"] == 0
-
-    per_class = compute_per_class_metrics(matrix, labels=VALID_LABELS)
-    assert per_class["lyric"].precision == pytest.approx(2.0 / 3.0, abs=1e-3)
-    assert per_class["lyric"].recall == 1.0
-    assert per_class["song_title"].recall == 0.0
 
 
 def test_missing_golden_track_counts_as_false_drop_and_lowers_recall():
@@ -184,12 +163,10 @@ def test_missing_golden_track_counts_as_false_drop_and_lowers_recall():
         duration_ms=4000,
         dominant_text="lost lyric line",
     )
-    missing_label = TrackLabel(
-        video_id="v1", track_id="m1", human_label="lyric", binary="lyric"
-    )
+    missing_label = TrackLabel(video_id="v1", track_id="m1", human_label="lyric")
     items = [
         make_eval_item("v1", "1", "lyric", "lyric"),
-        make_eval_item("v1", "2", "channel", "channel"),
+        make_eval_item("v1", "2", "non_lyric", "non_lyric"),
         EvaluationItem(pred=missing_pred, label=missing_label, is_missing=True),
     ]
 
@@ -203,29 +180,10 @@ def test_missing_golden_track_counts_as_false_drop_and_lowers_recall():
     assert report.binary_lyric.recall == pytest.approx(0.5, abs=1e-4)
 
 
-def test_macro_f1_includes_zero_support_classes():
-    items = [
-        make_eval_item("v1", "1", "lyric", "lyric"),
-        make_eval_item("v1", "2", "channel", "channel"),
-    ]
-    report = evaluate_predictions(items)
-    # Only two of six classes are present; macro must still divide by six.
-    assert report.macro_f1 == pytest.approx(2.0 / 6.0, abs=1e-4)
-
-
-def test_unknown_rate_uses_evaluated_tracks_only():
-    items = [
-        make_eval_item("v1", "1", "lyric", "lyric"),
-        make_eval_item("v1", "2", "unknown", ""),  # unlabeled, must not count
-    ]
-    report = evaluate_predictions(items)
-    assert report.unknown_rate == 0.0
-
-
 def test_report_stores_gate_thresholds():
-    report = evaluate_predictions([], gate_min_coverage=0.5, gate_max_unknown=0.2)
+    report = evaluate_predictions([], gate_min_coverage=0.5, gate_max_false_drop=0.2)
     assert report.gate_thresholds["min_coverage"] == 0.5
-    assert report.gate_thresholds["max_unknown"] == 0.2
+    assert report.gate_thresholds["max_false_drop"] == 0.2
     assert report.binary_lyric_ci["precision"] == [0.0, 0.0]
 
 

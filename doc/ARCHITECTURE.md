@@ -91,7 +91,7 @@ flowchart TD
 - **String Distance Continuity**: Incorporates normalized Levenshtein edit distance to link changing text occurrences into continuous `TextTrack` streams over time.
 
 ### 2.5. Semantic Classification & Output Subsystem
-- **Discriminative Rule Classification**: Categorizes `TextTrack` entities based on temporal duration, spatial variance, and metadata correlation into semantic labels (`lyric`, `channel`, `song_title`, `supplementary`, `scene_text`, `unknown`).
+- **Discriminative Rule Classification**: Classifies `TextTrack` entities based on temporal duration, spatial variance, and metadata correlation as `lyric` or `non_lyric`, retaining the distractor subtype in `reason`/`qa_flags` for diagnostics.
 - **Dense Boundary Refinement**: Refines start and end time boundaries around confirmed lyric tracks using targeted, sub-sampled boundary scans.
 - **Synchronized LRC Formatting**: Formats verified lyric lines into millisecond-accurate, standard centisecond lyric representations (`[mm:ss.xx]`).
 

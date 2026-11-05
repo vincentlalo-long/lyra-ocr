@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from lyra_ocr.eval.types import EvaluationItem, EvaluationReport
-from lyra_ocr.labels import VALID_LABELS
 
 
 def build_prediction_rows(items: list[EvaluationItem]) -> list[dict[str, Any]]:
@@ -18,14 +17,10 @@ def build_prediction_rows(items: list[EvaluationItem]) -> list[dict[str, Any]]:
     for it in items:
         p = it.pred
         hl = it.label.human_label if it.label else ""
-        bin_lbl = it.label.binary if it.label else ""
         is_err = it.is_tracking_error
         is_missing = it.is_missing
 
         is_correct = (p.model_label == hl) if hl else False
-        binary_correct = (
-            (p.model_label == "lyric") == (hl == "lyric") if hl else False
-        )
         error_type = ""
         if not hl:
             error_type = "unlabeled"
@@ -54,11 +49,9 @@ def build_prediction_rows(items: list[EvaluationItem]) -> list[dict[str, Any]]:
                 "model_confidence": f"{p.model_confidence:.2f}",
                 "model_decision": p.model_decision,
                 "human_label": hl,
-                "binary": bin_lbl,
                 "tracking_error": "true" if is_err else "false",
                 "is_missing": "true" if is_missing else "false",
                 "is_correct": "true" if is_correct else "false",
-                "binary_correct": "true" if binary_correct else "false",
                 "error_type": error_type,
             }
         )
@@ -77,11 +70,9 @@ PREDICTION_CSV_FIELDS = [
     "model_confidence",
     "model_decision",
     "human_label",
-    "binary",
     "tracking_error",
     "is_missing",
     "is_correct",
-    "binary_correct",
     "error_type",
 ]
 
@@ -95,7 +86,7 @@ def generate_predictions_csv(
     out_p = Path(out_csv)
     out_p.parent.mkdir(parents=True, exist_ok=True)
     with open(out_p, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=PREDICTION_CSV_FIELDS)
+        writer = csv.DictWriter(f, fieldnames=PREDICTION_CSV_FIELDS, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -127,7 +118,7 @@ def generate_errors_csv(
     out_p = Path(out_csv)
     out_p.parent.mkdir(parents=True, exist_ok=True)
     with open(out_p, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore", lineterminator="\n")
         writer.writeheader()
         writer.writerows(error_rows)
 
@@ -154,7 +145,6 @@ def generate_markdown_report(report: EvaluationReport, out_md: str | Path) -> st
     min_rec = t.get("min_lyric_recall", 0.85)
     max_leak = t.get("max_leakage", 0.00)
     max_drop = t.get("max_false_drop", 0.15)
-    max_unk = t.get("max_unknown", 0.10)
     max_miss = t.get("max_tracking_miss", 0.15)
 
     lines.append("## 1. Summary Metrics\n")
@@ -178,17 +168,8 @@ def generate_markdown_report(report: EvaluationReport, out_md: str | Path) -> st
     drop_status = "PASS" if report.false_drop.rate <= max_drop else "FAIL"
     lines.append(f"| **False Drop Rate** | `{report.false_drop.rate*100:.1f}%` ({report.false_drop.count} drops) | `<= {max_drop*100:.1f}%` | **{drop_status}** |")
 
-    # Unknown rate is advisory: it measures review load, not classification
-    # correctness, and is only meaningful once the golden set is larger.
-    unk_status = "INFO"
-    unk_note = " (target)" if report.unknown_rate > max_unk else ""
-    lines.append(f"| **Unknown Rate** | `{report.unknown_rate*100:.1f}%` | `<= {max_unk*100:.1f}%` | **{unk_status}**{unk_note} |")
-
     miss_status = "PASS" if report.tracking_miss_rate <= max_miss else "FAIL"
     lines.append(f"| **Tracking Miss Rate** | `{report.tracking_miss_rate*100:.1f}%` ({report.tracking_miss_tracks} golden tracks) | `<= {max_miss*100:.1f}%` | **{miss_status}** |")
-
-    lines.append(f"| **Macro-F1 (6-class)** | `{report.macro_f1:.4f}` | - | INFO |")
-    lines.append(f"| **Micro-F1 (6-class / accuracy)** | `{report.micro_f1:.4f}` | - | INFO |")
     lines.append(f"| **Tracking Errors (Excluded)** | `{report.tracking_error_tracks}` | - | INFO |")
     lines.append("\n")
 
@@ -200,32 +181,9 @@ def generate_markdown_report(report: EvaluationReport, out_md: str | Path) -> st
             f"recall [{rec_ci[0]:.3f}, {rec_ci[1]:.3f}]_\n"
         )
 
-    # Per-Class Metrics
-    lines.append("## 2. Per-Class Taxonomy Breakdown\n")
-    lines.append("| Category | Precision | Recall | F1-Score | Support (Ground Truth) |")
-    lines.append("|---|---|---|---|---|")
-    for lbl in VALID_LABELS:
-        m = report.per_class.get(lbl)
-        if m:
-            lines.append(f"| `{lbl}` | {m.precision:.4f} | {m.recall:.4f} | {m.f1:.4f} | {m.support} |")
-    lines.append("\n")
-
-    # Confusion Matrix
-    lines.append("## 3. Confusion Matrix (Rows = Ground Truth, Columns = Predicted)\n")
-    headers = ["True \\ Pred"] + [f"`{l}`" for l in VALID_LABELS]
-    lines.append("| " + " | ".join(headers) + " |")
-    lines.append("|" + "|".join(["---"] * len(headers)) + "|")
-    for true_lbl in VALID_LABELS:
-        row = [f"**{true_lbl}**"]
-        for pred_lbl in VALID_LABELS:
-            cnt = report.confusion_matrix.get(true_lbl, {}).get(pred_lbl, 0)
-            row.append(str(cnt))
-        lines.append("| " + " | ".join(row) + " |")
-    lines.append("\n")
-
     # Per-video breakdown
     if report.per_video:
-        lines.append("## 4. Per-Video Performance\n")
+        lines.append("## 2. Per-Video Performance\n")
         lines.append("| Video ID | Tracks | Evaluated | Missing | Lyric F1 | Lyric Precision | Lyric Recall | Leakage Rate | False Drop Rate |")
         lines.append("|---|---|---|---|---|---|---|---|---|")
         for vid, vm in report.per_video.items():

@@ -41,7 +41,7 @@ def make_artifact(root: Path, video_id: str = "vid1") -> Path:
     # Deliberately wrong local label: golden master must take precedence.
     append_label_record(
         art / "labels.jsonl",
-        LabelRecord(video_id=video_id, track_id="1", human_label="channel"),
+        LabelRecord(video_id=video_id, track_id="1", human_label="non_lyric"),
     )
     return art
 

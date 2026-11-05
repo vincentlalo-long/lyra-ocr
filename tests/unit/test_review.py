@@ -56,7 +56,7 @@ def test_export_tracks_json_and_review_csv():
     tr2.end_ms = 140000
     tr2.bbox = [50, 50, 200, 80]
     tr2.classification = ClassificationResult(
-        label="channel",
+        label="non_lyric",
         confidence=0.98,
         reason="Matched persistent artist watermark",
         decision="reject",
@@ -128,7 +128,7 @@ def test_export_tracks_json_and_review_csv():
             assert rows[0]["human_label"] == ""
             assert rows[0]["human_decision"] == ""
             assert rows[0]["suggested_text"] == "We can be alone in the castle in the sky"
-            assert rows[1]["machine_label"] == "channel"
+            assert rows[1]["machine_label"] == "non_lyric"
             assert rows[1]["machine_decision"] == "reject"
 
         # Test labels.jsonl human annotation workflow

@@ -41,12 +41,8 @@ def _find_unicode_font(size: int = 16) -> ImageFont.FreeTypeFont | ImageFont.Ima
 
 
 LABEL_COLORS = {
-    "lyric": (34, 197, 94),          # Green
-    "channel": (239, 68, 68),        # Red
-    "song_title": (234, 179, 8),     # Yellow
-    "supplementary": (6, 182, 212),  # Cyan
-    "scene_text": (217, 70, 239),    # Magenta
-    "unknown": (249, 115, 22),       # Orange
+    "lyric": (34, 197, 94),      # Green
+    "non_lyric": (239, 68, 68),  # Red
 }
 
 
@@ -129,7 +125,7 @@ def export_review_tracks_csv(
     rows = []
     for tr in tracks:
         tid_str = str(tr.track_id)
-        label = tr.classification.label if tr.classification else "unknown"
+        label = tr.classification.label if tr.classification else "non_lyric"
         confidence = tr.classification.confidence if tr.classification else 0.50
         decision = tr.classification.decision if tr.classification else "review"
         reason = tr.classification.reason if tr.classification else ""
@@ -198,7 +194,7 @@ def export_review_csv(
 
     rows = []
     for tr in tracks:
-        label = tr.classification.label if tr.classification else "unknown"
+        label = tr.classification.label if tr.classification else "non_lyric"
         confidence = tr.classification.confidence if tr.classification else 0.50
         decision = tr.classification.decision if tr.classification else "review"
         reason = tr.classification.reason if tr.classification else ""
@@ -275,7 +271,7 @@ def render_phase1_overlay(
     font = _find_unicode_font(size=16)
 
     for tr in tracks:
-        label = tr.classification.label if tr.classification else "unknown"
+        label = tr.classification.label if tr.classification else "non_lyric"
         color = LABEL_COLORS.get(label, (255, 255, 255))
 
         # Check if track is active at this timestamp (if timestamp provided)

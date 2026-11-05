@@ -3,7 +3,6 @@
     {
       "tracker": "greedy",
       "n_tracks": 8,
-      "macro_f1": 0.6111,
       "binary_lyric_f1": 1.0,
       "binary_lyric_precision": 1.0,
       "binary_lyric_recall": 1.0,
@@ -11,7 +10,7 @@
       "false_drop_rate": 0.0,
       "coverage_rate": 0.75,
       "tracking_miss_rate": 0.0,
-      "latency_ms": 9.33,
+      "latency_ms": 10.25,
       "gate_passed": false,
       "gate_reasons": [
         "Coverage (75.0%) < 100.0% required"
@@ -20,7 +19,6 @@
     {
       "tracker": "bytetrack",
       "n_tracks": 6,
-      "macro_f1": 0.6111,
       "binary_lyric_f1": 1.0,
       "binary_lyric_precision": 1.0,
       "binary_lyric_recall": 1.0,
@@ -28,14 +26,13 @@
       "false_drop_rate": 0.0,
       "coverage_rate": 1.0,
       "tracking_miss_rate": 0.0,
-      "latency_ms": 3.6,
+      "latency_ms": 3.59,
       "gate_passed": true,
       "gate_reasons": []
     },
     {
       "tracker": "sort",
       "n_tracks": 9,
-      "macro_f1": 0.6111,
       "binary_lyric_f1": 1.0,
       "binary_lyric_precision": 1.0,
       "binary_lyric_recall": 1.0,
@@ -43,7 +40,7 @@
       "false_drop_rate": 0.0,
       "coverage_rate": 0.6667,
       "tracking_miss_rate": 0.0,
-      "latency_ms": 7.64,
+      "latency_ms": 7.62,
       "gate_passed": false,
       "gate_reasons": [
         "Coverage (66.7%) < 100.0% required"
@@ -52,7 +49,6 @@
     {
       "tracker": "dbscan",
       "n_tracks": 7,
-      "macro_f1": 0.4445,
       "binary_lyric_f1": 1.0,
       "binary_lyric_precision": 1.0,
       "binary_lyric_recall": 1.0,
@@ -60,7 +56,7 @@
       "false_drop_rate": 0.0,
       "coverage_rate": 0.7143,
       "tracking_miss_rate": 0.1667,
-      "latency_ms": 9.88,
+      "latency_ms": 11.9,
       "gate_passed": false,
       "gate_reasons": [
         "Coverage (71.4%) < 100.0% required",
@@ -72,49 +68,45 @@
     {
       "tracker": "greedy",
       "n_tracks": 2,
-      "macro_f1": 0.3333,
       "binary_lyric_f1": 1.0,
       "binary_lyric_precision": 1.0,
       "binary_lyric_recall": 1.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 0.0,
-      "latency_ms": 0.493,
+      "latency_ms": 0.527,
       "gate_passed": true
     },
     {
       "tracker": "bytetrack",
       "n_tracks": 2,
-      "macro_f1": 0.3333,
       "binary_lyric_f1": 1.0,
       "binary_lyric_precision": 1.0,
       "binary_lyric_recall": 1.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 0.0,
-      "latency_ms": 0.785,
+      "latency_ms": 0.912,
       "gate_passed": true
     },
     {
       "tracker": "sort",
       "n_tracks": 2,
-      "macro_f1": 0.1667,
       "binary_lyric_f1": 0.0,
       "binary_lyric_precision": 0.0,
       "binary_lyric_recall": 0.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 1.0,
-      "latency_ms": 2.2,
+      "latency_ms": 2.1,
       "gate_passed": false
     },
     {
       "tracker": "dbscan",
       "n_tracks": 2,
-      "macro_f1": 0.3333,
       "binary_lyric_f1": 1.0,
       "binary_lyric_precision": 1.0,
       "binary_lyric_recall": 1.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 0.0,
-      "latency_ms": 1.584,
+      "latency_ms": 1.628,
       "gate_passed": true
     }
   ],
@@ -122,49 +114,45 @@
     {
       "tracker": "greedy",
       "n_tracks": 2,
-      "macro_f1": 0.1667,
       "binary_lyric_f1": 0.0,
       "binary_lyric_precision": 0.0,
       "binary_lyric_recall": 0.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 1.0,
-      "latency_ms": 0.212,
+      "latency_ms": 0.209,
       "gate_passed": false
     },
     {
       "tracker": "bytetrack",
       "n_tracks": 2,
-      "macro_f1": 0.1667,
       "binary_lyric_f1": 0.0,
       "binary_lyric_precision": 0.0,
       "binary_lyric_recall": 0.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 1.0,
-      "latency_ms": 0.411,
+      "latency_ms": 0.412,
       "gate_passed": false
     },
     {
       "tracker": "sort",
       "n_tracks": 2,
-      "macro_f1": 0.1667,
       "binary_lyric_f1": 0.0,
       "binary_lyric_precision": 0.0,
       "binary_lyric_recall": 0.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 1.0,
-      "latency_ms": 1.552,
+      "latency_ms": 1.583,
       "gate_passed": false
     },
     {
       "tracker": "dbscan",
       "n_tracks": 2,
-      "macro_f1": 0.1667,
       "binary_lyric_f1": 0.0,
       "binary_lyric_precision": 0.0,
       "binary_lyric_recall": 0.0,
       "leakage_count_rate": 0.0,
       "false_drop_rate": 1.0,
-      "latency_ms": 1.241,
+      "latency_ms": 1.24,
       "gate_passed": false
     }
   ]

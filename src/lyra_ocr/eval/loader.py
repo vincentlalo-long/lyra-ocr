@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from lyra_ocr.eval.types import EvaluationItem, TrackLabel, TrackPrediction
-from lyra_ocr.labels import load_labels_jsonl, sha256_prefix
+from lyra_ocr.labels import load_labels_jsonl, normalize_label, sha256_prefix
 
 
 def compute_file_hash(path: str | Path) -> str:
@@ -96,7 +96,7 @@ def load_artifacts_evaluation_items(
         pred = TrackPrediction(
             video_id=video_id,
             track_id=tid_str,
-            model_label=tr.get("label", "unknown"),
+            model_label=normalize_label(tr.get("label")),
             model_confidence=float(tr.get("confidence", 0.0)),
             model_decision=tr.get("decision", "review"),
             start_ms=int(tr.get("start_ms", 0)),
@@ -112,8 +112,7 @@ def load_artifacts_evaluation_items(
             label_obj = TrackLabel(
                 video_id=video_id,
                 track_id=tid_str,
-                human_label=raw_lbl.get("human_label", ""),
-                binary=raw_lbl.get("binary", "non_lyric"),
+                human_label=normalize_label(raw_lbl.get("human_label")) if raw_lbl.get("human_label") else "",
                 tracking_error=bool(raw_lbl.get("tracking_error", False)),
                 corrected_text=raw_lbl.get("corrected_text"),
                 notes=raw_lbl.get("notes", ""),

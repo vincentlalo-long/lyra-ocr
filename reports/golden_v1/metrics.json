@@ -4,9 +4,6 @@
   "unlabeled_tracks": 0,
   "tracking_error_tracks": 0,
   "coverage_rate": 1.0,
-  "unknown_rate": 0.1667,
-  "macro_f1": 0.6111,
-  "micro_f1": 0.8333,
   "binary_lyric": {
     "precision": 1.0,
     "recall": 1.0,
@@ -17,101 +14,12 @@
   "leakage": {
     "count_rate": 0.0,
     "duration_rate": 0.0,
-    "channel_count": 0,
     "leaked_tracks_count": 0
   },
   "false_drop": {
     "rate": 0.0,
     "count": 0,
     "total_golden_lyrics": 2
-  },
-  "per_class": {
-    "lyric": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "support": 2
-    },
-    "channel": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "support": 1
-    },
-    "song_title": {
-      "precision": 1.0,
-      "recall": 0.5,
-      "f1": 0.6667,
-      "support": 2
-    },
-    "supplementary": {
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": 0.0,
-      "support": 0
-    },
-    "scene_text": {
-      "precision": 1.0,
-      "recall": 1.0,
-      "f1": 1.0,
-      "support": 1
-    },
-    "unknown": {
-      "precision": 0.0,
-      "recall": 0.0,
-      "f1": 0.0,
-      "support": 0
-    }
-  },
-  "confusion_matrix": {
-    "lyric": {
-      "lyric": 2,
-      "channel": 0,
-      "song_title": 0,
-      "supplementary": 0,
-      "scene_text": 0,
-      "unknown": 0
-    },
-    "channel": {
-      "lyric": 0,
-      "channel": 1,
-      "song_title": 0,
-      "supplementary": 0,
-      "scene_text": 0,
-      "unknown": 0
-    },
-    "song_title": {
-      "lyric": 0,
-      "channel": 0,
-      "song_title": 1,
-      "supplementary": 0,
-      "scene_text": 0,
-      "unknown": 1
-    },
-    "supplementary": {
-      "lyric": 0,
-      "channel": 0,
-      "song_title": 0,
-      "supplementary": 0,
-      "scene_text": 0,
-      "unknown": 0
-    },
-    "scene_text": {
-      "lyric": 0,
-      "channel": 0,
-      "song_title": 0,
-      "supplementary": 0,
-      "scene_text": 1,
-      "unknown": 0
-    },
-    "unknown": {
-      "lyric": 0,
-      "channel": 0,
-      "song_title": 0,
-      "supplementary": 0,
-      "scene_text": 0,
-      "unknown": 0
-    }
   },
   "per_video": {
     "castle_en_9cac48e3": {
@@ -143,7 +51,6 @@
     "min_lyric_recall": 0.85,
     "max_leakage": 0.0,
     "max_false_drop": 0.15,
-    "max_unknown": 0.1,
     "max_tracking_miss": 0.15
   },
   "binary_lyric_ci": {

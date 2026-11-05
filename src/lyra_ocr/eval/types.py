@@ -25,7 +25,6 @@ class TrackLabel:
     video_id: str
     track_id: str
     human_label: str
-    binary: str = "non_lyric"
     tracking_error: bool = False
     corrected_text: Optional[str] = None
     notes: str = ""
@@ -51,14 +50,6 @@ class EvaluationItem:
 
 
 @dataclass
-class PerClassMetrics:
-    precision: float
-    recall: float
-    f1: float
-    support: int
-
-
-@dataclass
 class BinaryLyricMetrics:
     precision: float
     recall: float
@@ -71,7 +62,6 @@ class BinaryLyricMetrics:
 class LeakageMetrics:
     count_rate: float
     duration_rate: float
-    channel_count: int
     leaked_tracks_count: int
 
 
@@ -89,14 +79,9 @@ class EvaluationReport:
     unlabeled_tracks: int
     tracking_error_tracks: int
     coverage_rate: float
-    unknown_rate: float
-    macro_f1: float
-    micro_f1: float
     binary_lyric: BinaryLyricMetrics
     leakage: LeakageMetrics
     false_drop: FalseDropMetrics
-    per_class: dict[str, PerClassMetrics]
-    confusion_matrix: dict[str, dict[str, int]]
     per_video: dict[str, Any]
     gate_passed: bool
     gate_reasons: list[str]
