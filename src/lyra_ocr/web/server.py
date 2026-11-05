@@ -7,7 +7,7 @@ import urllib.parse
 from http import HTTPStatus
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from typing import Optional
+from typing import Any, Callable, Optional
 
 from lyra_ocr.dataset import registry
 from lyra_ocr.dataset.youtube import list_channel_or_playlist
@@ -16,6 +16,90 @@ from lyra_ocr.web.dataset_api import DatasetAPIMixin
 from lyra_ocr.web.eval_api import EvalAPIMixin
 from lyra_ocr.web.jobs import JobQueue
 from lyra_ocr.web.review_api import ReviewAPIMixin
+
+#: POST bodies larger than this are rejected before being read into memory.
+MAX_BODY_BYTES = 8 * 1024 * 1024
+
+Query = dict[str, list[str]]
+
+
+class _BadRequest(Exception):
+    """Raised by a route helper to emit a JSON error response."""
+
+    def __init__(self, message: str, status: int = HTTPStatus.BAD_REQUEST) -> None:
+        super().__init__(message)
+        self.status = int(status)
+
+
+def _query_param(query: Query, name: str) -> str:
+    value = query.get(name, [None])[0]
+    if not value:
+        raise _BadRequest(f"Missing query parameter: {name}")
+    return value
+
+
+def _optional(query: Query, name: str) -> Optional[str]:
+    return query.get(name, [None])[0]
+
+
+def _get_datasets(handler: Any, query: Query) -> None:
+    handler._send_json({"datasets": registry.list_datasets(handler._workspace_root())})
+
+
+def _list_jobs(handler: Any, query: Query) -> None:
+    dataset = _optional(query, "dataset")
+    queue = handler._job_queue()
+    if queue is None:
+        raise _BadRequest("Job queue unavailable", HTTPStatus.SERVICE_UNAVAILABLE)
+    jobs = [j.to_dict() for j in queue.list(dataset)]
+    handler._send_json({"jobs": jobs, "stats": queue.stats(dataset)})
+
+
+def _get_job(handler: Any, query: Query, job_id: str) -> None:
+    queue = handler._job_queue()
+    rec = queue.get(job_id) if queue else None
+    if rec is None:
+        raise _BadRequest("Job not found", HTTPStatus.NOT_FOUND)
+    handler._send_json(rec.to_dict())
+
+
+def _youtube_list(handler: Any, query: Query) -> None:
+    url = _query_param(query, "url")
+    try:
+        items = list_channel_or_playlist(url, limit=int(_optional(query, "limit") or 1000))
+    except Exception as exc:  # noqa: BLE001
+        raise _BadRequest(f"YouTube listing failed: {exc}", HTTPStatus.BAD_GATEWAY) from exc
+    handler._send_json({"items": items})
+
+
+GET_ROUTES: dict[str, Callable[[Any, Query], None]] = {
+    "/api/artifacts": lambda handler, query: handler._handle_get_artifacts(),
+    "/api/data": lambda handler, query: handler._handle_get_data(_query_param(query, "dir")),
+    "/api/frame": lambda handler, query: handler._handle_get_frame(
+        _query_param(query, "dir"), _query_param(query, "file")
+    ),
+    "/api/status": lambda handler, query: handler._handle_get_status(_query_param(query, "dir")),
+    "/api/eval": lambda handler, query: handler._handle_get_eval(
+        _optional(query, "golden"),
+        _optional(query, "dir"),
+        _optional(query, "dataset"),
+        _optional(query, "run"),
+    ),
+    "/api/eval/errors": lambda handler, query: handler._handle_get_eval_errors(
+        _optional(query, "golden"),
+        _optional(query, "dir"),
+        _optional(query, "dataset"),
+        _optional(query, "run"),
+    ),
+    "/api/datasets": _get_datasets,
+    "/api/jobs": _list_jobs,
+    "/api/youtube/list": _youtube_list,
+}
+
+POST_ROUTES: dict[str, Callable[[Any], None]] = {
+    "/api/label": lambda handler: handler._handle_post_label(),
+    "/api/datasets": lambda handler: handler._handle_create_dataset(),
+}
 
 
 class LyraReviewHandler(ReviewAPIMixin, DatasetAPIMixin, EvalAPIMixin, ReviewHandlerBase):
@@ -26,126 +110,55 @@ class LyraReviewHandler(ReviewAPIMixin, DatasetAPIMixin, EvalAPIMixin, ReviewHan
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
 
-        # 1. API: List available artifacts
-        if path == "/api/artifacts":
-            self._handle_get_artifacts()
-            return
-
-        # 2. API: Load full artifact dataset
-        if path == "/api/data":
-            art_dir = query.get("dir", [None])[0]
-            if not art_dir:
-                self._send_error("Missing query parameter: dir", 400)
+        try:
+            route = GET_ROUTES.get(path)
+            if route is not None:
+                route(self, query)
                 return
-            self._handle_get_data(art_dir)
-            return
 
-        # 3. API: Serve extracted frame image
-        if path == "/api/frame":
-            art_dir = query.get("dir", [None])[0]
-            filename = query.get("file", [None])[0]
-            if not art_dir or not filename:
-                self._send_error("Missing query parameters: dir and file", 400)
+            # Parameterised API routes
+            if path.startswith("/api/datasets/"):
+                self._handle_dataset_get(path[len("/api/datasets/"):].strip("/"))
                 return
-            self._handle_get_frame(art_dir, filename)
-            return
 
-        # 4. API: Labeling coverage & distribution status
-        if path == "/api/status":
-            art_dir = query.get("dir", [None])[0]
-            if not art_dir:
-                self._send_error("Missing query parameter: dir", 400)
+            if path.startswith("/api/jobs/"):
+                _get_job(self, query, path[len("/api/jobs/"):].strip("/"))
                 return
-            self._handle_get_status(art_dir)
-            return
 
-        # 5. API: Live evaluation against ground truth
-        if path == "/api/eval":
-            self._handle_get_eval(
-                query.get("golden", [None])[0],
-                query.get("dir", [None])[0],
-                query.get("dataset", [None])[0],
-                query.get("run", [None])[0],
-            )
-            return
-
-        # 5b. API: Evaluation error rows (for dashboard click-through)
-        if path == "/api/eval/errors":
-            self._handle_get_eval_errors(
-                query.get("golden", [None])[0],
-                query.get("dir", [None])[0],
-                query.get("dataset", [None])[0],
-                query.get("run", [None])[0],
-            )
-            return
-
-        # 6. API: Dataset registry
-        if path == "/api/datasets":
-            self._send_json({"datasets": registry.list_datasets(self._workspace_root())})
-            return
-
-        if path.startswith("/api/datasets/"):
-            self._handle_dataset_get(path[len("/api/datasets/"):].strip("/"))
-            return
-
-        # 7. API: Job queue
-        if path == "/api/jobs":
-            dataset = query.get("dataset", [None])[0]
-            queue = self._job_queue()
-            if queue is None:
-                self._send_error("Job queue unavailable", HTTPStatus.SERVICE_UNAVAILABLE)
-                return
-            jobs = [j.to_dict() for j in queue.list(dataset)]
-            self._send_json({"jobs": jobs, "stats": queue.stats(dataset)})
-            return
-
-        if path.startswith("/api/jobs/"):
-            job_id = path[len("/api/jobs/"):].strip("/")
-            queue = self._job_queue()
-            rec = queue.get(job_id) if queue else None
-            if rec is None:
-                self._send_error("Job not found", 404)
-                return
-            self._send_json(rec.to_dict())
-            return
-
-        # 8. API: YouTube channel/playlist listing
-        if path == "/api/youtube/list":
-            url = query.get("url", [None])[0]
-            if not url:
-                self._send_error("Missing query parameter: url", 400)
-                return
-            try:
-                items = list_channel_or_playlist(url, limit=int(query.get("limit", ["1000"])[0]))
-                self._send_json({"items": items})
-            except Exception as exc:  # noqa: BLE001
-                self._send_error(f"YouTube listing failed: {exc}", 502)
-            return
-
-        # 9. Static files (index.html, JS, CSS)
-        self._handle_static_file(path)
+            # Static files (index.html, JS, CSS)
+            self._handle_static_file(path)
+        except _BadRequest as exc:
+            self._send_error(str(exc), exc.status)
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
 
-        if path == "/api/label":
-            self._handle_post_label()
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        if length > MAX_BODY_BYTES:
+            self._send_error(
+                f"Request body too large (max {MAX_BODY_BYTES} bytes)",
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+            )
             return
 
-        if path == "/api/datasets":
-            self._handle_create_dataset()
-            return
+        try:
+            route = POST_ROUTES.get(path)
+            if route is not None:
+                route(self)
+                return
 
-        if path.startswith("/api/datasets/"):
-            self._handle_dataset_post(path[len("/api/datasets/"):].strip("/"))
-            return
+            if path.startswith("/api/datasets/"):
+                self._handle_dataset_post(path[len("/api/datasets/"):].strip("/"))
+                return
 
-        if path.startswith("/api/jobs/"):
-            self._handle_job_post(path[len("/api/jobs/"):].strip("/"))
-            return
+            if path.startswith("/api/jobs/"):
+                self._handle_job_post(path[len("/api/jobs/"):].strip("/"))
+                return
 
-        self._send_error(f"Unknown endpoint: {path}", 404)
+            self._send_error(f"Unknown endpoint: {path}", 404)
+        except _BadRequest as exc:
+            self._send_error(str(exc), exc.status)
 
 
 def create_server(
@@ -168,9 +181,10 @@ def run_server(
     host: str = "127.0.0.1",
     port: int = 8000,
     open_browser: bool = False,
+    workspace_root: str | Path | None = None,
 ) -> None:
     """Run the review web server synchronously."""
-    httpd = create_server(host, port)
+    httpd = create_server(host, port, workspace_root=workspace_root)
     url = f"http://{host}:{port}"
     print(f"\n=======================================================")
     print(f"🚀 Lyra OCR Interactive Review UI running at:")

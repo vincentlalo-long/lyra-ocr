@@ -282,6 +282,20 @@ def _wait_job_done(queue, dataset, timeout=5.0):
     return False
 
 
+def test_post_body_too_large_rejected(ws_server):
+    """Oversized Content-Length is refused before the body is read."""
+    import socket
+
+    host, port = ws_server["server"].server_address[:2]
+    with socket.create_connection((host, port), timeout=5) as sock:
+        sock.sendall(
+            b"POST /api/label HTTP/1.1\r\nHost: local\r\nContent-Type: application/json\r\n"
+            b"Content-Length: 10485760\r\n\r\n"
+        )
+        response = sock.recv(4096)
+    assert b" 413 " in response
+
+
 def test_dataset_create_enqueue_freeze_flow(ws_server):
     url = ws_server["url"]
     root = ws_server["root"]

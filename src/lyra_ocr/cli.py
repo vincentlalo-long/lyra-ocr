@@ -378,7 +378,13 @@ def run_eval(args: argparse.Namespace) -> int:
 def run_review_ui(args: argparse.Namespace) -> int:
     """Start local web review UI."""
     from lyra_ocr.web.server import run_server
-    run_server(host=args.host, port=args.port, open_browser=args.open)
+
+    run_server(
+        host=args.host,
+        port=args.port,
+        open_browser=args.open,
+        workspace_root=args.workspace_root,
+    )
     return 0
 
 
@@ -475,6 +481,11 @@ def main(argv: list[str] | None = None) -> int:
     p_ui.add_argument("--host", default="127.0.0.1", help="Host interface (default: 127.0.0.1)")
     p_ui.add_argument("--port", "-p", type=int, default=8000, help="Port (default: 8000)")
     p_ui.add_argument("--open", action="store_true", help="Automatically open browser")
+    p_ui.add_argument(
+        "--workspace-root",
+        default=None,
+        help="Workspace root for artifacts/datasets (default: current directory)",
+    )
 
     args = parser.parse_args(argv)
     if args.command in ("smoke", "identify"):
