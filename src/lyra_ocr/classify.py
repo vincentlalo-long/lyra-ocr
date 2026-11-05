@@ -196,13 +196,28 @@ def classify_track(
             or token_title_match
             or (v_title in dom_lower and title_len_ratio >= 0.6)
         )
-        if is_title_match and (start_time_ratio <= 0.25 or n_text_changes == 0):
+        if is_title_match and start_time_ratio <= 0.25:
             res = ClassificationResult(
                 label="non_lyric",
                 confidence=0.98,
                 reason=f"Title text matching video title metadata '{v_title}'",
                 decision="reject",
                 qa_flags=["metadata_title_match"],
+            )
+            track.classification = res
+            return res
+        if is_title_match:
+            # Matching the title mid-video is often a repeated hook/chorus, not an
+            # intro card: flag it for human review instead of auto-rejecting.
+            res = ClassificationResult(
+                label="non_lyric",
+                confidence=0.55,
+                reason=(
+                    f"Title text matching video title metadata '{v_title}' "
+                    "outside the intro window"
+                ),
+                decision="review",
+                qa_flags=["metadata_title_match", "title_match_outside_intro"],
             )
             track.classification = res
             return res

@@ -104,6 +104,46 @@ def test_classify_intro_title_card():
     assert "title" in result.reason.lower() or "intro" in result.reason.lower()
 
 
+def test_classify_title_match_inside_intro_still_rejected():
+    from lyra_ocr.classify import classify_track
+
+    # Regression guard: a title card inside the first 25% stays an auto-reject.
+    track = create_mock_track(
+        track_id=20,
+        start_ms=10000,
+        end_ms=14000,
+        texts=["CASTLE"],
+        bbox=[500, 200, 780, 260],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={"channel": "Clarx & Harddope", "title": "Castle"})
+
+    assert result.label == "non_lyric"
+    assert result.decision == "reject"
+    assert "metadata_title_match" in result.qa_flags
+
+
+def test_classify_title_match_outside_intro_defers_to_review():
+    from lyra_ocr.classify import classify_track
+
+    # Repeated hook equal to the song title, mid-video: not an intro card, so it
+    # must go to human review instead of being auto-rejected.
+    track = create_mock_track(
+        track_id=21,
+        start_ms=55000,
+        end_ms=60000,
+        texts=["CASTLE"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={"channel": "Clarx & Harddope", "title": "Castle"})
+
+    assert result.label == "non_lyric"
+    assert result.decision == "review"
+    assert "metadata_title_match" in result.qa_flags
+    assert "title_match_outside_intro" in result.qa_flags
+
+
 def test_classify_recurring_lyric_stream():
     from lyra_ocr.classify import classify_track
 
