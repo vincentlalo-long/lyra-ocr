@@ -1,20 +1,28 @@
 // =========================================================================
-// Deep-link entry: #tab=review&dir=...&track=...
+// Entry point: wire the tab registry, bind chrome, then apply the deep link.
 // =========================================================================
-function applyInitialHashRoute() {
+
+import { bindTabButtons, navigateToReview, parseHash, registerTab, setReviewDeeplinkHandler, switchTab } from "./router.js";
+import { initDatasetsTab, stopJobsPolling } from "./datasets.js";
+import { initRunsTab, stopRunPolling } from "./runs.js";
+import { initEvalTab } from "./eval.js";
+import { initReviewTab, openReviewTarget } from "./review.js";
+
+registerTab("datasets", { activate: initDatasetsTab, deactivate: stopJobsPolling });
+registerTab("runs", { activate: initRunsTab, deactivate: stopRunPolling });
+registerTab("eval", { activate: initEvalTab });
+
+setReviewDeeplinkHandler(openReviewTarget);
+bindTabButtons();
+
+async function applyInitialHashRoute() {
   const hl = parseHash();
   if (!hl) return;
   if (hl.tab && hl.tab !== "review") {
     switchTab(hl.tab);
     return;
   }
-  if (hl.dir) {
-    switchTab("review");
-    loadArtifact(hl.dir).then(() => {
-      if (hl.track && dataset && dataset.tracks) selectTrack(hl.track, true);
-    });
-  }
+  if (hl.dir) await navigateToReview(hl.dir, hl.track || null);
 }
 
-// Start
-init().then(applyInitialHashRoute);
+initReviewTab().then(applyInitialHashRoute);
