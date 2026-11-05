@@ -98,7 +98,12 @@ def download_video(
             filename = filename.with_suffix(".mp4")
 
     if not filename.is_file():
-        candidates = sorted(destination.glob(f"*[{info.get('id', '')}].mp4"))
+        # yt-dlp's prepare_filename can report a pre-merge fragment name; the
+        # merged file is the one whose name ends with "[<video id>].mp4".
+        vid = str(info.get("id", ""))
+        candidates = sorted(
+            p for p in destination.glob("*.mp4") if p.name.endswith(f"[{vid}].mp4")
+        ) if vid else []
         if candidates:
             filename = candidates[-1]
         else:

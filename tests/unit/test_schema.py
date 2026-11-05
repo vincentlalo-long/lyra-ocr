@@ -1,7 +1,7 @@
 """Unit tests for artifact schema validation (manifest.json and ocr_raw.json)."""
 
 from lyra_ocr.ocr import TextLine
-from lyra_ocr.cli import get_tool_versions
+from lyra_ocr.provenance import get_tool_versions
 
 
 def test_get_tool_versions_contract():

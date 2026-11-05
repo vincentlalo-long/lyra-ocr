@@ -9,6 +9,7 @@ from lyra_ocr.dataset import registry
 from lyra_ocr.dataset.models import VideoSource
 from lyra_ocr.pipeline import PipelineCancelled
 from lyra_ocr.web.jobs import JobQueue
+from lyra_ocr.web.runners import _downloaded_videos
 
 
 def make_queue(tmp_path, runner):
@@ -134,3 +135,23 @@ def test_cancelled_pipeline_maps_to_cancelled_state(dataset):
         assert wait_for_states(q, "qd", {"cancelled": 1})
     finally:
         q.shutdown()
+
+
+def test_downloaded_videos_matches_only_the_completed_merge(tmp_path):
+    """Already-downloaded detection must use the literal "[<id>]" suffix.
+
+    An id interpolated into a glob pattern becomes a character class: it matches
+    no yt-dlp output name while still matching stray ".f140.mp4" fragments.
+    """
+    videos = tmp_path / "videos"
+    videos.mkdir()
+    other = videos / "other_song [AAAAAAAAAAA].mp4"
+    hit = videos / "song_one [dQw4w9WgXcQ].mp4"
+    fragment = videos / "song_one [dQw4w9WgXcQ].f140.mp4"
+    for path in (other, hit, fragment):
+        path.write_bytes(b"x")
+
+    found = _downloaded_videos(videos, "dQw4w9WgXcQ")
+    assert found == [hit]
+    assert _downloaded_videos(videos, "") == []
+    assert _downloaded_videos(tmp_path / "missing", "dQw4w9WgXcQ") == []

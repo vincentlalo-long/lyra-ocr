@@ -104,6 +104,48 @@ def test_classify_intro_title_card():
     assert "title" in result.reason.lower() or "intro" in result.reason.lower()
 
 
+def test_classify_opening_lyric_line_is_not_an_intro_card():
+    """A turnover-split track can start at t=0; position alone must not reject it.
+
+    The intro-card rule used to fire on any short static text at the very start,
+    which was safe while one merged track held the whole lyric stream. Now that
+    each line is its own track, the first sung cue of a video looks identical to
+    a title card unless the text itself is title-like.
+    """
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=30,
+        start_ms=0,
+        end_ms=4000,
+        texts=["We can be alone in the castle in the sky"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={"channel": "Clarx & Harddope", "title": "Castle"})
+
+    assert result.decision != "reject"
+    assert "intro_bounded_card" not in result.qa_flags
+
+
+def test_classify_all_caps_intro_card_is_still_rejected():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=31,
+        start_ms=0,
+        end_ms=4000,
+        texts=["CASTLE IN THE SKY"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={})
+
+    assert result.label == "non_lyric"
+    assert result.decision == "reject"
+    assert "intro_bounded_card" in result.qa_flags
+
+
 def test_classify_title_match_inside_intro_still_rejected():
     from lyra_ocr.classify import classify_track
 

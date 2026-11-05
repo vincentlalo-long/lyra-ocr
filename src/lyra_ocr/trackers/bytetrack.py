@@ -96,7 +96,7 @@ class ByteTextTracker(BaseTracker):
 
                 # Gating condition
                 if iou >= self.match_threshold_high or (iou >= 0.10 and c_dist <= 0.08):
-                    self.add_occurrence_to_track(tr, det)
+                    self.associate(tr, det)
                     matched_track_ids.add(tr.track_id)
                     matched_high_indices.add(c)
 
@@ -132,7 +132,7 @@ class ByteTextTracker(BaseTracker):
 
                 # Relaxed gating for low-confidence recovery
                 if iou >= self.match_threshold_low or (iou >= 0.08 and c_dist <= 0.08):
-                    self.add_occurrence_to_track(tr, det)
+                    self.associate(tr, det)
                     matched_track_ids.add(tr.track_id)
 
         # 4. Handle tracks still unmatched after Stage 2

@@ -193,6 +193,16 @@ classDiagram
 * **Monolithic Pipeline Problem**: Intertwining vision inference with temporal heuristics forces full re-computation of computer vision tasks whenever heuristic rules are modified.
 * **Lyra OCR Decision**: Persist structured, schema-validated artifacts (`manifest.json`, `frame_index.json`, `ocr_raw.json`) before temporal tracking begins. This allows rapid iterative refinement of tracking and classification logic on serialized JSON data in seconds, without re-running heavy inference passes.
 
+### 4.6. Source Layout: Cohesive Subsystem Package vs Single-Purpose Module
+* **Layout Problem**: A flat module list becomes unreadable as subsystems grow, while premature packaging buries single-purpose modules under a directory that contains one file.
+* **Lyra OCR Decision**: A subsystem with more than one cooperating module becomes a package (`video/`, `ocr/`, `trackers/`, `dataset/`, `eval/`, `web/`); a single-purpose module stays flat at the package root (`track.py`, `classify.py`, `labels.py`, `review.py`, `provenance.py`, `pipeline.py`). Flat modules form the domain core, packages are its adapters and tooling.
+* **Dependency Direction**: `cli.py` and `web/` are entry points and may import anything; domain modules never import from `cli.py`. Shared artifact metadata lives in `provenance.py`, not in the CLI.
+
+### 4.7. Track Identity Is Text Identity, Not Position
+* **Association Problem**: Karaoke and subtitle renderers reuse one fixed region for every line, so spatial association alone binds consecutive lyrics into a single track. Measured on a synthetic fixture: three different texts in the same box produced one 11-second track with one label and one ground-truth segment.
+* **Lyra OCR Decision**: `BaseTracker.associate()` closes a track and opens a successor whenever the incoming text scores below `TURNOVER_SPLIT_SIMILARITY` (0.60) against the track's current segment. Both strategies inherit it, so a `TextTrack` means one text identity and is the unit that human labels, ground-truth segments and eval matching attach to. OCR jitter stays above the threshold (measured 0.96+), so it does not fragment a line.
+* **Classifier Consequence**: Rules that read intra-track turnover (`distinct_text_changes >= 2`) as lyric evidence no longer fire; position alone also stopped being a sufficient title-card signal because a split track's first lyric cue legitimately starts at t≈0. Card-shaped text (`classify.looks_like_card`) is the discriminator instead.
+
 ---
 
 ## 5. Temporal Entity Lifecycle & State Transitions

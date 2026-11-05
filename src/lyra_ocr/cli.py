@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import platform
-import shutil
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -18,40 +15,7 @@ from .ocr import TextLine
 from .pipeline import run_phase1_pipeline
 from .track import merge_fragmented_tracks, track_ocr_results
 from .classify import classify_all_tracks
-
-
-def get_tool_versions() -> dict[str, str]:
-    """Inspect installed versions of dependencies and tools."""
-    versions: dict[str, str] = {
-        "python": platform.python_version(),
-    }
-    try:
-        from importlib.metadata import version
-        versions["rapidocr"] = version("rapidocr")
-    except Exception:
-        versions["rapidocr"] = "unknown"
-
-    try:
-        import onnxruntime
-        versions["onnxruntime"] = onnxruntime.__version__
-    except Exception:
-        versions["onnxruntime"] = "unknown"
-
-    try:
-        import cv2
-        versions["opencv"] = cv2.__version__
-    except Exception:
-        versions["opencv"] = "unknown"
-
-    ffmpeg_bin = shutil.which("ffmpeg")
-    if ffmpeg_bin:
-        res = subprocess.run([ffmpeg_bin, "-version"], capture_output=True, text=True, check=False)
-        first_line = res.stdout.splitlines()[0] if res.stdout else ""
-        versions["ffmpeg"] = first_line.split("Copyright")[0].strip()
-    else:
-        versions["ffmpeg"] = "missing"
-
-    return versions
+from .provenance import get_tool_versions
 
 
 def _find_unicode_font(size: int = 20) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -63,7 +27,7 @@ def _find_unicode_font(size: int = 20) -> ImageFont.FreeTypeFont | ImageFont.Ima
         "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
     ]
     for font_path in candidate_fonts:
-        if os.path.isfile(font_path):
+        if Path(font_path).is_file():
             try:
                 return ImageFont.truetype(font_path, size=size)
             except Exception:

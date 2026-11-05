@@ -21,6 +21,7 @@ from lyra_ocr.ocr.detect import TextDetector
 from lyra_ocr.video.frames import sample_frames
 from lyra_ocr.ocr import OCREngine, TextLine
 from lyra_ocr.video.probe import probe_video
+from lyra_ocr.provenance import get_tool_versions
 from lyra_ocr.review import (
     export_review_csv,
     export_review_tracks_csv,
@@ -103,8 +104,6 @@ def run_phase1_pipeline(
 
     Returns {video_id, config_hash, tracks, frames_processed, out_dir, skipped}.
     """
-    from lyra_ocr.cli import get_tool_versions
-
     video_path = Path(video_path).resolve()
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)

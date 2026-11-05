@@ -65,7 +65,7 @@ def compute_binary_lyric_metrics(pairs: list[tuple[str, str]]) -> BinaryLyricMet
 
 
 def compute_leakage_metrics(items: list[EvaluationItem]) -> LeakageMetrics:
-    """Compute distractor leakage metrics (non-lyric tracks accepted as lyric)."""
+    """Compute lyric-leakage metrics (non-lyric tracks accepted as lyric)."""
     # Considered only among tracks that have human ground truth
     pred_lyric_items = [it for it in items if it.has_label and it.pred.model_label == "lyric"]
     leaked_items = [

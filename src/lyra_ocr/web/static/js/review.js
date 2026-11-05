@@ -119,7 +119,7 @@ function renderTrackList() {
     const lbl = dataset.labels[tid]?.human_label;
     if (currentFilter === "unlabeled") return !lbl;
     if (currentFilter === "lyric") return (lbl === "lyric" || (!lbl && t.label === "lyric"));
-    if (currentFilter === "distractor") return (lbl && lbl !== "lyric") || (!lbl && t.label !== "lyric");
+    if (currentFilter === "non_lyric") return (lbl && lbl !== "lyric") || (!lbl && t.label !== "lyric");
     return true;
   });
 

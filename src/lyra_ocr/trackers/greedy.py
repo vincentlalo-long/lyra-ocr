@@ -64,7 +64,7 @@ class GreedyTracker(BaseTracker):
 
             if best_track is not None:
                 matched_tracks.add(best_track.track_id)
-                self.add_occurrence_to_track(best_track, det)
+                self.associate(best_track, det)
             else:
                 unmatched_detections.append(det)
 

@@ -93,9 +93,15 @@ def classify_track(
     mean_cx, mean_cy = mean_centroid[0], mean_centroid[1]
     distinct_changes = feat.get("distinct_text_changes", n_text_changes)
     duration_ms = track.end_ms - track.start_ms
+    word_count = len(dominant_text.split())
+    is_all_caps = dominant_text.isupper() and len(dom_tokens) >= 2
+    # Card-shaped text: stylised/short overlays are title cards and credit
+    # slides, a sung line is not. Position alone cannot separate them now that
+    # each text identity is its own track.
+    looks_like_card = is_all_caps or len(dom_tokens) <= 3
     end_time_ratio = start_time_ratio + lifetime_ratio
     only_intro_outro = (
-        end_time_ratio <= 0.08 or start_time_ratio >= 0.90
+        (end_time_ratio <= 0.08 and looks_like_card) or start_time_ratio >= 0.90
     ) and (video_duration_ms > 0 or lifetime_ratio > 0)
 
     qa_flags: list[str] = []
@@ -224,7 +230,7 @@ def classify_track(
 
     # Static text strictly in intro (< 10% of duration or <= 12 seconds)
     if start_time_ratio <= 0.05 and track.end_ms <= 15000 and n_text_changes <= 1 and duration_ms <= 10000:
-        if 2000 <= duration_ms <= 9000 and not is_corner:
+        if 2000 <= duration_ms <= 9000 and not is_corner and looks_like_card:
             res = ClassificationResult(
                 label="non_lyric",
                 confidence=0.88,
@@ -276,8 +282,6 @@ def classify_track(
         # Typical lyric line duration is 1.5s - 8.5s. A single cue is only
         # auto-accepted when the text itself looks like a sung line; short
         # all-caps promo cards fall through to non_lyric/review.
-        word_count = len(dominant_text.split())
-        is_all_caps = dominant_text.isupper() and len(dom_tokens) >= 2
         lyric_like_text = (
             word_count >= 4
             and not is_all_caps

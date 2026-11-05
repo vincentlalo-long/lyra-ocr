@@ -15,6 +15,19 @@ from lyra_ocr.pipeline import PipelineCancelled, PipelineEngines
 PipelineRunner = Callable[[JobRecord, VideoSource, threading.Event, Callable[[str, float, str], None]], dict[str, Any]]
 
 
+def _downloaded_videos(videos_dir: Path, yt_id: str) -> list[Path]:
+    """MP4s already present for ``yt_id``, newest last.
+
+    The id cannot be interpolated into a glob pattern: ``*[dQw4w9WgXcQ].mp4`` is a
+    character class, so it never matches yt-dlp's ``Title [id].mp4`` output while
+    still matching stray ``…[id].f140.mp4`` fragments.
+    """
+    if not yt_id:
+        return []
+    suffix = f"[{yt_id}].mp4"
+    return sorted(p for p in videos_dir.glob("*.mp4") if p.name.endswith(suffix))
+
+
 def _make_default_runner(workspace_root: Path, engines: PipelineEngines) -> PipelineRunner:
     """Build the production runner: download (YouTube) then run Phase-1 pipeline.
 
@@ -42,7 +55,7 @@ def _make_default_runner(workspace_root: Path, engines: PipelineEngines) -> Pipe
 
         if src.kind == "youtube":
             videos_dir = ds_dir / "videos"
-            existing = sorted(videos_dir.glob(f"*[{src.yt_id}].mp4")) if src.yt_id else []
+            existing = _downloaded_videos(videos_dir, src.yt_id)
             if existing:
                 video_path = existing[-1]
             else:
@@ -96,7 +109,7 @@ def _make_ingest_runner(workspace_root: Path) -> PipelineRunner:
         videos_dir.mkdir(parents=True, exist_ok=True)
 
         if src.kind == "youtube":
-            existing = sorted(videos_dir.glob(f"*[{src.yt_id}].mp4")) if src.yt_id else []
+            existing = _downloaded_videos(videos_dir, src.yt_id)
             if existing:
                 video_path = existing[-1]
             else:

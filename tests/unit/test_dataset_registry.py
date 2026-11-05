@@ -41,6 +41,19 @@ def test_invalid_dataset_names_rejected(tmp_path):
             registry.dataset_dir(tmp_path, bad)
 
 
+def test_create_run_rejects_unknown_tracker(tmp_path):
+    """A bad tracker name must fail at creation, not after a full OCR pass."""
+    registry.create_dataset(tmp_path, "runs")
+    for bad in ("bogus", "sort", "st_dbscan"):
+        with pytest.raises(ValueError, match="Unknown tracker"):
+            registry.create_run(tmp_path, "runs", tracker=bad)
+
+    for good in ("greedy", "bytetrack", "ByteTrack", " byte "):
+        run = registry.create_run(tmp_path, "runs", tracker=good)
+        assert run["tracker"] in ("greedy", "bytetrack")
+        assert run["run_id"].startswith(run["tracker"])
+
+
 def test_create_duplicate_raises(tmp_path):
     registry.create_dataset(tmp_path, "dup")
     with pytest.raises(FileExistsError):

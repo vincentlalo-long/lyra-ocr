@@ -85,6 +85,12 @@ lyra-ocr identify path/to/video.mp4 \
 - `greedy` (default baseline): Spatial IoU + centroid distance greedy association.
 - `bytetrack` (experimental, not default): Two-stage confidence association — stage 1 matches high-confidence detections, stage 2 matches leftover tracks against low-confidence boxes so a track survives a blurred or low-OCR frame. Never spawns tracks from low-confidence detections.
 
+Both strategies share the text-turnover split from `BaseTracker.associate()`: when a
+stable region swaps its text (similarity < 0.60 against the track's current line), the
+track closes and a new one opens. One track therefore equals one text identity — a
+lyric line, a watermark, a title card — which is what the `lyric`/`non_lyric` labels and
+the ground-truth segments are keyed to.
+
 Outputs generated in `./output`:
 - `tracks.json`: Clustered `TextTrack` entities with frame-level `occurrences`, temporal statistics, segment transitions, and binary labels (`lyric`, `non_lyric`).
 - `review.csv`: Tabular spreadsheet for human-in-the-loop audit (`track_id,start_ms,end_ms,machine_label,machine_decision,confidence,suggested_text,human_label,human_decision,review_note`).

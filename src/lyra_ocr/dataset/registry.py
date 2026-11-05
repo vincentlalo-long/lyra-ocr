@@ -274,10 +274,13 @@ def create_run(
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """Create a tracker/config run; outputs live under runs/<run_id>/."""
+    from lyra_ocr.trackers import resolve_tracker_name
+
+    canonical_tracker = resolve_tracker_name(tracker)
     manifest_path = _manifest_path(workspace_root, name)
     if not manifest_path.is_file():
         raise FileNotFoundError(f"Dataset '{name}' not found")
-    run_id = run_id or f"{tracker}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
+    run_id = run_id or f"{canonical_tracker}-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     target = run_dir(workspace_root, name, run_id)
     run_file = target / "run.json"
     with MANIFEST_LOCK:
@@ -287,7 +290,7 @@ def create_run(
         record = RunRecord(
             run_id=run_id,
             dataset=name,
-            tracker=tracker,
+            tracker=canonical_tracker,
             fps=float(fps),
             options=dict(options or {}),
             created_at=int(time.time()),

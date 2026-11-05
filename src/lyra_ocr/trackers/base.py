@@ -14,6 +14,14 @@ from lyra_ocr.track import (
     string_similarity,
 )
 
+#: Text similarity below which a spatially stable region is treated as hosting a
+#: new text object rather than OCR jitter of the previous one. Measured on lyric
+#: fixtures: consecutive lines score 0.27-0.43, single-character OCR jitter 0.96+.
+TURNOVER_SPLIT_SIMILARITY = 0.60
+
+#: Text similarity at or above which a detection continues the current segment.
+SAME_TEXT_SIMILARITY = 0.85
+
 
 class BaseTracker(ABC):
     """Abstract base class for all text tracking strategies."""
@@ -23,11 +31,13 @@ class BaseTracker(ABC):
         frame_width: int = 1280,
         frame_height: int = 720,
         max_gap_ms: int = 2000,
+        turnover_split_similarity: float = TURNOVER_SPLIT_SIMILARITY,
         **kwargs: Any,
     ) -> None:
         self.frame_width = frame_width
         self.frame_height = frame_height
         self.max_gap_ms = max_gap_ms
+        self.turnover_split_similarity = turnover_split_similarity
         self.next_track_id = 1
         self.active_tracks: list[TextTrack] = []
         self.finished_tracks: list[TextTrack] = []
@@ -89,7 +99,7 @@ class BaseTracker(ABC):
             sim = string_similarity(det.text_norm, latest_seg.text)
 
             # Same text continuing (allow minor OCR character jitter >= 0.85)
-            if sim >= 0.85 or det.text_norm == latest_seg.text:
+            if sim >= SAME_TEXT_SIMILARITY or det.text_norm == latest_seg.text:
                 latest_seg.end_ms = det.timestamp_ms
                 latest_seg.num_occurrences += 1
                 latest_seg.confidence = (
@@ -108,6 +118,36 @@ class BaseTracker(ABC):
                     num_occurrences=1,
                 )
                 track.segments.append(new_seg)
+
+    def is_text_turnover(self, track: TextTrack, det: DetectionOccurrence) -> bool:
+        """True when det is different text occupying the track's region."""
+        latest_text = track.segments[-1].text if track.segments else ""
+        if not latest_text:
+            return False
+        return string_similarity(det.text_norm, latest_text) < self.turnover_split_similarity
+
+    def associate(self, track: TextTrack, det: DetectionOccurrence) -> TextTrack:
+        """Attach det to track, starting a new track when the text identity changed.
+
+        A stable region that swaps its text holds two different text objects (the
+        classic karaoke case: consecutive lines share one position). Keeping them
+        in one track would give both lines a single span, a single dominant text
+        and a single human label. Returns the track that now owns det.
+        """
+        if self.is_text_turnover(track, det):
+            return self._retire_and_replace(track, det)
+        self.add_occurrence_to_track(track, det)
+        return track
+
+    def _retire_and_replace(self, track: TextTrack, det: DetectionOccurrence) -> TextTrack:
+        """Close track at its last observation and put a fresh track in its place."""
+        new_track = self.create_new_track(det)
+        for idx, candidate in enumerate(self.active_tracks):
+            if candidate is track:
+                self.active_tracks[idx] = new_track
+                break
+        self.finished_tracks.append(track)
+        return new_track
 
     def create_new_track(self, det: DetectionOccurrence) -> TextTrack:
         """Create and return a new TextTrack instance for an unmatched detection."""
