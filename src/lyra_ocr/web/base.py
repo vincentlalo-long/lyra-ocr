@@ -87,6 +87,9 @@ class ReviewHandlerBase(BaseHTTPRequestHandler):
             return
 
         mime_type, _ = mimetypes.guess_type(str(target_file))
+        # ES modules are blocked on some systems when .js guesses as octet-stream.
+        if target_file.suffix == ".js":
+            mime_type = "text/javascript"
         mime_type = mime_type or "application/octet-stream"
 
         with open(target_file, "rb") as f:

@@ -71,7 +71,13 @@ def test_web_server_index_html(make_web_server, tmp_path):
         assert "/js/main.js" in content
 
     # Split static assets must be served by the same handler
-    for asset in ("/css/app.css", "/js/core.js", "/js/review.js", "/js/main.js"):
+    for asset in (
+        "/css/app.css",
+        "/js/core.js",
+        "/js/router.js",
+        "/js/review.js",
+        "/js/main.js",
+    ):
         with urllib.request.urlopen(f"{web_server['url']}{asset}") as resp:
             assert resp.status == 200
             assert resp.read()

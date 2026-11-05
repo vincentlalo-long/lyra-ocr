@@ -1,13 +1,27 @@
 // =========================================================================
 // Runs tab
 // =========================================================================
+import { activeTab, navigateToReview } from "./router.js";
+import { escapeHtml, jsonFetch, mustEl, showToast } from "./core.js";
+import { evalPick } from "./eval.js";
+
+// Run selection state lives here (not in the Datasets tab).
+let currentRunDs = null;
+let currentRunId = null;
+let runPollTimer = null;
 let currentRunDataset = null;
 
-const runDsSelect = document.getElementById("runDsSelect");
-const runSelect = document.getElementById("runSelect");
-const runVideoTable = document.getElementById("runVideoTable");
+const runDsSelect = mustEl("runDsSelect");
+const runSelect = mustEl("runSelect");
+const runVideoTable = mustEl("runVideoTable");
 
-async function initRunsTab() {
+// Called by the Datasets tab before switching over, then expanded by initRunsTab.
+export function setSelectedRunDataset(name) {
+  currentRunDs = name;
+  currentRunId = null;
+}
+
+export async function initRunsTab() {
   try {
     const data = await jsonFetch("/api/datasets");
     const list = data.datasets || [];
@@ -175,7 +189,7 @@ function renderRunVideoTable(run) {
   runVideoTable.innerHTML = html;
 
   runVideoTable.querySelectorAll("[data-review]").forEach(b =>
-    b.addEventListener("click", () => deepLinkToReview(b.dataset.review, null)));
+    b.addEventListener("click", () => navigateToReview(b.dataset.review, null)));
   runVideoTable.querySelectorAll("[data-run-retry]").forEach(b =>
     b.addEventListener("click", () => runJobAction(b.dataset.runRetry, "retry", { force: true })));
   runVideoTable.querySelectorAll("[data-run-cancel]").forEach(b =>
@@ -277,7 +291,7 @@ function scheduleRunPolling() {
     loadRunDetail();
   }, 2000);
 }
-function stopRunPolling() {
+export function stopRunPolling() {
   if (runPollTimer) { clearInterval(runPollTimer); runPollTimer = null; }
 }
 

@@ -1,3 +1,6 @@
+import { activeTab } from "./router.js";
+import { escapeHtml, mustEl, showToast } from "./core.js";
+
 // State
 let artifacts = [];
 let currentArtifact = null;
@@ -11,28 +14,28 @@ let currentFilter = "all";
 let frameImage = new Image();
 
 // DOM Elements
-const artifactSelect = document.getElementById("artifactSelect");
-const trackList = document.getElementById("trackList");
-const trackCount = document.getElementById("trackCount");
-const frameCanvas = document.getElementById("frameCanvas");
+const artifactSelect = mustEl("artifactSelect");
+const trackList = mustEl("trackList");
+const trackCount = mustEl("trackCount");
+const frameCanvas = mustEl("frameCanvas");
 const ctx = frameCanvas.getContext("2d");
-const frameSlider = document.getElementById("frameSlider");
-const frameNum = document.getElementById("frameNum");
-const frameTotal = document.getElementById("frameTotal");
-const ptsTime = document.getElementById("ptsTime");
-const playBtn = document.getElementById("playBtn");
-const prevBtn = document.getElementById("prevBtn");
-const nextBtn = document.getElementById("nextBtn");
-const fpsSelect = document.getElementById("fpsSelect");
-const trackInfoCard = document.getElementById("trackInfoCard");
-const labelOptions = document.getElementById("labelOptions");
-const trackingErrorCheckbox = document.getElementById("trackingErrorCheckbox");
-const correctedTextInput = document.getElementById("correctedTextInput");
-const notesInput = document.getElementById("notesInput");
-const saveLabelBtn = document.getElementById("saveLabelBtn");
-const coveragePill = document.getElementById("coveragePill");
-const refreshBtn = document.getElementById("refreshBtn");
-const showAllBoxes = document.getElementById("showAllBoxes");
+const frameSlider = mustEl("frameSlider");
+const frameNum = mustEl("frameNum");
+const frameTotal = mustEl("frameTotal");
+const ptsTime = mustEl("ptsTime");
+const playBtn = mustEl("playBtn");
+const prevBtn = mustEl("prevBtn");
+const nextBtn = mustEl("nextBtn");
+const fpsSelect = mustEl("fpsSelect");
+const trackInfoCard = mustEl("trackInfoCard");
+const labelOptions = mustEl("labelOptions");
+const trackingErrorCheckbox = mustEl("trackingErrorCheckbox");
+const correctedTextInput = mustEl("correctedTextInput");
+const notesInput = mustEl("notesInput");
+const saveLabelBtn = mustEl("saveLabelBtn");
+const coveragePill = mustEl("coveragePill");
+const refreshBtn = mustEl("refreshBtn");
+const showAllBoxes = mustEl("showAllBoxes");
 
 // Colors mapping
 const COLORS = {
@@ -41,7 +44,7 @@ const COLORS = {
 };
 
 // Load initial artifacts
-async function init() {
+export async function initReviewTab() {
   try {
     const res = await fetch("/api/artifacts");
     const data = await res.json();
@@ -63,7 +66,7 @@ async function init() {
   }
 }
 
-async function loadArtifact(path) {
+export async function loadArtifact(path) {
   currentArtifact = path;
   try {
     const res = await fetch(`/api/data?dir=${encodeURIComponent(path)}`);
@@ -71,6 +74,14 @@ async function loadArtifact(path) {
     updateUI();
   } catch (err) {
     console.error("Failed to load dataset:", err);
+  }
+}
+
+// Deep-link target used by router.navigateToReview (Eval "Fix →" rows, Runs "Review").
+export async function openReviewTarget(dir, trackId) {
+  await loadArtifact(dir);
+  if (trackId !== null && trackId !== undefined && dataset && dataset.tracks) {
+    selectTrack(trackId, true);
   }
 }
 
@@ -141,7 +152,7 @@ function renderTrackList() {
   });
 }
 
-function selectTrack(trackId, jumpToFrame = false) {
+export function selectTrack(trackId, jumpToFrame = false) {
   selectedTrackId = String(trackId);
   const t = dataset.tracks.find(x => String(x.track_id) === selectedTrackId);
   if (!t) return;

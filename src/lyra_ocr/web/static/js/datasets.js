@@ -1,19 +1,20 @@
 // =========================================================================
 // Datasets tab
 // =========================================================================
+import { activeTab, switchTab } from "./router.js";
+import { escapeHtml, jsonFetch, mustEl, showToast } from "./core.js";
+import { setSelectedRunDataset } from "./runs.js";
+
 let currentDs = null;
 let ytFetchedItems = [];
 let dsPollTimer = null;
-let currentRunDs = null;
-let currentRunId = null;
-let runPollTimer = null;
 
-const dsSelect = document.getElementById("dsSelect");
-const ytResults = document.getElementById("ytResults");
-const ytTable = document.getElementById("ytTable");
-const dsVideoTable = document.getElementById("dsVideoTable");
+const dsSelect = mustEl("dsSelect");
+const ytResults = mustEl("ytResults");
+const ytTable = mustEl("ytTable");
+const dsVideoTable = mustEl("dsVideoTable");
 
-async function initDatasetsTab() {
+export async function initDatasetsTab() {
   await loadDatasetsList();
 }
 
@@ -168,8 +169,7 @@ function renderDsVideoTable(data) {
 
   dsVideoTable.querySelectorAll("[data-open-run]").forEach(b =>
     b.addEventListener("click", () => {
-      currentRunDs = data.name;
-      currentRunId = null;
+      setSelectedRunDataset(data.name);
       switchTab("runs");
     }));
   dsVideoTable.querySelectorAll("[data-retry]").forEach(b =>
@@ -210,7 +210,7 @@ function scheduleJobsPolling(name) {
     loadDatasetDetail(name);
   }, 2000);
 }
-function stopJobsPolling() {
+export function stopJobsPolling() {
   if (dsPollTimer) { clearInterval(dsPollTimer); dsPollTimer = null; }
 }
 
@@ -298,8 +298,7 @@ document.getElementById("dsRefreshBtn").addEventListener("click", () => { loadDa
 
 document.getElementById("dsRunsBtn").addEventListener("click", () => {
   if (!currentDs) { showToast("No dataset selected"); return; }
-  currentRunDs = currentDs;
-  currentRunId = null;
+  setSelectedRunDataset(currentDs);
   switchTab("runs");
 });
 

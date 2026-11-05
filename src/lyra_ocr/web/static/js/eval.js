@@ -1,10 +1,13 @@
 // =========================================================================
 // Eval tab
 // =========================================================================
+import { navigateToReview, switchTab } from "./router.js";
+import { escapeHtml, jsonFetch, showToast } from "./core.js";
+
 let currentEvalDs = null;
 let currentEvalRun = "all";
 
-async function initEvalTab() {
+export async function initEvalTab() {
   const sel = document.getElementById("evalDatasetSelect");
   try {
     const data = await jsonFetch("/api/datasets");
@@ -55,7 +58,7 @@ document.getElementById("evalRunSelect").addEventListener("change", e => {
   currentEvalRun = e.target.value || "all";
 });
 
-async function evalPick(dsName, runId) {
+export async function evalPick(dsName, runId) {
   currentEvalDs = dsName;
   currentEvalRun = runId || "all";
   switchTab("eval");
@@ -194,6 +197,6 @@ function renderEvalReport(rep, errors, dsName, runId) {
 
   content.innerHTML = html;
   content.querySelectorAll("[data-err-dir]").forEach(b =>
-    b.addEventListener("click", () => deepLinkToReview(b.dataset.errDir, b.dataset.errTrack)));
+    b.addEventListener("click", () => navigateToReview(b.dataset.errDir, b.dataset.errTrack)));
 }
 
