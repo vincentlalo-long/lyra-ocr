@@ -3,7 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import numpy as np
-from lyra_ocr.detect import Detection, TextDetector, polygon_to_bbox
+from lyra_ocr.ocr.detect import Detection, TextDetector, polygon_to_bbox
 
 
 def test_polygon_to_bbox():

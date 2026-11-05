@@ -17,10 +17,10 @@ from typing import Any, Callable, Optional
 import cv2
 
 from lyra_ocr.classify import classify_all_tracks
-from lyra_ocr.detect import TextDetector
-from lyra_ocr.frames import sample_frames
+from lyra_ocr.ocr.detect import TextDetector
+from lyra_ocr.video.frames import sample_frames
 from lyra_ocr.ocr import OCREngine, TextLine
-from lyra_ocr.probe import probe_video
+from lyra_ocr.video.probe import probe_video
 from lyra_ocr.review import (
     export_review_csv,
     export_review_tracks_csv,

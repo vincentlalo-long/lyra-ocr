@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from lyra_ocr.frames import sample_frames
+from lyra_ocr.video.frames import sample_frames
 
 
 def test_sample_frames_missing_file():
