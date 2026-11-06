@@ -101,6 +101,43 @@ Outputs generated in `./output`:
 - `roi_preview.jpg`: Color-coded visual audit preview (Green = Lyric, Red = Non-Lyric).
 - `frames/`: Directory containing extracted JPEG frames.
 
+#### Performance Options (`identify` and `smoke`)
+
+```bash
+lyra-ocr identify path/to/video.mp4 \
+  --out ./output \
+  --device auto \
+  --rec-batch-size 8 \
+  --dedup \
+  --frame-source pipe
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--device` | `auto` | `auto` picks CUDA when `onnxruntime-gpu` exposes `CUDAExecutionProvider`, else CPU. `cuda` falls back to CPU with a warning; `cpu` is explicit. Env override: `LYRA_OCR_DEVICE`. |
+| `--rec-batch-size` | `8` | Text-line crops batched per recognition call. Use `1` for the old per-crop behaviour. |
+| `--dedup` / `--no-dedup` | off | Reuse OCR output and JPEG for near-identical consecutive frames. Off by default until an eval run proves it is lossless. |
+| `--frame-source` | `pipe` | `pipe` streams frames from ffmpeg while OCR runs; it falls back to disk only when extraction fails before the first frame, while a mid-stream failure fails the job. `disk` keeps the write-then-read path. |
+
+The manifest records the effective runtime under `runtime` (requested and actual
+device, providers, batch size, dedup, frame source, `pipeline_version: "2"`), and
+`config_hash` includes those options so artifacts from different configurations
+are never skipped by mistake. Benchmark stages with
+`python scripts/benchmark_pipeline.py --video <file>` (JSON goes to `reports/bench/`).
+
+GPU install (optional, outside the default requirements):
+
+```bash
+pip uninstall -y onnxruntime
+pip install "onnxruntime-gpu[cuda,cudnn]==1.31.1"
+python -c "import onnxruntime as ort; ort.preload_dlls(cuda=True, cudnn=True); print(ort.get_available_providers())"
+```
+
+Re-running `pip install -r requirements.txt` or `pip install -e .` puts CPU
+`onnxruntime` back and replaces the GPU wheel; repeat the swap above if that
+happens. `pip check` also reports `onnxruntime` as missing because the GPU wheel
+is distributed under a different name — that warning is expected.
+
 ### 3. Human Review & Annotation CLI
 
 Export blind batch CSV for offline labeling, inspect status, or ingest annotations:

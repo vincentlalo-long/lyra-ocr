@@ -125,6 +125,25 @@ def test_cancel_queued_and_persistence_reload(dataset):
         q2.shutdown()
 
 
+def test_run_options_are_inherited_and_job_options_override(dataset):
+    registry.upsert_video(dataset, "qd", video_id="v1", video_path="videos/v1.mp4")
+    run = registry.create_run(
+        dataset,
+        "qd",
+        tracker="greedy",
+        fps=1.0,
+        options={"device": "cpu", "rec_batch_size": 16, "dedup": True},
+    )
+    q = JobQueue(dataset, pipeline_runner=ok_runner)  # worker not started
+    created = q.enqueue_run("qd", run["run_id"], ["v1"], options={"dedup": False})
+
+    assert len(created) == 1
+    opts = created[0].options
+    assert opts["device"] == "cpu"
+    assert opts["rec_batch_size"] == 16
+    assert opts["dedup"] is False  # per-job override wins over run defaults
+
+
 def test_cancelled_pipeline_maps_to_cancelled_state(dataset):
     def cancelling_runner(rec, src, cancel_event, progress):
         raise PipelineCancelled("cancelled at ocr")

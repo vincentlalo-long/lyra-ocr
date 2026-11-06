@@ -62,10 +62,22 @@ Captures run-level parameters, environment provenance, and model signatures for 
     "start_sec": 0.0,
     "sample_frames": 5
   },
+  "runtime": {
+    "requested": "auto",
+    "device": "cpu",
+    "providers": ["CPUExecutionProvider"],
+    "rec_batch_size": 8,
+    "intra_op_threads": -1,
+    "inter_op_threads": 1,
+    "dedup": false,
+    "frame_source": "pipe",
+    "pipeline_version": "2"
+  },
   "tool_versions": {
     "python": "3.11.16",
     "rapidocr": "3.10.0",
     "onnxruntime": "1.31.1",
+    "onnxruntime_providers": "CPUExecutionProvider",
     "opencv": "5.0.0",
     "ffmpeg": "ffmpeg version 8.1.3"
   },
@@ -97,6 +109,11 @@ Records the exact Presentation Time Stamp (PTS) for each sampled frame.
 ]
 ```
 
+When frame dedup is enabled, a reused entry additionally carries `"reused": true`
+and `"dedup_of_frame": <frame_id>`; its `image_path` points at the JPEG of the
+frame it reused. `"pts_source": "estimated"` marks a timestamp recovered from
+the sampling interval instead of ffmpeg's `showinfo` PTS (streaming mode only).
+
 ### 3.3. `ocr_raw.json`
 Stores verbatim OCR outputs and spatial coordinates for every processed frame.
 
@@ -106,6 +123,7 @@ Stores verbatim OCR outputs and spatial coordinates for every processed frame.
   "manifest_path": "manifest.json",
   "total_frames_processed": 5,
   "avg_frame_time_ms": 315.89,
+  "total_ocr_calls": 5,
   "frames": [
     {
       "frame_id": 0,
@@ -113,6 +131,8 @@ Stores verbatim OCR outputs and spatial coordinates for every processed frame.
       "pts_time": 20.0,
       "image_path": "frames/frame_000000.jpg",
       "elapsed_ms": 472.0,
+      "detect_ms": 180.2,
+      "recognize_ms": 291.8,
       "boxes": [
         {
           "polygon": [[274, 2], [1001, 6], [1001, 55], [274, 51]],
@@ -128,6 +148,12 @@ Stores verbatim OCR outputs and spatial coordinates for every processed frame.
   ]
 }
 ```
+
+`total_ocr_calls` counts every non-reused frame sent through detection and
+recognition, including frames with zero detections; only dedup-reused frames
+are excluded. `detect_ms` / `recognize_ms` split frame latency for profiling. A
+reused frame carries `"reused": true`, `"dedup_of_frame": <frame_id>` and
+`elapsed_ms: 0.0`.
 
 ---
 

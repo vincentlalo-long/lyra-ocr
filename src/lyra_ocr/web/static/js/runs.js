@@ -214,11 +214,16 @@ document.getElementById("runCreateBtn").addEventListener("click", async () => {
   if (!currentRunDs) { showToast("Select a dataset first"); return; }
   const tracker = document.getElementById("runTracker").value;
   const fps = parseFloat(document.getElementById("runFps").value) || 1.0;
+  const options = {
+    device: document.getElementById("runDevice").value,
+    rec_batch_size: parseInt(document.getElementById("runRecBatch").value, 10) || 8,
+    dedup: document.getElementById("runDedup").checked,
+  };
   try {
     const res = await jsonFetch(`/api/datasets/${encodeURIComponent(currentRunDs)}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tracker, fps })
+      body: JSON.stringify({ tracker, fps, options })
     });
     currentRunId = res.run.run_id;
     showToast(`Run created: ${currentRunId}`);

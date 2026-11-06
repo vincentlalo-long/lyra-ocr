@@ -45,6 +45,7 @@ outputs/
 output/
 output_*/
 smoke_*/
+reports/
 golden/
 datasets/
 runs/

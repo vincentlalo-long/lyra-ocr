@@ -9,6 +9,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from .runtime import RuntimeConfig, rapidocr_params, resolve_runtime
+
 
 @dataclass
 class Detection:
@@ -57,21 +59,35 @@ def crop_quad(image: np.ndarray, polygon: list[list[int | float]]) -> np.ndarray
 class TextDetector:
     """Det-only wrapper using DBNet via RapidOCR."""
 
-    def __init__(self, **kwargs: Any) -> None:
+    def __init__(self, runtime: RuntimeConfig | None = None, **kwargs: Any) -> None:
         try:
             from rapidocr import RapidOCR
         except ImportError as exc:
             raise ImportError("rapidocr>=3.0 is required. Install via pip install rapidocr") from exc
 
-        params: dict[str, Any] = {
-            "Global.use_det": True,
-            "Global.use_cls": False,
-            "Global.use_rec": False,
-        }
+        self._runtime = runtime or resolve_runtime()
+        params: dict[str, Any] = rapidocr_params(self._runtime, use_det=True, use_rec=False)
         if "params" in kwargs:
             params.update(kwargs.pop("params"))
 
         self._engine = RapidOCR(params=params, **kwargs)
+
+    def runtime_info(self) -> dict[str, Any]:
+        """Effective execution providers reported by the ONNX sessions.
+
+        Sessions are created lazily on first inference, so call this after at
+        least one ``detect``; before that ``providers`` is empty.
+        """
+        providers: list[str] = []
+        try:
+            providers = list(self._engine.text_det.session.session.get_providers())
+        except Exception:  # noqa: BLE001 - introspection must never fail OCR
+            providers = []
+        return {
+            "device": self._runtime.device,
+            "providers": providers,
+            "rec_batch_size": self._runtime.rec_batch_size,
+        }
 
     def detect(self, image: str | Path | np.ndarray) -> list[Detection]:
         """Detect text regions in an image frame.

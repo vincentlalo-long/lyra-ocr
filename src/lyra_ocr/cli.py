@@ -98,6 +98,10 @@ def run_smoke(args: argparse.Namespace) -> int:
         progress=on_progress,
         on_frame=on_frame,
         force=True,
+        device=getattr(args, "device", "auto") or "auto",
+        rec_batch_size=getattr(args, "rec_batch_size", 8) or 8,
+        dedup=bool(getattr(args, "dedup", False)),
+        frame_source=getattr(args, "frame_source", "pipe") or "pipe",
     )
 
     tracks = result["tracks"]
@@ -403,6 +407,30 @@ def main(argv: list[str] | None = None) -> int:
             choices=["greedy", "bytetrack"],
             default="greedy",
             help="Text tracking algorithm strategy (default: greedy)",
+        )
+        p.add_argument(
+            "--device",
+            choices=["auto", "cpu", "cuda"],
+            default="auto",
+            help="OCR device; auto uses CUDA when available (default: auto)",
+        )
+        p.add_argument(
+            "--rec-batch-size",
+            type=int,
+            default=8,
+            help="Recognition crops per ONNX call (default: 8)",
+        )
+        p.add_argument(
+            "--dedup",
+            action=argparse.BooleanOptionalAction,
+            default=False,
+            help="Reuse OCR output for near-identical frames (default: off)",
+        )
+        p.add_argument(
+            "--frame-source",
+            choices=["pipe", "disk"],
+            default="pipe",
+            help="Stream frames from ffmpeg or write/read JPEGs on disk (default: pipe)",
         )
 
     # Subcommand: label

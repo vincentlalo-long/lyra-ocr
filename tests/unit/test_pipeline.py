@@ -81,6 +81,11 @@ def test_pipeline_full_run_writes_artifacts(tmp_path, engines):
     assert manifest["video_id"] == "vid_override1"
     assert manifest["config_hash"] == result["config_hash"]
     assert manifest["models"]["det"] == "PP-OCRv6_det_small"
+    assert manifest["runtime"]["pipeline_version"] == "2"
+    assert manifest["runtime"]["device"] in ("cpu", "cuda")
+    assert manifest["runtime"]["frame_source"] in ("pipe", "disk")
+    assert manifest["runtime"]["rec_batch_size"] == 8
+    assert manifest["runtime"]["dedup"] is False
 
     tracks = json.loads((out / "tracks.json").read_text(encoding="utf-8"))
     assert tracks["total_tracks"] >= 1

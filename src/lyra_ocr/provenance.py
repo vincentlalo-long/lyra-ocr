@@ -21,8 +21,13 @@ def get_tool_versions() -> dict[str, str]:
     try:
         import onnxruntime
         versions["onnxruntime"] = onnxruntime.__version__
+        try:
+            versions["onnxruntime_providers"] = ",".join(onnxruntime.get_available_providers())
+        except Exception:
+            versions["onnxruntime_providers"] = "unknown"
     except Exception:
         versions["onnxruntime"] = "unknown"
+        versions["onnxruntime_providers"] = "unknown"
 
     try:
         import cv2

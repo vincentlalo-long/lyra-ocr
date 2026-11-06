@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 
 from .detect import Detection, crop_quad
+from .runtime import RuntimeConfig, rapidocr_params, resolve_runtime
 
 
 @dataclass
@@ -76,24 +77,42 @@ class OCREngine:
 
     DEFAULT_MODEL = "PP-OCRv6_rec_small"
 
-    def __init__(self, default_model: str = DEFAULT_MODEL) -> None:
+    def __init__(
+        self,
+        default_model: str = DEFAULT_MODEL,
+        runtime: RuntimeConfig | None = None,
+    ) -> None:
         try:
             from rapidocr import RapidOCR
         except ImportError as exc:
             raise ImportError("rapidocr>=3.0 is required. Install via pip install rapidocr") from exc
 
         self._default_model = default_model
+        self._runtime = runtime or resolve_runtime()
         # Registry mapping model_id -> RapidOCR instance
         self._models: dict[str, Any] = {}
 
         # Pre-initialize default unified model
-        self._models[self.DEFAULT_MODEL] = RapidOCR(
-            params={
-                "Global.use_det": False,
-                "Global.use_cls": False,
-                "Global.use_rec": True,
-            }
-        )
+        self._models[self.DEFAULT_MODEL] = RapidOCR(params=self._rec_params())
+
+    def _rec_params(self) -> dict[str, Any]:
+        """Recognition-only RapidOCR params with batching and runtime settings."""
+        return rapidocr_params(self._runtime, use_det=False, use_rec=True)
+
+    def runtime_info(self) -> dict[str, Any]:
+        """Effective execution providers reported by the recognition session."""
+        providers: list[str] = []
+        try:
+            for engine in self._models.values():
+                providers = list(engine.text_rec.session.session.get_providers())
+                break
+        except Exception:  # noqa: BLE001 - introspection must never fail OCR
+            providers = []
+        return {
+            "device": self._runtime.device,
+            "providers": providers,
+            "rec_batch_size": self._runtime.rec_batch_size,
+        }
 
     def _get_model(self, model_id: str) -> Any:
         if model_id in self._models:
@@ -102,16 +121,15 @@ class OCREngine:
         from rapidocr import LangRec, ModelType, OCRVersion, RapidOCR
 
         if model_id == "latin_PP-OCRv5_rec_mobile":
-            engine = RapidOCR(
-                params={
-                    "Global.use_det": False,
-                    "Global.use_cls": False,
-                    "Global.use_rec": True,
+            params = self._rec_params()
+            params.update(
+                {
                     "Rec.ocr_version": OCRVersion.PPOCRV5,
                     "Rec.lang_type": LangRec.LATIN,
                     "Rec.model_type": ModelType.MOBILE,
                 }
             )
+            engine = RapidOCR(params=params)
             self._models[model_id] = engine
             return engine
 
@@ -145,6 +163,47 @@ class OCREngine:
         score = round(float(scores[0]), 4) if scores and len(scores) > 0 else 0.0
         return text_raw, score, chosen_model
 
+    def recognize_crops(
+        self,
+        crops: list[np.ndarray],
+        model_id: str | None = None,
+    ) -> list[tuple[str, float, str]]:
+        """Recognize a list of line crops in as few ONNX calls as possible.
+
+        RapidOCR's ``recognize_txt`` sorts by width for padding efficiency but
+        returns results in the original order, so callers can map results back
+        to detections positionally. Empty crops keep a placeholder result and
+        are never sent to the model.
+
+        Returns:
+            One ``(text_raw, confidence, actual_model_id)`` per input crop.
+        """
+        if not crops:
+            return []
+
+        chosen_model = model_id or self._default_model
+        engine = self._get_model(chosen_model)
+        results: list[tuple[str, float, str]] = [("", 0.0, chosen_model) for _ in crops]
+
+        valid: list[tuple[int, np.ndarray]] = [
+            (i, crop)
+            for i, crop in enumerate(crops)
+            if crop is not None and getattr(crop, "size", 0) > 0
+        ]
+        if not valid:
+            return results
+
+        out = engine.recognize_txt([crop for _, crop in valid])
+        txts = getattr(out, "txts", None) or ()
+        scores = getattr(out, "scores", None) or ()
+
+        for pos, (original_idx, _crop) in enumerate(valid):
+            text = str(txts[pos]) if pos < len(txts) else ""
+            score = round(float(scores[pos]), 4) if pos < len(scores) else 0.0
+            results[original_idx] = (text, score, chosen_model)
+
+        return results
+
     def process_detections(
         self,
         image: np.ndarray | str | Path,
@@ -168,11 +227,11 @@ class OCREngine:
         else:
             img_bgr = image
 
-        lines: list[TextLine] = []
-        for det in detections:
-            crop = crop_quad(img_bgr, det.polygon)
-            text_raw, conf, used_model = self.recognize_crop(crop, model_id=model_id)
+        crops = [crop_quad(img_bgr, det.polygon) for det in detections]
+        recognized = self.recognize_crops(crops, model_id=model_id)
 
+        lines: list[TextLine] = []
+        for det, (text_raw, conf, used_model) in zip(detections, recognized):
             text_norm = normalize_text(text_raw, form="NFC")
             script = detect_script(text_norm)
 

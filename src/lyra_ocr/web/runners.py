@@ -52,6 +52,10 @@ def _make_default_runner(workspace_root: Path, engines: PipelineEngines) -> Pipe
         fps = float(rec.options.get("fps", 1.0))
         tracker = str(rec.options.get("tracker", "greedy"))
         force = bool(rec.options.get("force", False))
+        device = str(rec.options.get("device", "auto") or "auto")
+        rec_batch_size = int(rec.options.get("rec_batch_size", 8) or 8)
+        dedup = bool(rec.options.get("dedup", False))
+        frame_source = str(rec.options.get("frame_source", "pipe") or "pipe")
 
         if src.kind == "youtube":
             videos_dir = ds_dir / "videos"
@@ -85,6 +89,10 @@ def _make_default_runner(workspace_root: Path, engines: PipelineEngines) -> Pipe
             progress=pipeline_progress,
             cancel_event=cancel_event,
             force=force,
+            device=device,
+            rec_batch_size=rec_batch_size,
+            dedup=dedup,
+            frame_source=frame_source,
         )
         return {
             "video_id": result["video_id"],
@@ -186,6 +194,12 @@ def _make_run_runner(workspace_root: Path, engines: PipelineEngines) -> Pipeline
         tracker = str(run.get("tracker", "greedy"))
         fps = float(rec.options.get("fps", run.get("fps", 1.0)))
         force = bool(rec.options.get("force", False))
+        # Run-level options are the defaults; per-job options override them.
+        options = {**dict(run.get("options") or {}), **dict(rec.options)}
+        device = str(options.get("device", "auto") or "auto")
+        rec_batch_size = int(options.get("rec_batch_size", 8) or 8)
+        dedup = bool(options.get("dedup", False))
+        frame_source = str(options.get("frame_source", "pipe") or "pipe")
 
         def pipeline_progress(stage: str, percent: float, message: str = "") -> None:
             progress(stage, 30.0 + 0.7 * percent, message)
@@ -203,6 +217,10 @@ def _make_run_runner(workspace_root: Path, engines: PipelineEngines) -> Pipeline
             progress=pipeline_progress,
             cancel_event=cancel_event,
             force=force,
+            device=device,
+            rec_batch_size=rec_batch_size,
+            dedup=dedup,
+            frame_source=frame_source,
         )
         return {
             "video_id": result["video_id"],

@@ -1,15 +1,29 @@
 """Unit tests for artifact schema validation (manifest.json and ocr_raw.json)."""
 
+from importlib.metadata import PackageNotFoundError, version
+
 from lyra_ocr.ocr import TextLine
 from lyra_ocr.provenance import get_tool_versions
 
 
+def _onnxruntime_dist_version() -> str:
+    """Version of whichever onnxruntime distribution is installed (CPU or GPU)."""
+    for dist in ("onnxruntime", "onnxruntime-gpu"):
+        try:
+            return version(dist)
+        except PackageNotFoundError:
+            continue
+    raise AssertionError("no onnxruntime distribution installed")
+
+
 def test_get_tool_versions_contract():
     versions = get_tool_versions()
-    assert versions["rapidocr"] != "3.x"
-    assert versions["rapidocr"] == "3.10.0"
-    assert "python" in versions
-    assert "onnxruntime" in versions
+    # Compare against the installed distribution so a deliberate runtime swap
+    # (e.g. onnxruntime-gpu) does not break the schema test.
+    assert versions["rapidocr"] == version("rapidocr")
+    assert versions["python"]
+    assert versions["onnxruntime"] == _onnxruntime_dist_version()
+    assert versions["onnxruntime_providers"]
     assert "opencv" in versions
     assert "ffmpeg" in versions
 
@@ -33,6 +47,24 @@ def test_ocr_line_schema():
     assert len(d["bbox"]) == 4
     assert isinstance(d["confidence"], float)
     assert d["script"] == "latin"
+
+
+def test_manifest_runtime_block_schema():
+    runtime_block = {
+        "requested": "auto",
+        "device": "cpu",
+        "providers": ["CPUExecutionProvider"],
+        "rec_batch_size": 8,
+        "intra_op_threads": -1,
+        "inter_op_threads": 1,
+        "dedup": False,
+        "frame_source": "pipe",
+        "pipeline_version": "2",
+    }
+
+    assert runtime_block["device"] in ("cpu", "cuda")
+    assert runtime_block["rec_batch_size"] >= 1
+    assert runtime_block["pipeline_version"] == "2"
 
 
 def test_manifest_schema_keys():
