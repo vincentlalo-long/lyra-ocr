@@ -383,6 +383,50 @@ def test_job_cancel_invalid_state_returns_400(ws_server):
     assert retry_res["job"]["state"] == "queued" if "job" in retry_res else True
 
 
+def test_jobs_cancel_all_endpoint(ws_server):
+    url = ws_server["url"]
+    http_request(f"{url}/api/datasets", {"name": "cxl_all"}, method="POST")
+    video = ws_server["root"] / "sample.mp4"
+    video.write_bytes(b"\x00")
+    http_request(f"{url}/api/datasets/cxl_all/items", {"local_paths": ["sample.mp4"]}, method="POST")
+
+    status, res = http_request(f"{url}/api/jobs/cancel", {"dataset": "cxl_all"}, method="POST")
+    assert status == 200
+    assert res.get("ok") is True
+
+
+def test_delete_run_endpoints(ws_server):
+    url = ws_server["url"]
+    http_request(f"{url}/api/datasets", {"name": "del_api"}, method="POST")
+    status, run1 = http_request(f"{url}/api/datasets/del_api/runs", {"tracker": "greedy"}, method="POST")
+    assert status == 201
+    run1_id = run1["run"]["run_id"]
+
+    status, run2 = http_request(f"{url}/api/datasets/del_api/runs", {"tracker": "bytetrack"}, method="POST")
+    assert status == 201
+    run2_id = run2["run"]["run_id"]
+
+    # Delete run1 via POST /delete
+    status, del1 = http_request(f"{url}/api/datasets/del_api/runs/{run1_id}/delete", {}, method="POST")
+    assert status == 200
+    assert del1["ok"] is True
+    assert del1["deleted"] == run1_id
+
+    # Verify list of runs now only has run2
+    status, runs_data = http_request(f"{url}/api/datasets/del_api/runs")
+    assert [r["run_id"] for r in runs_data["runs"]] == [run2_id]
+
+    # Delete run2 via DELETE method
+    status, del2 = http_request(f"{url}/api/datasets/del_api/runs/{run2_id}", method="DELETE")
+    assert status == 200
+    assert del2["ok"] is True
+    assert del2["deleted"] == run2_id
+
+    # Verify runs list is empty
+    status, runs_data = http_request(f"{url}/api/datasets/del_api/runs")
+    assert runs_data["runs"] == []
+
+
 def test_dataset_eval_uses_dataset_ground_truth(ws_server):
     """GET /api/eval must evaluate a run against promoted dataset ground truth."""
     from lyra_ocr.dataset import ground_truth, registry

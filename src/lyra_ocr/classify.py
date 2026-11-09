@@ -55,6 +55,16 @@ SUPPLEMENTARY_KEYWORDS = [
     "visualizer",
     "official video",
     "official audio",
+    "official lyric video",
+    "lyric video",
+    "lyrics video",
+    "music video",
+    "new video",
+    "video every",
+    "link in bio",
+    "link in description",
+    "watch now",
+    "out now",
 ]
 
 
@@ -94,14 +104,14 @@ def classify_track(
     distinct_changes = feat.get("distinct_text_changes", n_text_changes)
     duration_ms = track.end_ms - track.start_ms
     word_count = len(dominant_text.split())
-    is_all_caps = dominant_text.isupper() and len(dom_tokens) >= 2
-    # Card-shaped text: stylised/short overlays are title cards and credit
-    # slides, a sung line is not. Position alone cannot separate them now that
-    # each text identity is its own track.
-    looks_like_card = is_all_caps or len(dom_tokens) <= 3
+    # Card-shaped text: short overlays strictly bounded to the intro/outro window
+    # are typically title cards or credit slides. Casing (uppercase vs lowercase)
+    # is never used to judge lyrics, as song lyrics are frequently styled in all-caps.
+    looks_like_card = len(dom_tokens) <= 4
     end_time_ratio = start_time_ratio + lifetime_ratio
     only_intro_outro = (
-        (end_time_ratio <= 0.08 and looks_like_card) or start_time_ratio >= 0.90
+        (end_time_ratio <= 0.08 and looks_like_card)
+        or (start_time_ratio >= 0.95 and looks_like_card)
     ) and (video_duration_ms > 0 or lifetime_ratio > 0)
 
     qa_flags: list[str] = []
@@ -196,6 +206,7 @@ def classify_track(
             and dom_tokens.issubset(sig_title_tokens)
             and n_text_changes == 0
             and len(dom_tokens) <= 4
+            and (len(dom_tokens) / len(sig_title_tokens) >= 0.50)
         )
         is_title_match = (
             sim_title >= 0.75
@@ -277,27 +288,32 @@ def classify_track(
         track.classification = res
         return res
 
-    # Rule 6: Transient Single Lyric Line in Active Portion
+    # Rule 6: Transient Single Lyric Line in Active Reading Zone
     if n_text_changes <= 1:
-        # Typical lyric line duration is 1.5s - 8.5s. A single cue is only
-        # auto-accepted when the text itself looks like a sung line; short
-        # all-caps promo cards fall through to non_lyric/review.
-        lyric_like_text = (
-            word_count >= 4
-            and not is_all_caps
-            and any(ch.isalpha() for ch in dominant_text)
+        # Check natural language characters (Latin / CJK / Vietnamese)
+        has_text = any(
+            ch.isalpha() or "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff"
+            for ch in dominant_text
+        )
+        # Spatial prior: horizontally centered, within active reading zone (center or lower-third),
+        # not tucked into extreme corners
+        in_reading_zone = (
+            not is_corner
+            and 0.10 <= mean_cx <= 0.90
+            and 0.20 <= mean_cy <= 0.95
+            and aspect_ratio >= 1.0
         )
         if (
-            1500 <= duration_ms <= 8500
-            and not is_corner
-            and aspect_ratio >= 1.5
-            and lyric_like_text
+            500 <= duration_ms <= 16000
+            and in_reading_zone
+            and has_text
+            and len(dominant_text.strip()) >= 2
             and not only_intro_outro
         ):
             res = ClassificationResult(
                 label="lyric",
-                confidence=0.90,
-                reason="Transient text line within typical lyric duration and aspect ratio",
+                confidence=0.92,
+                reason="Transient text line within typical lyric reading zone and duration",
                 decision="accept",
                 qa_flags=["single_cue_track"],
             )
@@ -306,8 +322,24 @@ def classify_track(
 
     # Rule 6b: Isolated single-observation text.
     # A real subtitle/lyric line persists across several sampled frames; a
-    # one-frame detection is background noise or transient scene text.
+    # one-frame detection is background noise or transient scene text, unless
+    # it is a full multi-word phrase within the lyric reading zone.
     if len(track.occurrences) <= 1 and n_text_changes == 0 and not is_corner:
+        if (
+            len(dominant_text.split()) >= 3
+            and in_reading_zone
+            and has_text
+            and not only_intro_outro
+        ):
+            res = ClassificationResult(
+                label="lyric",
+                confidence=0.85,
+                reason="Single-frame sampled phrase within lyric reading zone",
+                decision="accept",
+                qa_flags=["single_frame_lyric_cue"],
+            )
+            track.classification = res
+            return res
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.80,

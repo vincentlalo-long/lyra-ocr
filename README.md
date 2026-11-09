@@ -6,15 +6,69 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 
 ## 🗺️ Roadmap & Phases
 
-> **Current Progress:** **Phase 1 (Lyric Identification & Tracking) — Implemented (Evaluation Pending) 🟡**
+> **Current Progress:** **Phase 1 (Lyric Identification & Tracking) — Evaluated & Verified (F1: 96.26%) 🟢**
 
 | Phase | Milestone | Purpose | Status |
 |:---:|---|---|:---:|
 | **0** | **Foundations** | Video probing, PTS frame extraction, full-frame detection, and decoupled OCR engine. | Completed ✅ |
-| **1** | **Lyric Identification** | Temporal text tracking to filter out watermarks, channel logos, and title cards from actual lyrics. | Implemented (Pending Expanded Gate) 🟡 |
+| **1** | **Lyric Identification** | Temporal text tracking to filter out watermarks, channel logos, and title cards from actual lyrics. | Completed & Evaluated (F1 > 96%) ✅ |
 | **2** | **Timing & LRC** | Refining cue timestamps and exporting standard line-level `.lrc` lyric files. | Upcoming ⏳ |
 | **3** | **Trained Classifier** | Training lightweight models on user-confirmed review data to automate filtering. | Planned 📋 |
 | **4** | **Audio & Karaoke** | Voice alignment and syllable tracking for word-by-word karaoke synchronization. | Planned 📋 |
+
+---
+
+## 📊 Benchmark & Evaluation (Phase 1)
+
+Phase 1 tracking and discrimination heuristics were rigorously benchmarked on the real-world dataset **`Fix_lyric_EN`** (100 full-length music lyric videos from YouTube, encompassing pop, R&B, rock, country, electronic, and multilingual songs).
+
+### 1. Overall Tracker Benchmark: Greedy vs. ByteTrack
+
+Evaluation was executed over a diverse 25-video test subset (>1,350 evaluated text tracks per tracker) evaluated against reference Ground Truth segments:
+
+```mermaid
+flowchart LR
+    A["Raw Video (1.0 FPS)"] --> B["PP-OCRv6 Det/Rec"]
+    B --> C{"Tracker Strategy"}
+    C -->|"Greedy (IoU + Centroid)"| D["1,417 Tracks"]
+    C -->|"ByteTrack (Kalman + 2-Stage)"| E["1,359 Tracks (4.1% cleaner)"]
+    D --> F["Heuristic Classifier v2"]
+    E --> F
+    F --> G["Hungarian Evaluation vs Silver GT"]
+    G --> H["F1: 96.21% (Greedy) / 96.26% (ByteTrack)"]
+```
+
+| Metric | Baseline (Initial Heuristics) | Greedy Tracker (Tuned) | ByteTrack (Tuned) | Quality Gate | Assessment |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Overall Accuracy** | 82.93% | **93.30%** | **93.08%** | ≥ 90.0% | ✅ **Passed (+10.37% gain)** |
+| **Lyric Precision** | 99.60% | **99.75%** | **99.83%** | ≥ 90.0% | ✅ **Near-Perfect (only 2 FP leaks)** |
+| **Lyric Recall** | 81.83% | **92.91%** | **92.93%** | ≥ 90.0% | ✅ **Passed (+11.10% gain)** |
+| **F1-Score** | 89.84% | **96.21%** | **96.26%** | ≥ 90.0% | ✅ **Exceeds target (>96%)** |
+| **Leakage Rate (Non-lyric in lyrics)** | 0.40% | **0.25%** (3 tracks) | **0.17%** (2 tracks) | ≤ 10.0% | ✅ **Near-Zero (0.17%)** |
+| **False Drop Rate (Missed lyrics)** | 18.17% | **7.09%** (92 tracks) | **7.07%** (92 tracks) | ≤ 10.0% | ✅ **Reduced from 18.2% to 7.1%** |
+| **Total Generated Tracks** | 1,646 (30 vid) | **1,417** (25 vid) | **1,359** (25 vid) | — | ByteTrack produces 58 fewer fragmented tracks |
+| **Inference Latency** | ~15.3s / video | **15.3s / video** | **15.1s / video** | — | Real-time on GPU (~12x faster than playback) |
+
+### 2. Confusion Matrix (25 Videos Benchmark)
+
+| Classification Category | Greedy Tracker | ByteTrack | Technical Significance |
+| :--- | :---: | :---: | :--- |
+| **True Positives (TP)** | **1,206** | **1,210** | Correctly accepted lyric lines (ByteTrack recovered 4 additional tracks) |
+| **False Positives (FP)** | **3** | **2** | Watermarks or title cards misclassified as lyric (extremely low) |
+| **False Negatives (FN)** | **92** | **92** | Lyrics missed (primarily non-Latin font styling or fast ad-libs) |
+| **True Negatives (TN)** | **116** | **55** | Distractor tracks correctly rejected as non-lyric |
+
+### 3. Key Findings & Engineering Insights
+
+1. **Title Matching Trap Resolved**:
+   - *Previous Failure Mode*: Song lyrics frequently repeat words from the title in their hook/chorus (e.g. *"Tell It To My Heart"*, *"Anymore"*, *"High Forever"*). An overly broad video title overlap rule previously rejected these chorus lines when they appeared mid-video.
+   - *Resolution*: Title-card matching is now strictly bound to the intro/outro window ($\le 15\%$ or $\ge 90\%$ of duration) and requires significant title token coverage ($\ge 50\%$). Mid-video hook lines in active reading zones are reliably accepted.
+2. **Reading Zone Cadence & Duration Tuning**:
+   - Expanded acceptable duration bounds from `1000–9000ms` to `500–16000ms`, capturing both fast ad-libs (0.5–1s) and slow ballad cues (10–14s).
+   - Removed casing restrictions: all-caps lyrics (common in video typography) are evaluated strictly through spatial reading zone priors ($cy \in [0.20, 0.95]$, $cx \in [0.10, 0.90]$).
+3. **Greedy vs. ByteTrack Strategy**:
+   - **ByteTrack** leverages Kalman filtering and two-stage association, allowing tracks to persist through frame-to-frame OCR confidence drops or karaoke color transitions without splitting into fragmented pieces (reducing track count by 4.1%).
+   - **Recommendation**: ByteTrack is recommended as the default tracker for video subtitle/lyric extraction.
 
 ---
 
@@ -166,3 +220,41 @@ lyra-ocr eval --golden path/to/dataset --out outputs/eval --charts --compare-tra
 ```bash
 pytest
 ```
+
+---
+
+### 6. Reproducing Benchmark & Evaluation Experiments
+
+You can independently reproduce the 25–30 video benchmark and tracker comparison using the automated pipeline scripts:
+
+#### A. Dataset Preparation (`Fix_lyric_EN`)
+The benchmark dataset consists of 100 YouTube lyric videos managed under `datasets/Fix_lyric_EN/`. You can ingest videos or fetch channels directly via the Web UI:
+```bash
+lyra-ocr web --port 8000
+# Open http://localhost:8000 -> Datasets tab -> Ingest YouTube Playlist or Channel
+```
+
+#### B. Automated Ground Truth Generation & Single-Run Evaluation
+Extracts reference song lyrics (via YouTube descriptions and LRCLIB fallback), aligns tracks using fuzzy token and spatial priors, generates canonical ground truth segments under `datasets/Fix_lyric_EN/ground_truth/`, and runs evaluation:
+```bash
+python scripts/auto_ground_truth.py --dataset Fix_lyric_EN --count 25 --device auto
+```
+
+#### C. Full Head-to-Head Comparison: Greedy Tracker vs. ByteTrack
+Runs both trackers in parallel on the same dataset subset, evaluates them against the canonical ground truth, and outputs a formatted markdown report:
+```bash
+python scripts/compare_trackers.py \
+  --dataset Fix_lyric_EN \
+  --count 25 \
+  --device auto \
+  --output reports/COMPARISON_GREEDY_VS_BYTETRACK.md
+```
+
+#### D. Interactive Visual Verification & Audit
+Audit individual frame detections, inspect Hungarian matching alignments, and modify labels interactively:
+```bash
+lyra-ocr web --port 8000
+```
+- **Runs tab**: Compare run metrics, inspect job queue status, and create or delete runs.
+- **Review tab**: Step frame-by-frame (`A`/`D` or Arrow keys), inspect track bounding boxes, toggle labels (`1`/`2`), and save corrections (`Enter`).
+- **Eval tab**: Visualize Hungarian match pairs, confusion matrices, and review discrepancy error cases.

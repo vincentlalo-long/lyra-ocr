@@ -162,3 +162,27 @@ def test_derive_video_id_youtube_and_local():
     vid = registry.derive_video_id(local)
     assert vid.startswith(this_file.stem)
     assert len(vid.split("_")[-1]) == 8
+
+
+def test_delete_run_and_delete_all_runs(tmp_path):
+    registry.create_dataset(tmp_path, "ds_del")
+    run1 = registry.create_run(tmp_path, "ds_del", tracker="greedy")
+    run2 = registry.create_run(tmp_path, "ds_del", tracker="bytetrack")
+
+    runs = registry.list_runs(tmp_path, "ds_del")
+    assert len(runs) == 2
+
+    # Delete single run
+    registry.delete_run(tmp_path, "ds_del", run1["run_id"])
+    runs = registry.list_runs(tmp_path, "ds_del")
+    assert len(runs) == 1
+    assert runs[0]["run_id"] == run2["run_id"]
+
+    # Delete non-existent run raises FileNotFoundError
+    with pytest.raises(FileNotFoundError):
+        registry.delete_run(tmp_path, "ds_del", run1["run_id"])
+
+    # Delete all runs
+    deleted = registry.delete_all_runs(tmp_path, "ds_del")
+    assert deleted == [run2["run_id"]]
+    assert registry.list_runs(tmp_path, "ds_del") == []

@@ -61,6 +61,7 @@ review_batch*.csv
 .agent_notes/
 .licenses/
 doc/WEB_UI_PLAN.md
+doc/RESEARCH_*.md
 
 # =============================================================================
 # 4. Large Media Files & Binary Image Artifacts

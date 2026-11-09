@@ -285,6 +285,43 @@ document.getElementById("runEvalBtn").addEventListener("click", () => {
   evalPick(currentRunDs, currentRunId);
 });
 
+async function cancelAllRunJobs() {
+  if (!confirm("Are you sure you want to cancel all queued and running jobs?")) return;
+  try {
+    const res = await jsonFetch("/api/jobs/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset: currentRunDs || undefined })
+    });
+    showToast(`Cancelled ${res.cancelled || 0} job(s)`);
+    if (currentRunDs) await loadRunDetail();
+  } catch (err) {
+    showToast(`Cancel failed: ${err.message}`);
+  }
+}
+
+async function deleteCurrentRun() {
+  if (!currentRunDs || !currentRunId) { showToast("Select a run first"); return; }
+  if (!confirm(`Are you sure you want to delete run '${currentRunId}' and all its files? This action cannot be undone.`)) return;
+  try {
+    const res = await jsonFetch(`/api/datasets/${encodeURIComponent(currentRunDs)}/runs/${encodeURIComponent(currentRunId)}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({})
+    });
+    showToast(`Deleted run: ${res.deleted || currentRunId}`);
+    currentRunId = null;
+    await loadRunsForDataset(currentRunDs);
+  } catch (err) {
+    showToast(`Delete failed: ${err.message}`);
+  }
+}
+
+document.getElementById("runDeleteBtn")?.addEventListener("click", deleteCurrentRun);
+document.getElementById("runTableDeleteBtn")?.addEventListener("click", deleteCurrentRun);
+document.getElementById("runCancelAllBtn")?.addEventListener("click", cancelAllRunJobs);
+document.getElementById("runTableCancelAllBtn")?.addEventListener("click", cancelAllRunJobs);
+
 document.getElementById("runRefreshBtn").addEventListener("click", () => {
   if (currentRunDs) loadRunsForDataset(currentRunDs);
 });

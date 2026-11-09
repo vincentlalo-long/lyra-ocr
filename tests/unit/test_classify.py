@@ -316,3 +316,40 @@ def test_classify_erratic_scene_text():
     assert result.label == "non_lyric"
     assert result.decision == "reject"
     assert "variance" in result.reason.lower() or "drift" in result.reason.lower()
+
+
+def test_classify_all_caps_lyric_line_is_accepted():
+    from lyra_ocr.classify import classify_track
+
+    # Modern lyric video line styled in ALL CAPS
+    track = create_mock_track(
+        track_id=14,
+        start_ms=16000,
+        end_ms=23000,
+        texts=["YOU READ MY EYES, MY VIBE, MY BODY SPEAKS"],
+        bbox=[72, 153, 568, 179],
+        video_duration_ms=176000,
+    )
+    result = classify_track(track, metadata={"title": "When I Say So", "channel": "Vibe Music"})
+
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+    assert "reading zone" in result.reason.lower() or "lyric" in result.reason.lower()
+
+
+def test_classify_short_lyric_line_is_accepted():
+    from lyra_ocr.classify import classify_track
+
+    # Short lyric cue (2 words) in reading zone
+    track = create_mock_track(
+        track_id=15,
+        start_ms=25000,
+        end_ms=28000,
+        texts=["I miss you"],
+        bbox=[400, 500, 600, 540],
+        video_duration_ms=176000,
+    )
+    result = classify_track(track, metadata={"title": "When I Say So", "channel": "Vibe Music"})
+
+    assert result.label == "lyric"
+    assert result.decision == "accept"

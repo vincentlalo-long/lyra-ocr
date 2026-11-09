@@ -280,6 +280,73 @@ class JobQueue:
                 raise ValueError(f"job is {rec.state}; cannot cancel")
         return rec
 
+    def cancel_all(self, dataset: Optional[str] = None) -> list[JobRecord]:
+        """Cancel all queued and running jobs, optionally restricted to a dataset."""
+        cancelled: list[JobRecord] = []
+        datasets_to_persist: set[str] = set()
+        with self._lock:
+            for jid in self._order:
+                rec = self._jobs.get(jid)
+                if rec is None:
+                    continue
+                if dataset and rec.dataset != dataset:
+                    continue
+                if rec.state == "queued":
+                    rec.state = "cancelled"
+                    rec.updated_at = int(time.time())
+                    cancelled.append(rec)
+                    datasets_to_persist.add(rec.dataset)
+                elif rec.state == "running":
+                    ev = self._cancel_events.get(rec.job_id)
+                    if ev is not None:
+                        ev.set()
+                    cancelled.append(rec)
+            for ds in datasets_to_persist:
+                self._persist_dataset(ds, force=True)
+        return cancelled
+
+    def delete_run_jobs(self, dataset: str, run_id: str) -> int:
+        """Cancel and purge all jobs associated with a specific run."""
+        removed = 0
+        with self._lock:
+            to_remove = [
+                jid for jid, rec in self._jobs.items()
+                if rec.dataset == dataset and rec.run_id == run_id
+            ]
+            for jid in to_remove:
+                ev = self._cancel_events.get(jid)
+                if ev is not None:
+                    ev.set()
+                self._jobs.pop(jid, None)
+                if jid in self._order:
+                    self._order.remove(jid)
+                self._cancel_events.pop(jid, None)
+                removed += 1
+            if removed:
+                self._persist_dataset(dataset, force=True)
+        return removed
+
+    def delete_all_run_jobs(self, dataset: str) -> int:
+        """Cancel and purge all pipeline run jobs for a dataset."""
+        removed = 0
+        with self._lock:
+            to_remove = [
+                jid for jid, rec in self._jobs.items()
+                if rec.dataset == dataset and rec.kind == "run"
+            ]
+            for jid in to_remove:
+                ev = self._cancel_events.get(jid)
+                if ev is not None:
+                    ev.set()
+                self._jobs.pop(jid, None)
+                if jid in self._order:
+                    self._order.remove(jid)
+                self._cancel_events.pop(jid, None)
+                removed += 1
+            if removed:
+                self._persist_dataset(dataset, force=True)
+        return removed
+
     def get(self, job_id: str) -> Optional[JobRecord]:
         return self._jobs.get(job_id)
 

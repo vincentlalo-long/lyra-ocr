@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -323,6 +324,29 @@ def list_runs(workspace_root: Path, name: str) -> list[dict[str, Any]]:
         run["video_count"] = len(run.get("videos", []))
         runs.append(run)
     return runs
+
+
+def delete_run(workspace_root: Path, name: str, run_id: str) -> None:
+    """Delete a run and all its output artifacts from disk."""
+    target = run_dir(workspace_root, name, run_id)
+    with MANIFEST_LOCK:
+        if not target.exists():
+            raise FileNotFoundError(f"Run '{run_id}' not found in dataset '{name}'")
+        shutil.rmtree(target)
+
+
+def delete_all_runs(workspace_root: Path, name: str) -> list[str]:
+    """Delete all runs and their artifacts for a given dataset."""
+    root = runs_root(workspace_root, name)
+    deleted: list[str] = []
+    with MANIFEST_LOCK:
+        if not root.exists():
+            return []
+        for child in sorted(root.iterdir()):
+            if child.is_dir():
+                shutil.rmtree(child)
+                deleted.append(child.name)
+    return deleted
 
 
 def sync_run_entry(

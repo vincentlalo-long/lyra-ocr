@@ -156,6 +156,27 @@ def test_cancelled_pipeline_maps_to_cancelled_state(dataset):
         q.shutdown()
 
 
+def test_cancel_all_cancels_queued_and_running(dataset):
+    def slow_runner(rec, src, cancel_event, progress):
+        while not cancel_event.is_set():
+            time.sleep(0.05)
+        raise PipelineCancelled("stopped")
+
+    q = make_queue(dataset, slow_runner)
+    try:
+        q.enqueue("qd", [
+            VideoSource(kind="local", path="/x/1.mp4"),
+            VideoSource(kind="local", path="/x/2.mp4"),
+            VideoSource(kind="local", path="/x/3.mp4"),
+        ])
+        time.sleep(0.1)
+        cancelled = q.cancel_all("qd")
+        assert len(cancelled) == 3
+        assert wait_for_states(q, "qd", {"cancelled": 3}, timeout=5.0)
+    finally:
+        q.shutdown()
+
+
 def test_downloaded_videos_matches_only_the_completed_merge(tmp_path):
     """Already-downloaded detection must use the literal "[<id>]" suffix.
 

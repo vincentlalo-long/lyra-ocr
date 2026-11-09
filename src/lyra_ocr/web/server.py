@@ -160,6 +160,23 @@ class LyraReviewHandler(ReviewAPIMixin, DatasetAPIMixin, EvalAPIMixin, ReviewHan
         except _BadRequest as exc:
             self._send_error(str(exc), exc.status)
 
+    def do_DELETE(self) -> None:
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        try:
+            if path.startswith("/api/datasets/"):
+                rest = path[len("/api/datasets/"):].strip("/")
+                parts = [p for p in rest.split("/") if p]
+                if len(parts) == 3 and parts[1] == "runs":
+                    self._handle_delete_run(parts[0], parts[2])
+                    return
+                if len(parts) == 2 and parts[1] == "runs":
+                    self._handle_delete_run(parts[0], "all")
+                    return
+            self._send_error(f"Unknown endpoint: {path}", 404)
+        except _BadRequest as exc:
+            self._send_error(str(exc), exc.status)
+
 
 def create_server(
     host: str = "127.0.0.1",

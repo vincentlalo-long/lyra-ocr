@@ -294,6 +294,21 @@ document.getElementById("downloadBtn").addEventListener("click", async () => {
   }
 });
 
+document.getElementById("dsCancelAllBtn")?.addEventListener("click", async () => {
+  if (!confirm("Are you sure you want to cancel all queued and running jobs?")) return;
+  try {
+    const res = await jsonFetch("/api/jobs/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset: currentDs || undefined })
+    });
+    showToast(`Cancelled ${res.cancelled || 0} job(s)`);
+    if (currentDs) loadDatasetDetail(currentDs);
+  } catch (err) {
+    showToast(`Cancel failed: ${err.message}`);
+  }
+});
+
 document.getElementById("dsRefreshBtn").addEventListener("click", () => { loadDatasetsList(); if (currentDs) loadDatasetDetail(currentDs); });
 
 document.getElementById("dsRunsBtn").addEventListener("click", () => {

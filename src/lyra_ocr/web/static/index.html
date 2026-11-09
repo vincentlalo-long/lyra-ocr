@@ -185,6 +185,7 @@
         <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
           <span id="dsTitle">No dataset selected</span>
           <span style="display:flex;gap:8px">
+            <button class="mini-btn danger" id="dsCancelAllBtn" title="Cancel all running and queued jobs">⏹ Cancel All</button>
             <button class="mini-btn" id="dsRunsBtn">Runs →</button>
             <button class="mini-btn" id="dsRefreshBtn">↻ Refresh</button>
           </span>
@@ -242,6 +243,8 @@
           <div id="runMeta" style="font-size:11px;color:var(--text-muted)"></div>
           <button class="primary" id="runQueueAllBtn">Queue all videos</button>
           <button id="runQueueMissingBtn">Queue missing videos</button>
+          <button class="danger" id="runCancelAllBtn" title="Cancel all queued and running jobs in this dataset">⏹ Cancel all jobs</button>
+          <button class="danger" id="runDeleteBtn" title="Delete selected run and its output artifacts">🗑 Delete run</button>
           <button id="runPromoteBtn" title="Copy labels from this run into canonical dataset ground truth">Promote labels to Ground Truth</button>
           <button id="runEvalBtn">Eval this run →</button>
         </div>
@@ -252,6 +255,8 @@
         <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
           <span id="runTitle">No run selected</span>
           <span style="display:flex;gap:8px">
+            <button class="mini-btn danger" id="runTableDeleteBtn" title="Delete selected run">🗑 Delete Run</button>
+            <button class="mini-btn danger" id="runTableCancelAllBtn" title="Cancel all queued and running jobs">⏹ Cancel All</button>
             <button class="mini-btn" id="runRefreshBtn">↻ Refresh</button>
           </span>
         </div>

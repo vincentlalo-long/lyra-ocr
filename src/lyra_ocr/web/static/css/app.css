@@ -73,6 +73,14 @@ button.primary {
   color: #fff;
 }
 button.primary:hover { background: var(--accent-hover); }
+button.danger, .mini-btn.danger {
+  color: var(--non-lyric);
+  border-color: rgba(239, 68, 68, 0.4);
+}
+button.danger:hover, .mini-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+  border-color: var(--non-lyric);
+}
 
 .badge {
   display: inline-block;

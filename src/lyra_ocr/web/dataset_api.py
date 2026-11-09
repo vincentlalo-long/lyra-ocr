@@ -91,6 +91,10 @@ class DatasetAPIMixin:
             self._handle_create_run(name, payload)
         elif action == "runs" and len(parts) == 4 and parts[3] == "items":
             self._handle_run_items(name, parts[2], payload)
+        elif action == "runs" and len(parts) == 4 and parts[3] in ("delete", "remove"):
+            self._handle_delete_run(name, parts[2])
+        elif action == "runs" and len(parts) == 3 and parts[2] in ("delete", "delete_all"):
+            self._handle_delete_run(name, "all")
         elif action == "ground_truth" and len(parts) == 3 and parts[2] == "promote":
             self._handle_promote_ground_truth(name, payload)
         elif action == "split" and len(parts) == 2:
@@ -233,6 +237,24 @@ class DatasetAPIMixin:
             status=HTTPStatus.ACCEPTED,
         )
 
+    def _handle_delete_run(self, name: str, run_id: str) -> None:
+        queue = self._job_queue()
+        if run_id in ("all", "delete_all"):
+            if queue is not None:
+                queue.delete_all_run_jobs(name)
+            deleted = registry.delete_all_runs(self._workspace_root(), name)
+            self._send_json({"ok": True, "deleted": deleted})
+            return
+
+        if queue is not None:
+            queue.delete_run_jobs(name, run_id)
+        try:
+            registry.delete_run(self._workspace_root(), name, run_id)
+        except (FileNotFoundError, ValueError) as exc:
+            self._send_error(str(exc), 404)
+            return
+        self._send_json({"ok": True, "deleted": run_id})
+
     def _handle_promote_ground_truth(self, name: str, payload: dict[str, Any]) -> None:
         run_id = str(payload.get("run_id", "")).strip()
         if not run_id:
@@ -254,7 +276,15 @@ class DatasetAPIMixin:
         if queue is None:
             self._send_error("Job queue unavailable", HTTPStatus.SERVICE_UNAVAILABLE)
             return
+
         parts = rest.split("/")
+        if len(parts) == 1 and parts[0] in ("cancel", "cancel_all"):
+            payload = self._read_json_body() or {}
+            dataset = payload.get("dataset")
+            cancelled = queue.cancel_all(dataset=dataset)
+            self._send_json({"ok": True, "cancelled": len(cancelled)})
+            return
+
         if len(parts) != 2:
             self._send_error(f"Unknown job endpoint: {rest}", 404)
             return
