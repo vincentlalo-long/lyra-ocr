@@ -1,8 +1,9 @@
 import { activeTab } from "./router.js";
-import { escapeHtml, mustEl, showToast } from "./core.js";
+import { clearHiddenArtifacts, escapeHtml, getHiddenArtifacts, hideArtifact, mustEl, showToast } from "./core.js";
 
 // State
 let artifacts = [];
+let allRawArtifacts = [];
 let currentArtifact = null;
 let dataset = null;
 let currentFrameIndex = 0;
@@ -12,6 +13,7 @@ let isPlaying = false;
 let playInterval = null;
 let currentFilter = "all";
 let frameImage = new Image();
+let showDatasetRuns = false;
 
 // DOM Elements
 const artifactSelect = mustEl("artifactSelect");
@@ -48,22 +50,82 @@ export async function initReviewTab() {
   try {
     const res = await fetch("/api/artifacts");
     const data = await res.json();
-    artifacts = data.artifacts || [];
+    allRawArtifacts = data.artifacts || [];
+    renderReviewArtifactSelect();
 
-    artifactSelect.innerHTML = "";
+    if (artifacts.length > 0 && !currentArtifact) {
+      loadArtifact(artifacts[0].path);
+    }
+  } catch (err) {
+    console.error("Failed to load artifacts:", err);
+  }
+}
+
+function renderReviewArtifactSelect() {
+  const hidden = getHiddenArtifacts();
+  const visible = allRawArtifacts.filter(a => !hidden.has(a.path));
+  const outputs = visible.filter(a => a.kind === "output" || a.kind === "golden" || a.path.startsWith("outputs/") || a.path.startsWith("artifacts/"));
+  const datasetRuns = visible.filter(a => a.kind === "dataset_run" || a.path.startsWith("datasets/"));
+
+  artifacts = showDatasetRuns ? visible : (outputs.length ? outputs : visible);
+
+  if (!artifacts.length) {
+    currentArtifact = null;
+    dataset = null;
+    artifactSelect.innerHTML = '<option value="">— no artifacts (or hidden) —</option>';
+    trackList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted)">No visible artifacts</div>';
+    coveragePill.textContent = "0% Labeled";
+    ctx.clearRect(0, 0, frameCanvas.width, frameCanvas.height);
+    return;
+  }
+
+  artifactSelect.innerHTML = "";
+  if (outputs.length > 0 && showDatasetRuns) {
+    const gOut = document.createElement("optgroup");
+    gOut.label = "Outputs";
+    outputs.forEach(a => {
+      const opt = document.createElement("option");
+      opt.value = a.path;
+      opt.textContent = `${a.name} (${a.coverage_percent}%)`;
+      gOut.appendChild(opt);
+    });
+    artifactSelect.appendChild(gOut);
+
+    const gDs = document.createElement("optgroup");
+    gDs.label = `Dataset Runs (${datasetRuns.length})`;
+    datasetRuns.forEach(a => {
+      const opt = document.createElement("option");
+      opt.value = a.path;
+      opt.textContent = `${a.name} (${a.coverage_percent}%)`;
+      gDs.appendChild(opt);
+    });
+    artifactSelect.appendChild(gDs);
+  } else {
     artifacts.forEach(a => {
       const opt = document.createElement("option");
       opt.value = a.path;
       opt.textContent = `${a.name} (${a.coverage_percent}%)`;
       artifactSelect.appendChild(opt);
     });
-
-    if (artifacts.length > 0) {
-      loadArtifact(artifacts[0].path);
-    }
-  } catch (err) {
-    console.error("Failed to load artifacts:", err);
   }
+
+  if (currentArtifact && [...artifactSelect.options].some(o => o.value === currentArtifact)) {
+    artifactSelect.value = currentArtifact;
+  }
+}
+
+// Wire header hide button
+const reviewHideBtn = document.getElementById("reviewHideArtifactBtn");
+if (reviewHideBtn && !reviewHideBtn.dataset.bound) {
+  reviewHideBtn.dataset.bound = "true";
+  reviewHideBtn.addEventListener("click", () => {
+    if (!currentArtifact) { showToast("Select an artifact to hide"); return; }
+    hideArtifact(currentArtifact);
+    showToast(`Hidden from view: ${currentArtifact.split("/").pop()}`);
+    currentArtifact = null;
+    renderReviewArtifactSelect();
+    if (artifacts.length > 0) loadArtifact(artifacts[0].path);
+  });
 }
 
 export async function loadArtifact(path) {

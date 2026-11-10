@@ -100,7 +100,8 @@ class JobQueue:
                     if rec.state == "running":
                         rec.state = "queued"  # interrupted by restart
                     self._jobs[rec.job_id] = rec
-                    self._order.append(rec.job_id)
+                    if rec.job_id not in self._order:
+                        self._order.append(rec.job_id)
                     self._cancel_events[rec.job_id] = threading.Event()
 
     def _persist_dataset(self, dataset: str, force: bool = False) -> None:
@@ -108,7 +109,7 @@ class JobQueue:
         if not force and now - self._last_persist.get(dataset, 0.0) < 1.0:
             return
         self._last_persist[dataset] = now
-        rows = [j.to_dict() for jid in self._order if (j := self._jobs[jid]) and j.dataset == dataset]
+        rows = [j.to_dict() for jid in self._order if (j := self._jobs.get(jid)) and j.dataset == dataset]
         jp = self._jobs_path(dataset)
         try:
             jp.parent.mkdir(parents=True, exist_ok=True)
@@ -306,6 +307,26 @@ class JobQueue:
             for ds in datasets_to_persist:
                 self._persist_dataset(ds, force=True)
         return cancelled
+
+    def clear_finished(self, dataset: Optional[str] = None) -> int:
+        """Remove completed, failed, or cancelled jobs from queue and disk persistence."""
+        with self._lock:
+            to_remove = [
+                jid for jid, rec in self._jobs.items()
+                if (dataset is None or rec.dataset == dataset)
+                and rec.state in ("done", "failed", "cancelled")
+            ]
+            datasets_to_persist = set()
+            for jid in to_remove:
+                rec = self._jobs.pop(jid, None)
+                if rec:
+                    datasets_to_persist.add(rec.dataset)
+                self._cancel_events.pop(jid, None)
+            if to_remove:
+                self._order = [jid for jid in self._order if jid in self._jobs]
+                for ds in datasets_to_persist:
+                    self._persist_dataset(ds, force=True)
+            return len(to_remove)
 
     def delete_run_jobs(self, dataset: str, run_id: str) -> int:
         """Cancel and purge all jobs associated with a specific run."""

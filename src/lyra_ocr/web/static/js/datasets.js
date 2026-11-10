@@ -32,6 +32,10 @@ async function loadDatasetsList() {
     if (currentDs) {
       dsSelect.value = currentDs;
       loadDatasetDetail(currentDs);
+    } else {
+      document.getElementById("dsTitle").textContent = "No dataset selected";
+      document.getElementById("dsStats").innerHTML = "";
+      document.getElementById("dsVideoTable").innerHTML = '<tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">Select a dataset to view videos and jobs.</td></tr></tbody>';
     }
   } catch (err) {
     document.getElementById("dsDetailError").textContent = `Failed to list datasets: ${err.message}`;
@@ -40,7 +44,14 @@ async function loadDatasetsList() {
 
 dsSelect.addEventListener("change", () => {
   currentDs = dsSelect.value || null;
-  if (currentDs) loadDatasetDetail(currentDs);
+  if (currentDs) {
+    loadDatasetDetail(currentDs);
+  } else {
+    document.getElementById("dsTitle").textContent = "No dataset selected";
+    document.getElementById("dsStats").innerHTML = "";
+    document.getElementById("dsVideoTable").innerHTML = '<tbody><tr><td colspan="6" style="text-align:center;color:var(--text-muted);padding:30px">Select a dataset to view videos and jobs.</td></tr></tbody>';
+    document.getElementById("dsDetailError").textContent = "";
+  }
 });
 
 document.getElementById("dsCreateBtn").addEventListener("click", async () => {
@@ -291,6 +302,21 @@ document.getElementById("downloadBtn").addEventListener("click", async () => {
     }
   } catch (err) {
     showToast(`Download queue failed: ${err.message}`);
+  }
+});
+
+document.getElementById("dsClearJobsBtn")?.addEventListener("click", async () => {
+  if (!confirm("Clear completed and failed jobs from queue view? (Video files on disk remain untouched)")) return;
+  try {
+    const res = await jsonFetch("/api/jobs/clear", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dataset: currentDs || undefined })
+    });
+    showToast(`Cleared ${res.cleared || 0} finished job(s) from view`);
+    if (currentDs) loadDatasetDetail(currentDs);
+  } catch (err) {
+    showToast(`Clear failed: ${err.message}`);
   }
 });
 

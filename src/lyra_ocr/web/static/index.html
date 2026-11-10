@@ -16,6 +16,7 @@
     <div class="header-controls" id="reviewHeaderControls" style="display:none">
       <label for="artifactSelect" style="color:var(--text-muted);font-size:12px">Artifact:</label>
       <select id="artifactSelect"></select>
+      <button id="reviewHideArtifactBtn" class="mini-btn" title="Hide this artifact from web dropdown (keeps files on disk)">✕ Hide</button>
       <div id="coveragePill" class="badge badge-lyric">100% Labeled</div>
       <button id="refreshBtn" title="Reload state">↻ Refresh</button>
     </div>
@@ -44,7 +45,14 @@
 
         <div class="config-grid">
           <div class="config-group" style="grid-column: span 2;">
-            <label for="lrcArtifactSelect">Existing Run Artifacts (Cached):</label>
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+              <label for="lrcArtifactSelect">Existing Run Artifacts (Cached):</label>
+              <div style="display:flex; gap:6px;">
+                <button type="button" id="lrcHideArtifactBtn" class="link-btn" style="font-size:11px" title="Hide selected artifact from web dropdown (keeps files on disk)">✕ Hide</button>
+                <button type="button" id="lrcRestoreHiddenBtn" class="link-btn" style="font-size:11px; display:none;">↺ Restore</button>
+                <button type="button" id="lrcToggleDatasetsBtn" class="link-btn" style="font-size:11px;">Show Dataset Runs</button>
+              </div>
+            </div>
             <select id="lrcArtifactSelect">
               <option value="">-- Choose Existing Artifact Directory --</option>
             </select>
@@ -105,9 +113,14 @@
 
         <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:16px;">
           <div id="lrcStatusBanner" class="status-banner" style="display:none"></div>
-          <button id="lrcGenerateBtn" class="primary" style="padding:10px 24px; font-size:14px; margin-left:auto;">
-            ▶ Generate LRC
-          </button>
+          <div style="display:flex; gap:10px; margin-left:auto;">
+            <button type="button" id="lrcResetStudioBtn" style="padding:10px 16px; font-size:13px;" title="Reset studio view and clear inputs">
+              🧹 Reset View
+            </button>
+            <button id="lrcGenerateBtn" class="primary" style="padding:10px 24px; font-size:14px;">
+              ▶ Generate LRC
+            </button>
+          </div>
         </div>
       </div>
 
@@ -330,6 +343,7 @@
         <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
           <span id="dsTitle">No dataset selected</span>
           <span style="display:flex;gap:8px">
+            <button class="mini-btn" id="dsClearJobsBtn" title="Clear completed/failed jobs from view (keeps files on disk)">🧹 Clear Finished</button>
             <button class="mini-btn danger" id="dsCancelAllBtn" title="Cancel all running and queued jobs">⏹ Cancel All</button>
             <button class="mini-btn" id="dsRunsBtn">Runs →</button>
             <button class="mini-btn" id="dsRefreshBtn">↻ Refresh</button>

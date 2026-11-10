@@ -34,7 +34,7 @@ export async function initRunsTab() {
       runDsSelect.appendChild(opt);
     });
     if (prev && list.some(d => d.name === prev)) currentRunDs = prev;
-    else currentRunDs = list.length ? list[0].name : null;
+    else currentRunDs = null;
     if (currentRunDs) {
       runDsSelect.value = currentRunDs;
       await loadRunsForDataset(currentRunDs);

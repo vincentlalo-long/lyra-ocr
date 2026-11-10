@@ -21,7 +21,7 @@ export async function initEvalTab() {
       sel.appendChild(opt);
     });
     if (prev && list.some(d => d.name === prev)) currentEvalDs = prev;
-    else currentEvalDs = list.length ? list[0].name : null;
+    else currentEvalDs = null;
     if (currentEvalDs) {
       sel.value = currentEvalDs;
       await populateEvalRuns(currentEvalDs);

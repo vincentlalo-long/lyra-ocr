@@ -31,3 +31,21 @@ export async function jsonFetch(url, opts) {
   }
   return body;
 }
+
+export function getHiddenArtifacts() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem("lyra_hidden_artifacts") || "[]"));
+  } catch (e) {
+    return new Set();
+  }
+}
+
+export function hideArtifact(path) {
+  const hidden = getHiddenArtifacts();
+  hidden.add(path);
+  localStorage.setItem("lyra_hidden_artifacts", JSON.stringify([...hidden]));
+}
+
+export function clearHiddenArtifacts() {
+  localStorage.removeItem("lyra_hidden_artifacts");
+}

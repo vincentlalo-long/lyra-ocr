@@ -691,3 +691,107 @@ def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path, monkeypatch):
     assert "Em ơi có biết" in yt_resp["lrc_text"]
 
 
+def test_web_server_clear_finished_jobs(make_web_server, tmp_path: Path):
+    """Verify POST /api/jobs/clear removes completed jobs without touching files."""
+    from lyra_ocr.dataset.models import JobRecord
+    from lyra_ocr.web.jobs import JobQueue
+
+    ds_dir = tmp_path / "datasets" / "test_ds"
+    ds_dir.mkdir(parents=True)
+    (ds_dir / "manifest.json").write_text(
+        json.dumps({"name": "test_ds", "videos": []}), encoding="utf-8"
+    )
+    queue = JobQueue(tmp_path)
+
+    # Inject mock jobs directly into queue
+    with queue._lock:
+        queue._jobs["job_done"] = JobRecord(
+            job_id="job_done",
+            dataset="test_ds",
+            video_id="v1",
+            source={"kind": "youtube", "url": "https://youtu.be/1"},
+            state="done",
+        )
+        queue._jobs["job_failed"] = JobRecord(
+            job_id="job_failed",
+            dataset="test_ds",
+            video_id="v2",
+            source={"kind": "youtube", "url": "https://youtu.be/2"},
+            state="failed",
+        )
+        queue._jobs["job_active"] = JobRecord(
+            job_id="job_active",
+            dataset="test_ds",
+            video_id="v3",
+            source={"kind": "youtube", "url": "https://youtu.be/3"},
+            state="running",
+        )
+        queue._order = ["job_done", "job_failed", "job_active"]
+        queue._persist_dataset("test_ds", force=True)
+
+    server_info = make_web_server(tmp_path, job_queue=queue)
+    url = server_info["url"]
+
+    # Clear finished jobs via API
+    status, res = http_request(f"{url}/api/jobs/clear", data={"dataset": "test_ds"}, method="POST")
+    assert status == 200
+    assert res["cleared"] == 2
+
+    # Check remaining jobs
+    with queue._lock:
+        assert "job_done" not in queue._jobs
+        assert "job_failed" not in queue._jobs
+        assert "job_active" in queue._jobs
+
+    # Verify persisted jobs.json contains only active job
+    jobs_file = ds_dir / "jobs.json"
+    assert jobs_file.exists()
+    saved = json.loads(jobs_file.read_text(encoding="utf-8"))
+    assert len(saved) == 1
+    assert saved[0]["job_id"] == "job_active"
+
+
+def test_artifacts_scope_and_classification(make_web_server, tmp_path: Path):
+    """Verify GET /api/artifacts tags kind and supports scope=outputs filtering."""
+    # 1. Output directory
+    out_dir = tmp_path / "outputs" / "sample_out"
+    out_dir.mkdir(parents=True)
+    (out_dir / "tracks.json").write_text(json.dumps({"tracks": []}), encoding="utf-8")
+    (out_dir / "manifest.json").write_text(json.dumps({"video_id": "out1"}), encoding="utf-8")
+
+    # 2. Golden directory
+    golden_dir = tmp_path / "golden" / "v1" / "artifacts" / "sample_golden"
+    golden_dir.mkdir(parents=True)
+    (golden_dir / "tracks.json").write_text(json.dumps({"tracks": []}), encoding="utf-8")
+    (golden_dir / "manifest.json").write_text(json.dumps({"video_id": "gold1"}), encoding="utf-8")
+
+    # 3. Dataset run directory (internal run video)
+    ds_run_dir = tmp_path / "datasets" / "ds1" / "runs" / "run_abc" / "videos" / "vid1"
+    ds_run_dir.mkdir(parents=True)
+    (ds_run_dir / "tracks.json").write_text(json.dumps({"tracks": []}), encoding="utf-8")
+    (ds_run_dir / "manifest.json").write_text(json.dumps({"video_id": "vid1"}), encoding="utf-8")
+
+    web_server = make_web_server(tmp_path)
+    url = web_server["url"]
+
+    # Request all artifacts
+    status, data_all = http_request(f"{url}/api/artifacts")
+    assert status == 200
+    by_path = {a["path"]: a for a in data_all["artifacts"]}
+    assert "outputs/sample_out" in by_path
+    assert by_path["outputs/sample_out"]["kind"] == "output"
+    assert "golden/v1/artifacts/sample_golden" in by_path
+    assert by_path["golden/v1/artifacts/sample_golden"]["kind"] == "golden"
+    assert "datasets/ds1/runs/run_abc/videos/vid1" in by_path
+    assert by_path["datasets/ds1/runs/run_abc/videos/vid1"]["kind"] == "dataset_run"
+
+    # Request scope=outputs (excludes dataset runs)
+    status, data_out = http_request(f"{url}/api/artifacts?scope=outputs")
+    assert status == 200
+    paths = [a["path"] for a in data_out["artifacts"]]
+    assert "outputs/sample_out" in paths
+    assert "golden/v1/artifacts/sample_golden" in paths
+    assert "datasets/ds1/runs/run_abc/videos/vid1" not in paths
+
+
+

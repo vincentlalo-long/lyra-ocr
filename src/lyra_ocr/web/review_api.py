@@ -24,7 +24,7 @@ _logger = logging.getLogger(__name__)
 class ReviewAPIMixin:
     """Review tab: artifacts, tracks, frames, and labels."""
 
-    def _handle_get_artifacts(self) -> None:
+    def _handle_get_artifacts(self, query: dict[str, list[str]] | None = None) -> None:
         """Scan known artifact roots for directories with tracks.json + manifest.json."""
         root = self._workspace_root()
         started = time.perf_counter()
@@ -32,8 +32,16 @@ class ReviewAPIMixin:
         seen: set[Path] = set()
         candidate_dirs: list[Path] = []
 
+        include_datasets = True
+        if query:
+            if "scope" in query and query["scope"][0] in ("outputs", "user"):
+                include_datasets = False
+            elif "include_datasets" in query and query["include_datasets"][0].lower() in ("0", "false", "no"):
+                include_datasets = False
+
         # Never glob the whole workspace: `.venv` (or any other tree) would be walked.
-        search_roots = [root / name for name in ("outputs", "golden", "datasets", "artifacts")]
+        root_names = ("outputs", "golden", "artifacts") if not include_datasets else ("outputs", "golden", "datasets", "artifacts")
+        search_roots = [root / name for name in root_names]
 
         for s_root in search_roots:
             if not s_root.is_dir():
@@ -52,6 +60,15 @@ class ReviewAPIMixin:
         artifacts_list = []
         for d in candidate_dirs:
             rel_path = str(d.relative_to(root)) if d.is_relative_to(root) else str(d)
+            if rel_path.startswith("outputs"):
+                kind = "output"
+            elif rel_path.startswith("golden"):
+                kind = "golden"
+            elif rel_path.startswith("datasets"):
+                kind = "dataset_run"
+            else:
+                kind = "artifact"
+
             try:
                 status = get_label_status(d)
                 manifest_path = d / "manifest.json"
@@ -67,6 +84,7 @@ class ReviewAPIMixin:
                 artifacts_list.append({
                     "name": d.name,
                     "path": rel_path,
+                    "kind": kind,
                     "video_id": status.get("video_id", d.name),
                     "title": v_title,
                     "channel": v_channel,

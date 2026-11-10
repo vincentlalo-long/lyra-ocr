@@ -285,6 +285,13 @@ class DatasetAPIMixin:
             self._send_json({"ok": True, "cancelled": len(cancelled)})
             return
 
+        if len(parts) == 1 and parts[0] in ("clear", "clear_finished"):
+            payload = self._read_json_body() or {}
+            dataset = payload.get("dataset")
+            cleared = queue.clear_finished(dataset=dataset)
+            self._send_json({"ok": True, "cleared": cleared})
+            return
+
         if len(parts) != 2:
             self._send_error(f"Unknown job endpoint: {rest}", 404)
             return

@@ -3,6 +3,7 @@
 // =========================================================================
 
 import { activeTab } from "./router.js";
+import { clearHiddenArtifacts, getHiddenArtifacts, hideArtifact, showToast } from "./core.js";
 
 let currentCues = [];
 let currentMetadata = { title: "", artist: "", album: "", by: "Lyra OCR", offset_ms: 0 };
@@ -14,6 +15,9 @@ let playbackTimeMs = 0;
 let isPlaying = false;
 let playTimer = null;
 let maxDurationMs = 180000;
+
+let allRawArtifacts = [];
+let showDatasetRuns = false;
 
 export async function initLrcStudio() {
   await loadArtifactOptions();
@@ -28,18 +32,102 @@ async function loadArtifactOptions() {
     const res = await fetch("/api/artifacts");
     if (!res.ok) return;
     const data = await res.json();
-    const artifacts = data.artifacts || [];
-
-    select.innerHTML = '<option value="">-- Choose Existing Artifact Directory --</option>';
-    for (const art of artifacts) {
-      const opt = document.createElement("option");
-      opt.value = art.path;
-      opt.textContent = `${art.name} (${art.title || art.video_id || "video"})`;
-      select.appendChild(opt);
-    }
+    allRawArtifacts = data.artifacts || [];
+    renderArtifactDropdown();
   } catch (err) {
     console.warn("Failed to load artifacts for LRC studio", err);
   }
+}
+
+function renderArtifactDropdown() {
+  const select = document.getElementById("lrcArtifactSelect");
+  if (!select) return;
+
+  const currentVal = select.value;
+  const hidden = getHiddenArtifacts();
+  const visible = allRawArtifacts.filter(a => !hidden.has(a.path));
+  const outputs = visible.filter(a => a.kind === "output" || a.path.startsWith("outputs/") || a.path.startsWith("artifacts/"));
+  const datasetRuns = visible.filter(a => a.kind === "dataset_run" || a.path.startsWith("datasets/"));
+
+  select.innerHTML = '<option value="">-- Choose Existing Artifact Directory --</option>';
+
+  if (outputs.length > 0) {
+    const group = document.createElement("optgroup");
+    group.label = "Outputs";
+    for (const art of outputs) {
+      const opt = document.createElement("option");
+      opt.value = art.path;
+      opt.textContent = `${art.name} (${art.title || art.video_id || "video"})`;
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  }
+
+  if (showDatasetRuns && datasetRuns.length > 0) {
+    const group = document.createElement("optgroup");
+    group.label = `Dataset Runs (${datasetRuns.length})`;
+    for (const art of datasetRuns) {
+      const opt = document.createElement("option");
+      opt.value = art.path;
+      opt.textContent = `${art.name} (${art.title || art.video_id || "video"})`;
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  }
+
+  if (currentVal && [...select.options].some(o => o.value === currentVal)) {
+    select.value = currentVal;
+  }
+
+  const toggleBtn = document.getElementById("lrcToggleDatasetsBtn");
+  if (toggleBtn) {
+    toggleBtn.textContent = showDatasetRuns
+      ? `Hide Dataset Runs (${datasetRuns.length})`
+      : `Show Dataset Runs (${datasetRuns.length})`;
+    toggleBtn.style.display = datasetRuns.length ? "" : "none";
+  }
+
+  const restoreBtn = document.getElementById("lrcRestoreHiddenBtn");
+  if (restoreBtn) {
+    restoreBtn.style.display = hidden.size > 0 ? "" : "none";
+    restoreBtn.textContent = `↺ Restore ${hidden.size} Hidden`;
+  }
+}
+
+export function resetStudioView() {
+  currentCues = [];
+  currentMetadata = { title: "", artist: "", album: "", by: "Lyra OCR", offset_ms: 0 };
+  currentLrcText = "";
+  currentArtifactDir = "";
+  currentVideoPath = "";
+  currentOutLrc = "";
+  playbackTimeMs = 0;
+  if (isPlaying) togglePlayback();
+
+  const artSelect = document.getElementById("lrcArtifactSelect");
+  if (artSelect) artSelect.value = "";
+  const vidIn = document.getElementById("lrcVideoInput");
+  if (vidIn) vidIn.value = "";
+  const titleIn = document.getElementById("lrcTitleInput");
+  if (titleIn) titleIn.value = "";
+  const artistIn = document.getElementById("lrcArtistInput");
+  if (artistIn) artistIn.value = "";
+  const offsetIn = document.getElementById("lrcOffsetMs");
+  if (offsetIn) offsetIn.value = "0";
+  const revIn = document.getElementById("lrcIncludeReview");
+  if (revIn) revIn.checked = false;
+  const forceIn = document.getElementById("lrcForceRerun");
+  if (forceIn) forceIn.checked = false;
+
+  const banner = document.getElementById("lrcStatusBanner");
+  if (banner) banner.style.display = "none";
+  const mainCont = document.getElementById("studioMainContainer");
+  if (mainCont) mainCont.style.display = "none";
+
+  renderCuesList();
+  renderKaraokeView();
+  syncCuesToRawLrc();
+  showToast("Studio view cleared");
 }
 
 function bindStudioEvents() {
@@ -57,6 +145,43 @@ function bindStudioEvents() {
         document.getElementById("lrcVideoInput").value = "";
       }
     });
+  }
+
+  const hideBtn = document.getElementById("lrcHideArtifactBtn");
+  if (hideBtn && !hideBtn.dataset.bound) {
+    hideBtn.dataset.bound = "true";
+    hideBtn.addEventListener("click", () => {
+      const val = artSelect ? artSelect.value : "";
+      if (!val) { showToast("Select an artifact to hide from web view"); return; }
+      hideArtifact(val);
+      showToast(`Hidden from view: ${basename(val)}`);
+      renderArtifactDropdown();
+    });
+  }
+
+  const restoreBtn = document.getElementById("lrcRestoreHiddenBtn");
+  if (restoreBtn && !restoreBtn.dataset.bound) {
+    restoreBtn.dataset.bound = "true";
+    restoreBtn.addEventListener("click", () => {
+      clearHiddenArtifacts();
+      showToast("All hidden artifacts restored");
+      renderArtifactDropdown();
+    });
+  }
+
+  const toggleDsBtn = document.getElementById("lrcToggleDatasetsBtn");
+  if (toggleDsBtn && !toggleDsBtn.dataset.bound) {
+    toggleDsBtn.dataset.bound = "true";
+    toggleDsBtn.addEventListener("click", () => {
+      showDatasetRuns = !showDatasetRuns;
+      renderArtifactDropdown();
+    });
+  }
+
+  const resetBtn = document.getElementById("lrcResetStudioBtn");
+  if (resetBtn && !resetBtn.dataset.bound) {
+    resetBtn.dataset.bound = "true";
+    resetBtn.addEventListener("click", resetStudioView);
   }
 
   const copyBtn = document.getElementById("lrcCopyBtn");

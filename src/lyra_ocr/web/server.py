@@ -74,7 +74,7 @@ def _youtube_list(handler: Any, query: Query) -> None:
 
 
 GET_ROUTES: dict[str, Callable[[Any, Query], None]] = {
-    "/api/artifacts": lambda handler, query: handler._handle_get_artifacts(),
+    "/api/artifacts": lambda handler, query: handler._handle_get_artifacts(query),
     "/api/data": lambda handler, query: handler._handle_get_data(_query_param(query, "dir")),
     "/api/frame": lambda handler, query: handler._handle_get_frame(
         _query_param(query, "dir"), _query_param(query, "file")
