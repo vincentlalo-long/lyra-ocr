@@ -225,3 +225,45 @@ def test_build_lrc_from_video_reruns_pipeline_when_config_mismatch(tmp_path: Pat
         )
         assert mock_pipeline.call_count == 1
 
+
+def test_build_lrc_from_artifacts_invalidates_cache_on_option_change(tmp_path: Path):
+    artifacts_dir = tmp_path / "art"
+    artifacts_dir.mkdir()
+    manifest = {"video_id": "v1", "probe": {"duration": 10.0}}
+    tracks = {
+        "total_tracks": 2,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "features": {"dominant_text": "ACCEPTED"},
+                "segments": [],
+            },
+            {
+                "track_id": 2,
+                "start_ms": 4000,
+                "end_ms": 6000,
+                "label": "lyric",
+                "decision": "review",
+                "features": {"dominant_text": "UNDER REVIEW"},
+                "segments": [],
+            },
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    out_lrc = tmp_path / "song.lrc"
+
+    # Run 1: without include_review -> 1 cue
+    res1 = build_lrc_from_artifacts(artifacts_dir, out_lrc, include_review=False)
+    assert res1["n_cues"] == 1
+
+    # Run 2: with include_review=True -> must NOT return cached 1 cue, must return 2 cues!
+    res2 = build_lrc_from_artifacts(artifacts_dir, out_lrc, include_review=True)
+    assert res2["n_cues"] == 2
+
+

@@ -29,19 +29,43 @@ def build_lrc_from_artifacts(
     art_path = Path(artifacts_dir)
     out_path = Path(out_lrc)
 
+    target_options = {
+        "include_review": bool(include_review),
+        "correct_method": str(correct_method),
+        "refine": bool(refine),
+        "offset_ms": int(offset_ms),
+        "title": title or "",
+        "artist": artist or "",
+    }
+
     cues_json_path = out_path.with_suffix(".cues.json")
     if not force and out_path.exists() and cues_json_path.exists():
         try:
             cached_cues = json.loads(cues_json_path.read_text(encoding="utf-8"))
-            return {
-                "video_id": cached_cues.get("video_id", out_path.stem),
-                "out_lrc": str(out_path),
-                "out_cues_json": str(cues_json_path),
-                "n_cues": len(cached_cues.get("cues", [])),
-                "n_skipped": len(cached_cues.get("skipped", [])),
-                "review_required": sum(1 for c in cached_cues.get("cues", []) if c.get("review_required")),
-                "skipped": cached_cues.get("skipped", []),
-            }
+            cached_opts = cached_cues.get("options")
+            is_valid = (cached_opts == target_options)
+            if video_path and cached_cues.get("video_path"):
+                if str(video_path) != str(cached_cues.get("video_path")):
+                    is_valid = False
+
+            cues_mtime = cues_json_path.stat().st_mtime
+            tracks_file = art_path / "tracks.json"
+            if tracks_file.exists() and tracks_file.stat().st_mtime > cues_mtime:
+                is_valid = False
+            labels_file = art_path / "labels.jsonl"
+            if labels_file.exists() and labels_file.stat().st_mtime > cues_mtime:
+                is_valid = False
+
+            if is_valid:
+                return {
+                    "video_id": cached_cues.get("video_id", out_path.stem),
+                    "out_lrc": str(out_path),
+                    "out_cues_json": str(cues_json_path),
+                    "n_cues": len(cached_cues.get("cues", [])),
+                    "n_skipped": len(cached_cues.get("skipped", [])),
+                    "review_required": sum(1 for c in cached_cues.get("cues", []) if c.get("review_required")),
+                    "skipped": cached_cues.get("skipped", []),
+                }
         except Exception:
             pass
 
@@ -100,6 +124,7 @@ def build_lrc_from_artifacts(
         duration_ms=duration_ms,
         tracker=tracker_name,
         skipped=skipped,
+        options=target_options,
     )
 
     return {
@@ -183,6 +208,15 @@ def build_lrc_from_video(
                         needs_pipeline = True
                 except Exception:
                     pass
+
+            # 4. Video identity check
+            manifest_vpath = manifest_data.get("video_path")
+            if manifest_vpath and v_path.exists():
+                try:
+                    if Path(manifest_vpath).resolve() != v_path.resolve():
+                        needs_pipeline = True
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning("Manifest config check failed: %s", e)
             needs_pipeline = True
@@ -209,11 +243,13 @@ def build_lrc_from_video(
             force=force,
         )
 
+    effective_force = force or needs_pipeline
     return build_lrc_from_artifacts(
         artifacts_dir=art_dir,
         out_lrc=out_lrc,
+        video_path=v_path,
         title=title or None,
         artist=channel or None,
-        force=force,
+        force=effective_force,
         **build_kwargs,
     )
