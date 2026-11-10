@@ -53,6 +53,7 @@ def select_cues(
     include_review: bool = False,
     video_id: str = "",
     correct_method: str = "dictionary",
+    frame_width: int = 1280,
     frame_height: int = 720,
 ) -> tuple[list[LyricCue], list[dict[str, Any]]]:
     accepted_cues: list[LyricCue] = []
@@ -97,59 +98,77 @@ def select_cues(
             })
             continue
 
-        # 4. Text resolution & correction
-        human_text = (h.get("corrected_text") or "").strip()
-        if human_text:
-            final_text = human_text
-            raw_text = track.get("features", {}).get("dominant_text") or human_text
-            corr_info = CorrectionInfo(method="human", changed=True, confidence=1.0)
-        else:
-            cfg = CorrectionConfig(method=correct_method)
-            final_text, raw_text, corr_info = correct_text(track, tracks, cfg, vocab=corpus_vocab)
-
-        if not final_text.strip():
-            skipped_records.append({
-                "track_id": track.get("track_id"),
-                "reason": "empty_text",
-                "label": label,
-                "decision": decision,
-                "text": raw_text,
-            })
-            continue
-
-        # 5. Timing
-        start_ms = int(track.get("start_ms", 0))
-        end_ms = int(track.get("end_ms", start_ms))
-        if end_ms <= start_ms:
-            end_ms = start_ms + 300
-
-        # 6. Spatial
+        # Spatial info
         bbox = track.get("bbox", [])
         mean_centroid = track.get("features", {}).get("mean_centroid")
         if mean_centroid and len(mean_centroid) >= 2:
             x_center = float(mean_centroid[0])
             y_center = float(mean_centroid[1])
         elif bbox and len(bbox) >= 4:
-            x_center = float((bbox[0] + bbox[2]) / 2.0 / 1280.0)
+            x_center = float((bbox[0] + bbox[2]) / 2.0 / max(1, frame_width))
             y_center = float((bbox[1] + bbox[3]) / 2.0 / max(1, frame_height))
         else:
             x_center = 0.0
             y_center = 0.0
 
-        cue = LyricCue(
-            start_ms=start_ms,
-            end_ms=end_ms,
-            text=final_text,
-            raw_text=raw_text,
-            source_track_ids=[track.get("track_id")] if track.get("track_id") is not None else [],
-            confidence=float(track.get("confidence", 0.0)),
-            decision=decision,
-            review_required=(decision == "review"),
-            bbox=bbox,
-            x_center=x_center,
-            y_center=y_center,
-            correction=corr_info,
-        )
-        accepted_cues.append(cue)
+        # 4. Text resolution & timing per segment
+        segments = track.get("segments") or []
+        if not segments:
+            segments = [{
+                "segment_id": None,
+                "start_ms": track.get("start_ms", 0),
+                "end_ms": track.get("end_ms", 0),
+                "text": track.get("features", {}).get("dominant_text", ""),
+                "confidence": track.get("confidence", 0.0),
+            }]
+
+        human_text = (h.get("corrected_text") or "").strip()
+
+        for seg in segments:
+            seg_id = seg.get("segment_id")
+            if human_text and (len(segments) == 1 or seg_id in (0, None)):
+                final_text = human_text
+                raw_text = seg.get("text") or track.get("features", {}).get("dominant_text") or human_text
+                corr_info = CorrectionInfo(method="human", changed=True, confidence=1.0)
+            else:
+                cfg = CorrectionConfig(method=correct_method)
+                final_text, raw_text, corr_info = correct_text(
+                    track, tracks, cfg, vocab=corpus_vocab, segment=seg if seg_id is not None else None
+                )
+
+            if not final_text.strip():
+                skipped_records.append({
+                    "track_id": track.get("track_id"),
+                    "segment_id": seg_id,
+                    "reason": "empty_text",
+                    "label": label,
+                    "decision": decision,
+                    "text": raw_text,
+                })
+                continue
+
+            seg_start_ms = int(seg.get("start_ms", track.get("start_ms", 0)))
+            seg_end_ms = int(seg.get("end_ms", seg_start_ms))
+            if seg_end_ms <= seg_start_ms:
+                seg_end_ms = seg_start_ms + 300
+
+            cue = LyricCue(
+                start_ms=seg_start_ms,
+                end_ms=seg_end_ms,
+                text=final_text,
+                raw_text=raw_text,
+                source_track_ids=[track.get("track_id")] if track.get("track_id") is not None else [],
+                source_segment_ids=[seg_id] if seg_id is not None else [],
+                confidence=float(seg.get("confidence", track.get("confidence", 0.0))),
+                decision=decision,
+                review_required=(decision == "review"),
+                bbox=bbox,
+                x_center=x_center,
+                y_center=y_center,
+                correction=corr_info,
+            )
+            accepted_cues.append(cue)
+
+    return accepted_cues, skipped_records
 
     return accepted_cues, skipped_records

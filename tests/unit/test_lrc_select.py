@@ -118,6 +118,54 @@ def test_select_cues_human_labels_override():
     assert 3 in skipped_tids
 
 
+def test_select_cues_multi_segment_track():
+    tracks = [
+        {
+            "track_id": 42,
+            "start_ms": 1000,
+            "end_ms": 6000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.98,
+            "features": {"dominant_text": "I FEEL THE NIGHT EXPLODE", "mean_centroid": [0.5, 0.8]},
+            "segments": [
+                {
+                    "segment_id": 0,
+                    "start_ms": 1000,
+                    "end_ms": 3000,
+                    "text": "I FEEL THE NIGHT EXPLODE",
+                    "confidence": 0.99,
+                },
+                {
+                    "segment_id": 1,
+                    "start_ms": 3500,
+                    "end_ms": 6000,
+                    "text": "WHEN WE ARE TOGETHER",
+                    "confidence": 0.97,
+                },
+            ],
+            "occurrences": [
+                {"segment_id": 0, "timestamp_ms": 1500, "text_norm": "I FEEL THE NIGHT EXPLODE", "confidence": 0.99},
+                {"segment_id": 1, "timestamp_ms": 4000, "text_norm": "WHEN WE ARE TOGETHER", "confidence": 0.97},
+            ],
+        }
+    ]
+
+    cues, skipped = select_cues(tracks, human_labels={})
+    assert len(cues) == 2
+    assert cues[0].source_track_ids == [42]
+    assert cues[0].source_segment_ids == [0]
+    assert cues[0].start_ms == 1000
+    assert cues[0].end_ms == 3000
+    assert cues[0].text == "I FEEL THE NIGHT EXPLODE"
+
+    assert cues[1].source_track_ids == [42]
+    assert cues[1].source_segment_ids == [1]
+    assert cues[1].start_ms == 3500
+    assert cues[1].end_ms == 6000
+    assert cues[1].text == "WHEN WE ARE TOGETHER"
+
+
 def test_load_artifacts(tmp_path: Path):
     manifest = {"video_id": "test_vid", "probe": {"duration": 60}}
     tracks_data = {

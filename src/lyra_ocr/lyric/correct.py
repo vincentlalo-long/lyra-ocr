@@ -80,29 +80,49 @@ def correct_text(
     config: CorrectionConfig,
     *,
     vocab: Counter[str] | None = None,
+    segment: dict[str, Any] | None = None,
 ) -> tuple[str, str, CorrectionInfo]:
     variants: list[tuple[str, float]] = []
 
-    dom = track.get("features", {}).get("dominant_text", "")
-    dom_conf = float(track.get("features", {}).get("avg_confidence", track.get("confidence", 0.0)))
-    if dom:
-        norm_dom = _normalize_string(dom)
-        if norm_dom:
-            variants.append((norm_dom, dom_conf))
+    if segment is not None:
+        seg_text = segment.get("text", "")
+        seg_conf = float(segment.get("confidence", 0.0))
+        if seg_text:
+            norm_seg = _normalize_string(seg_text)
+            if norm_seg:
+                variants.append((norm_seg, seg_conf))
 
-    for seg in track.get("segments", []):
-        t = seg.get("text", "")
-        c = float(seg.get("confidence", 0.0))
-        norm_t = _normalize_string(t)
-        if norm_t:
-            variants.append((norm_t, c))
+        target_seg_id = segment.get("segment_id")
+        for occ in track.get("occurrences", []):
+            if target_seg_id is not None and occ.get("segment_id") is not None:
+                if occ.get("segment_id") != target_seg_id:
+                    continue
+            t = occ.get("text_norm", "")
+            c = float(occ.get("confidence", 0.0))
+            norm_t = _normalize_string(t)
+            if norm_t:
+                variants.append((norm_t, c))
+    else:
+        dom = track.get("features", {}).get("dominant_text", "")
+        dom_conf = float(track.get("features", {}).get("avg_confidence", track.get("confidence", 0.0)))
+        if dom:
+            norm_dom = _normalize_string(dom)
+            if norm_dom:
+                variants.append((norm_dom, dom_conf))
 
-    for occ in track.get("occurrences", []):
-        t = occ.get("text_norm", "")
-        c = float(occ.get("confidence", 0.0))
-        norm_t = _normalize_string(t)
-        if norm_t:
-            variants.append((norm_t, c))
+        for seg in track.get("segments", []):
+            t = seg.get("text", "")
+            c = float(seg.get("confidence", 0.0))
+            norm_t = _normalize_string(t)
+            if norm_t:
+                variants.append((norm_t, c))
+
+        for occ in track.get("occurrences", []):
+            t = occ.get("text_norm", "")
+            c = float(occ.get("confidence", 0.0))
+            norm_t = _normalize_string(t)
+            if norm_t:
+                variants.append((norm_t, c))
 
     if not variants:
         return "", "", CorrectionInfo(method="none", changed=False)
