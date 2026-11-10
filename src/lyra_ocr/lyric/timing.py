@@ -24,9 +24,10 @@ def refine_timings(
     fps: float = 25.0,
     window_ms: int = 1000,
     enabled: bool = True,
-) -> list[LyricCue]:
+    return_meta: bool = False,
+) -> list[LyricCue] | tuple[list[LyricCue], set[int]]:
     if not enabled:
-        return cues
+        return (cues, set()) if return_meta else cues
 
     v_path = Path(video_path)
     art_path = Path(artifacts_dir)
@@ -36,12 +37,12 @@ def refine_timings(
             video_path,
             artifacts_dir,
         )
-        return cues
+        return (cues, set()) if return_meta else cues
 
     frame_index_path = art_path / "frame_index.json"
     if not frame_index_path.is_file():
         logger.warning("refine_timings skipped: frame_index.json not found in '%s'", artifacts_dir)
-        return cues
+        return (cues, set()) if return_meta else cues
 
     try:
         raw_fi = json.loads(frame_index_path.read_text(encoding="utf-8"))
@@ -72,8 +73,9 @@ def refine_timings(
 
     frame_interval_ms = int(1000.0 / fps)
     tmp_refine_dir = art_path / "refine_tmp"
+    refined_indices: set[int] = set()
 
-    for cue in cues:
+    for cue_idx, cue in enumerate(cues):
         # Find best occurrence to extract visual template
         best_occ = None
         best_conf = -1.0
@@ -177,7 +179,8 @@ def refine_timings(
                     visual_end = matching[-1]
                     cue.start_ms = visual_start
                     cue.end_ms = max(visual_start + 300, visual_end + frame_interval_ms)
+                    refined_indices.add(cue_idx)
         except Exception as e:
             logger.warning("Error during dense scan for cue '%s': %s", cue.text, e)
 
-    return cues
+    return (cues, refined_indices) if return_meta else cues

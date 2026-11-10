@@ -100,6 +100,12 @@ def evaluate_run(
         results.append(video_res)
 
     scorable_results = [r for r in results if r["scorable"]]
+    timing_ok = [
+        r["timing_visual"]
+        for r in scorable_results
+        if r["timing_visual"].get("status") == "ok"
+        and r["timing_visual"].get("median_abs_error_ms") is not None
+    ]
 
     summary = {
         "dataset": dataset,
@@ -125,6 +131,12 @@ def evaluate_run(
             "mean_extra_line_rate": round(
                 float(np.mean([r["text_selection"]["extra_line_rate"] for r in scorable_results])), 4
             ) if scorable_results else 0.0,
+            "mean_visual_median_err_ms": round(
+                float(np.mean([t["median_abs_error_ms"] for t in timing_ok])), 1
+            ) if timing_ok else None,
+            "mean_visual_within_300ms": round(
+                float(np.mean([t["percent_within_300ms"] for t in timing_ok])), 3
+            ) if timing_ok else None,
         },
         "videos": results,
     }
@@ -166,6 +178,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Mean Line F1     : {s['mean_line_f1'] * 100:.2f}%")
     print(f"Mean CER         : {s['mean_cer'] * 100:.2f}%")
     print(f"Mean WER         : {s['mean_wer'] * 100:.2f}%")
+    if s.get("mean_visual_median_err_ms") is not None:
+        print(f"Visual Med Error : {s['mean_visual_median_err_ms']:.1f}ms")
+    if s.get("mean_visual_within_300ms") is not None:
+        print(f"Visual <=300ms   : {s['mean_visual_within_300ms'] * 100:.1f}%")
     print(f"Report saved to  : {args.out}")
     return 0
 

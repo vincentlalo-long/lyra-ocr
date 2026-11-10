@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from lyra_ocr.labels import load_labels_jsonl
-from lyra_ocr.lyric.correct import correct_text
+from lyra_ocr.lyric.correct import build_corpus_vocab, correct_text
 from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo, LyricCue
 
 
@@ -57,6 +57,7 @@ def select_cues(
 ) -> tuple[list[LyricCue], list[dict[str, Any]]]:
     accepted_cues: list[LyricCue] = []
     skipped_records: list[dict[str, Any]] = []
+    corpus_vocab = build_corpus_vocab(tracks) if correct_method == "dictionary" else None
 
     for track in tracks:
         tid = str(track.get("track_id", ""))
@@ -104,7 +105,7 @@ def select_cues(
             corr_info = CorrectionInfo(method="human", changed=True, confidence=1.0)
         else:
             cfg = CorrectionConfig(method=correct_method)
-            final_text, raw_text, corr_info = correct_text(track, tracks, cfg)
+            final_text, raw_text, corr_info = correct_text(track, tracks, cfg, vocab=corpus_vocab)
 
         if not final_text.strip():
             skipped_records.append({

@@ -69,3 +69,21 @@ def test_correct_text_preserves_rare_proper_nouns():
     final, raw, info = correct_text(track, all_tracks, cfg)
     # Should not be changed because no strong candidate in vocab
     assert final == "Xerath"
+
+
+def test_correct_text_recovers_ocr_digit_substitution():
+    all_tracks = [
+        {"features": {"dominant_text": "I FEEL THE NIGHT EXPLODE"}},
+        {"features": {"dominant_text": "EXPLODE INTO THE NIGHT"}},
+        {"features": {"dominant_text": "DON'T EXPLODE"}},
+        {"features": {"dominant_text": "HEARTS EXPLODE"}},
+    ]
+    track = {
+        "features": {"dominant_text": "I FEEL THE NIGHT EXPL0DE"},
+        "occurrences": [{"text_norm": "I FEEL THE NIGHT EXPL0DE", "confidence": 0.9}],
+    }
+    cfg = CorrectionConfig(method="dictionary", min_vocab_freq=2)
+    final, raw, info = correct_text(track, all_tracks, cfg)
+    assert "EXPLODE" in final
+    assert "EXPL0DE" not in final
+    assert info.changed is True

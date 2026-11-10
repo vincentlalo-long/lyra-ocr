@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from lyra_ocr.lyric.models import LyricCue
 from lyra_ocr.track import string_similarity
 
@@ -24,6 +26,11 @@ def _bbox_iou(box_a: list[int], box_b: list[int]) -> float:
     return inter / union if union > 0 else 0.0
 
 
+def _track_sort_key(tid: Any) -> tuple[int, int | str]:
+    s = str(tid)
+    return (0, int(s)) if s.isdigit() else (1, s)
+
+
 def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
     if not cues:
         return []
@@ -38,7 +45,7 @@ def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
         key=lambda c: (
             c.start_ms,
             c.y_center,
-            c.source_track_ids[0] if c.source_track_ids else 0,
+            _track_sort_key(c.source_track_ids[0]) if c.source_track_ids else (0, -1),
         ),
     )
 
@@ -70,8 +77,10 @@ def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
                 target.y_center = cue.y_center
                 target.correction = cue.correction
 
-            target.source_track_ids = sorted(list(set(target.source_track_ids + cue.source_track_ids)))
-            target.source_segment_ids = sorted(list(set(target.source_segment_ids + cue.source_segment_ids)))
+            all_tids = list(set(target.source_track_ids + cue.source_track_ids))
+            target.source_track_ids = sorted(all_tids, key=_track_sort_key)
+            all_sids = list(set(target.source_segment_ids + cue.source_segment_ids))
+            target.source_segment_ids = sorted(all_sids, key=_track_sort_key)
             target.review_required = target.review_required or cue.review_required
             target.end_ms = max(target.end_ms, cue.end_ms)
         else:
@@ -83,6 +92,6 @@ def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
         key=lambda c: (
             c.start_ms,
             c.y_center,
-            c.source_track_ids[0] if c.source_track_ids else 0,
+            _track_sort_key(c.source_track_ids[0]) if c.source_track_ids else (0, -1),
         ),
     )

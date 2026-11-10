@@ -77,3 +77,30 @@ def test_clamp_negative_start_ms():
     result = dedupe_and_group([cue])
     assert len(result) == 1
     assert result[0].start_ms == 0
+
+
+def test_grouping_mixed_int_and_str_track_ids():
+    cue1 = LyricCue(
+        start_ms=1000,
+        end_ms=2000,
+        text="SAME TEXT",
+        source_track_ids=[1],
+        y_center=0.5,
+    )
+    cue2 = LyricCue(
+        start_ms=1000,
+        end_ms=2000,
+        text="SAME TEXT",
+        source_track_ids=["1"],
+        y_center=0.5,
+    )
+    cue3 = LyricCue(
+        start_ms=1000,
+        end_ms=2000,
+        text="OTHER TEXT",
+        source_track_ids=[],
+        y_center=0.5,
+    )
+    # Should not raise TypeError: '<' not supported between instances of 'int' and 'str'
+    result = dedupe_and_group([cue1, cue2, cue3])
+    assert len(result) == 2

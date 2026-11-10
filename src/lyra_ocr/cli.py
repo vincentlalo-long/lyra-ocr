@@ -369,6 +369,7 @@ def run_lrc(args: argparse.Namespace) -> int:
             result = build_lrc_from_artifacts(
                 artifacts_dir=artifacts_dir,
                 out_lrc=out_lrc,
+                video_path=video_path,
                 include_review=args.include_review,
                 correct_method=args.correct,
                 refine=bool(getattr(args, "refine", False)),

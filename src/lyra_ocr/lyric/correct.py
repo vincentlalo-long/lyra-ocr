@@ -78,6 +78,8 @@ def correct_text(
     track: dict[str, Any],
     all_tracks: list[dict[str, Any]],
     config: CorrectionConfig,
+    *,
+    vocab: Counter[str] | None = None,
 ) -> tuple[str, str, CorrectionInfo]:
     variants: list[tuple[str, float]] = []
 
@@ -154,24 +156,24 @@ def correct_text(
         )
 
     # Method: dictionary (corpus-derived)
-    vocab = build_corpus_vocab(all_tracks)
+    effective_vocab = vocab if vocab is not None else build_corpus_vocab(all_tracks)
 
     def _replace_token(match: re.Match) -> str:
         tok = match.group(0)
-        if _is_cjk(tok) or re.search(r"\d", tok):
+        if _is_cjk(tok) or tok.isdigit():
             return tok
         if len(tok) < config.min_token_len:
             return tok
 
         tok_lower = tok.lower()
-        tok_freq = vocab.get(tok_lower, 0)
+        tok_freq = effective_vocab.get(tok_lower, 0)
         if tok_freq >= config.min_vocab_freq:
             return tok
 
         max_dist = max(1, int(len(tok) * config.max_edit_ratio))
         candidates: list[tuple[str, int]] = []
 
-        for cand, cand_freq in vocab.items():
+        for cand, cand_freq in effective_vocab.items():
             if cand_freq >= 3 * max(1, tok_freq):
                 if abs(len(cand) - len(tok_lower)) <= max_dist:
                     dist = _levenshtein(tok_lower, cand)

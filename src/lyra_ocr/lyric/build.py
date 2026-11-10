@@ -16,6 +16,7 @@ def build_lrc_from_artifacts(
     artifacts_dir: str | Path,
     out_lrc: str | Path,
     *,
+    video_path: str | Path | None = None,
     include_review: bool = False,
     correct_method: str = "dictionary",
     refine: bool = False,
@@ -36,7 +37,7 @@ def build_lrc_from_artifacts(
         )
 
     video_id = manifest.get("video_id") or art_path.name
-    video_path = manifest.get("video_path") or ""
+    eff_video_path = str(video_path) if video_path else (manifest.get("video_path") or "")
     duration_ms = int(manifest.get("probe", {}).get("duration", 0) * 1000)
     tracker_name = manifest.get("tracker", {}).get("name", "bytetrack")
 
@@ -62,7 +63,7 @@ def build_lrc_from_artifacts(
     if refine:
         try:
             from lyra_ocr.lyric.timing import refine_timings
-            cues = refine_timings(cues, video_path, manifest, str(art_path), enabled=True)
+            cues = refine_timings(cues, eff_video_path, manifest, str(art_path), enabled=True)
         except Exception as e:
             logger.warning("Refine timings failed, falling back to coarse: %s", e)
 
@@ -76,7 +77,7 @@ def build_lrc_from_artifacts(
         cues,
         metadata,
         video_id=video_id,
-        video_path=video_path,
+        video_path=eff_video_path,
         duration_ms=duration_ms,
         tracker=tracker_name,
         skipped=skipped,

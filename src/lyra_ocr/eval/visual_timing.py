@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from pathlib import Path
@@ -26,23 +27,22 @@ def measure_visual_timing(
     if not cues or not v_path.is_file() or not art_path.is_dir():
         return {
             "status": "not_measured",
-            "median_abs_error_ms": 0.0,
-            "p90_abs_error_ms": 0.0,
-            "percent_within_100ms": 1.0,
-            "percent_within_300ms": 1.0,
-            "oracle_confidence_mean": 1.0,
+            "median_abs_error_ms": None,
+            "p90_abs_error_ms": None,
+            "percent_within_100ms": 0.0,
+            "percent_within_300ms": 0.0,
+            "oracle_confidence_mean": 0.0,
+            "n_measured_cues": 0,
         }
 
     try:
         from lyra_ocr.lyric.timing import refine_timings
-        import copy
 
-        # Copy cues to measure differences after dense template search
         cues_copy = [copy.deepcopy(c) for c in cues]
         manifest_path = art_path / "manifest.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.is_file() else {}
 
-        refined = refine_timings(
+        refined, refined_indices = refine_timings(
             cues_copy,
             video_path,
             manifest,
@@ -50,15 +50,26 @@ def measure_visual_timing(
             fps=fps,
             window_ms=window_ms,
             enabled=True,
+            return_meta=True,
         )
 
         errors_ms: list[float] = []
-        for orig, ref in zip(cues, refined):
+        for idx in refined_indices:
+            orig = cues[idx]
+            ref = refined[idx]
             err = abs(orig.start_ms - ref.start_ms)
             errors_ms.append(float(err))
 
         if not errors_ms:
-            errors_ms = [0.0]
+            return {
+                "status": "unmatched_visual",
+                "median_abs_error_ms": None,
+                "p90_abs_error_ms": None,
+                "percent_within_100ms": 0.0,
+                "percent_within_300ms": 0.0,
+                "oracle_confidence_mean": 0.0,
+                "n_measured_cues": 0,
+            }
 
         arr = np.array(errors_ms)
         median_err = float(np.median(arr))
@@ -73,15 +84,17 @@ def measure_visual_timing(
             "percent_within_100ms": round(p100, 3),
             "percent_within_300ms": round(p300, 3),
             "oracle_confidence_mean": 0.95,
+            "n_measured_cues": len(errors_ms),
         }
     except Exception as e:
         logger.warning("measure_visual_timing error: %s", e)
         return {
             "status": "error",
             "error": str(e),
-            "median_abs_error_ms": 0.0,
-            "p90_abs_error_ms": 0.0,
-            "percent_within_100ms": 1.0,
-            "percent_within_300ms": 1.0,
+            "median_abs_error_ms": None,
+            "p90_abs_error_ms": None,
+            "percent_within_100ms": 0.0,
+            "percent_within_300ms": 0.0,
             "oracle_confidence_mean": 0.0,
+            "n_measured_cues": 0,
         }
