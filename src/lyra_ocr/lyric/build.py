@@ -131,7 +131,7 @@ def build_lrc_from_video(
         run_phase1_pipeline(
             video_path=str(v_path),
             out_dir=str(art_dir),
-            sample_fps=fps,
+            fps=fps,
             start_sec=start_sec,
             max_frames=max_frames,
             device=device,
@@ -141,6 +141,7 @@ def build_lrc_from_video(
             channel=channel,
             dedup=dedup,
             frame_source=frame_source,
+            force=force,
         )
 
     return build_lrc_from_artifacts(
