@@ -356,6 +356,71 @@ def run_review_ui(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_lrc(args: argparse.Namespace) -> int:
+    """Export synchronized .lrc from a video or existing artifacts."""
+    try:
+        from lyra_ocr.lyric.build import build_lrc_from_artifacts, build_lrc_from_video
+
+        video_path = args.video
+        out_lrc = args.out
+        artifacts_dir = args.artifacts
+
+        if artifacts_dir:
+            result = build_lrc_from_artifacts(
+                artifacts_dir=artifacts_dir,
+                out_lrc=out_lrc,
+                include_review=args.include_review,
+                correct_method=args.correct,
+                refine=bool(getattr(args, "refine", False)),
+                offset_ms=args.offset_ms,
+                title=args.title or None,
+                artist=args.channel or None,
+                force=bool(getattr(args, "force", False)),
+            )
+        else:
+            result = build_lrc_from_video(
+                video_path=video_path,
+                out_lrc=out_lrc,
+                artifacts_dir=None,
+                tracker=args.tracker,
+                fps=args.fps,
+                start_sec=args.start_sec,
+                max_frames=args.max_frames,
+                title=args.title,
+                channel=args.channel,
+                device=args.device,
+                rec_batch_size=args.rec_batch_size,
+                dedup=bool(getattr(args, "dedup", False)),
+                frame_source=args.frame_source,
+                force=bool(getattr(args, "force", False)),
+                include_review=args.include_review,
+                correct_method=args.correct,
+                refine=bool(getattr(args, "refine", False)),
+                offset_ms=args.offset_ms,
+            )
+
+        n_cues = result["n_cues"]
+        n_skipped = result["n_skipped"]
+        skipped_records = result.get("skipped", [])
+        skipped_by_reason: dict[str, int] = {}
+        for s in skipped_records:
+            r = s.get("reason", "other")
+            skipped_by_reason[r] = skipped_by_reason.get(r, 0) + 1
+        skipped_summary = ", ".join(f"{k}={v}" for k, v in sorted(skipped_by_reason.items())) or "none"
+
+        print(f"Wrote {n_cues} cues to {result['out_lrc']}")
+        print(f"Skipped {n_skipped} tracks ({skipped_summary})")
+        print(f"Review required: {result['review_required']}")
+
+        if n_cues == 0:
+            print("Warning: Generated LRC has 0 cues.", file=sys.stderr)
+            return 2
+        return 0
+    except Exception as e:
+        print(f"Error exporting LRC: {e}", file=sys.stderr)
+        return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="lyra-ocr", description="Lyra OCR CLI")
     subparsers = parser.add_subparsers(dest="command", help="Sub-command to run")
@@ -479,6 +544,27 @@ def main(argv: list[str] | None = None) -> int:
         help="Workspace root for artifacts/datasets (default: current directory)",
     )
 
+    # Subcommand: lrc
+    p_lrc = subparsers.add_parser("lrc", help="Export synchronized .lrc from a video")
+    p_lrc.add_argument("video", help="Path to input video file")
+    p_lrc.add_argument("-o", "--out", default="./lyrics.lrc", help="Output .lrc path (default: ./lyrics.lrc)")
+    p_lrc.add_argument("--artifacts", default=None, help="Path to Phase 1 artifacts directory (optional)")
+    p_lrc.add_argument("--tracker", choices=["greedy", "bytetrack"], default="bytetrack", help="Tracker (default: bytetrack)")
+    p_lrc.add_argument("--fps", type=float, default=2.0, help="Sampling FPS if running pipeline (default: 2.0)")
+    p_lrc.add_argument("--start-sec", type=float, default=0.0, help="Start offset in seconds")
+    p_lrc.add_argument("--max-frames", type=int, default=None, help="Max frames to process")
+    p_lrc.add_argument("--title", default="", help="Song title metadata")
+    p_lrc.add_argument("--channel", default="", help="Artist/Channel metadata")
+    p_lrc.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto", help="OCR device (default: auto)")
+    p_lrc.add_argument("--rec-batch-size", type=int, default=8, help="Recognition batch size (default: 8)")
+    p_lrc.add_argument("--dedup", action=argparse.BooleanOptionalAction, default=False, help="Frame dedup")
+    p_lrc.add_argument("--frame-source", choices=["pipe", "disk"], default="pipe", help="Frame source (default: pipe)")
+    p_lrc.add_argument("--refine", action=argparse.BooleanOptionalAction, default=False, help="Refine timing with dense scan")
+    p_lrc.add_argument("--correct", choices=["none", "consensus", "dictionary"], default="dictionary", help="Correction method (default: dictionary)")
+    p_lrc.add_argument("--include-review", action="store_true", help="Include tracks marked review (default: false)")
+    p_lrc.add_argument("--offset-ms", type=int, default=0, help="LRC offset tag in ms (default: 0)")
+    p_lrc.add_argument("--force", action="store_true", help="Force rerun even if artifacts exist")
+
     args = parser.parse_args(argv)
     if args.command in ("smoke", "identify"):
         return run_smoke(args)
@@ -488,6 +574,8 @@ def main(argv: list[str] | None = None) -> int:
         return run_eval(args)
     elif args.command == "review-ui":
         return run_review_ui(args)
+    elif args.command == "lrc":
+        return run_lrc(args)
 
     parser.print_help()
     return 1
