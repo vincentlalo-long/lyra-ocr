@@ -51,6 +51,7 @@ def match_predictions_to_golden(
     min_temporal_overlap: float = 0.40,
     min_spatial_iou: float = 0.40,
     min_text_similarity: float = 0.50,
+    expected_video_ids: set[str] | list[str] | None = None,
 ) -> tuple[list[EvaluationItem], list[TrackMatch], list[TrackPrediction]]:
     """Match arbitrary predicted tracks to golden reference tracks using Hungarian assignment.
 
@@ -59,16 +60,44 @@ def match_predictions_to_golden(
         matches: list of TrackMatch records with alignment statistics
         unmatched_preds: predicted tracks that could not be mapped to any golden track
     """
-    # Only golden tracks from videos present in this prediction batch are
-    # relevant; otherwise a per-video call would mark every other video's
-    # golden tracks as missing.
-    pred_video_ids = {p.video_id for p in predicted_tracks}
+    # Only golden tracks from relevant videos are evaluated. If expected_video_ids
+    # is provided (e.g. from run manifest or dataset GT), include all golden tracks
+    # for those videos so that zero-prediction videos are penalized rather than ignored.
+    if expected_video_ids is not None:
+        target_video_ids = set(expected_video_ids)
+    else:
+        target_video_ids = {p.video_id for p in predicted_tracks}
+
     valid_golden = [
         it
         for it in golden_items
-        if it.has_label and it.label is not None and it.pred.video_id in pred_video_ids
+        if it.has_label and it.label is not None and it.pred.video_id in target_video_ids
     ]
-    if not predicted_tracks or not valid_golden:
+
+    if not predicted_tracks:
+        missing_items = []
+        for gold_item in valid_golden:
+            if gold_item.label is None:
+                continue
+            g = gold_item.pred
+            missing_pred = TrackPrediction(
+                video_id=g.video_id,
+                track_id=g.track_id,
+                model_label="missing",
+                model_confidence=0.0,
+                model_decision="missing",
+                start_ms=g.start_ms,
+                end_ms=g.end_ms,
+                duration_ms=g.duration_ms,
+                dominant_text=g.dominant_text,
+                bbox=g.bbox,
+            )
+            missing_items.append(
+                EvaluationItem(pred=missing_pred, label=gold_item.label, is_missing=True)
+            )
+        return missing_items, [], []
+
+    if not valid_golden:
         # No matches possible
         empty_items = [EvaluationItem(pred=p, label=None) for p in predicted_tracks]
         return empty_items, [], list(predicted_tracks)

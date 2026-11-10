@@ -116,7 +116,25 @@ def evaluate_run(
     if not gt_items:
         raise ValueError("Dataset has no ground truth segments. Promote a labeled run first.")
     predictions = load_run_predictions(dataset_dir, run_id)
-    paired, _, _ = match_predictions_to_golden(predictions, gt_items)
+    ds_dir = Path(dataset_dir)
+    run_path = ds_dir / "runs" / f"{run_id}.json"
+    expected_video_ids: set[str] = set()
+    if run_path.is_file():
+        try:
+            run_data = json.loads(run_path.read_text(encoding="utf-8"))
+            expected_video_ids = {
+                str(entry.get("video_id", ""))
+                for entry in run_data.get("videos", [])
+                if entry.get("video_id")
+            }
+        except (json.JSONDecodeError, OSError):
+            pass
+    if not expected_video_ids:
+        expected_video_ids = {g.pred.video_id for g in gt_items}
+
+    paired, _, _ = match_predictions_to_golden(
+        predictions, gt_items, expected_video_ids=expected_video_ids
+    )
     report = evaluate_predictions(paired, gate_min_coverage=gate_min_coverage)
     return report, paired
 

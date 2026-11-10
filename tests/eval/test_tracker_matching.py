@@ -174,3 +174,33 @@ def test_match_predictions_hungarian_assignment_optimal():
     matched_map = {m.pred_track.track_id: m.gold_track.track_id for m in matches}
     assert matched_map["p1"] == "g1"
     assert matched_map["p2"] == "g2"
+
+
+def test_matching_penalizes_zero_pred_video():
+    """Golden items from videos with 0 predictions must surface as missing items when expected_video_ids is provided."""
+    # Case 1: predictions exist for v1, but v2 has zero predictions
+    p1 = make_pred("v1", "p1", 1000, 3000, [100, 100, 300, 150], "Line One")
+    g1 = make_gold_item("v1", "g1", 1000, 3000, [100, 100, 300, 150], "Line One", human_label="lyric")
+    g2 = make_gold_item("v2", "g2", 1000, 3000, [100, 100, 300, 150], "Line Two", human_label="lyric")
+
+    paired, matches, unmatched = match_predictions_to_golden(
+        [p1], [g1, g2], expected_video_ids={"v1", "v2"}
+    )
+    assert len(matches) == 1
+    assert matches[0].pred_track.track_id == "p1"
+    assert len(unmatched) == 0
+    missing = [it for it in paired if it.is_missing]
+    assert len(missing) == 1
+    assert missing[0].pred.video_id == "v2"
+    assert missing[0].pred.model_label == "missing"
+    assert missing[0].label.human_label == "lyric"
+
+    # Case 2: completely empty predictions list
+    paired_empty, matches_empty, unmatched_empty = match_predictions_to_golden(
+        [], [g1, g2], expected_video_ids={"v1", "v2"}
+    )
+    assert len(matches_empty) == 0
+    assert len(unmatched_empty) == 0
+    assert len(paired_empty) == 2
+    assert all(it.is_missing for it in paired_empty)
+
