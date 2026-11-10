@@ -175,9 +175,9 @@ def main() -> None:
 - **Nhược điểm**: Dễ bị đứt track (fragmentation) khi lyric bị mờ hoặc hiệu ứng karaoke đổi màu từng chữ giữa các frame.
 
 ### Đặc tính của ByteTrack:
-- **Nguyên lý**: Sử dụng Kalman Filter kết hợp 2 tầng matching (high-score detections trước, low-score detections sau) để duy trì trajectory ngay cả khi box detection bị giảm confidence tạm thời.
+- **Nguyên lý**: Sử dụng thuật toán Hungarian kết hợp 2 tầng matching (high-score detections trước, low-score detections sau) để duy trì track continuity qua các frame bị blur/nhiễu mà không sinh ra track rác.
 - **Ưu điểm**: Giữ track ổn định hơn khi video có hiệu ứng visualizer, motion blur hoặc chữ chuyển động. Giảm số lượng track vụn vặt.
-- **Nhược điểm**: Tốn thêm một lượng nhỏ CPU để update Kalman filter state.
+- **Nhược điểm**: Có thêm overhead tính toán Hungarian assignment (scipy linear_sum_assignment) so với greedy.
 """)
 
     out_p = Path(args.output).resolve()

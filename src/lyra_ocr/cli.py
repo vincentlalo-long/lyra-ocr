@@ -365,6 +365,10 @@ def run_lrc(args: argparse.Namespace) -> int:
         out_lrc = args.out
         artifacts_dir = args.artifacts
 
+        if not artifacts_dir and not video_path:
+            logger.error("Either a video positional argument or --artifacts must be provided.")
+            return 2
+
         if artifacts_dir:
             result = build_lrc_from_artifacts(
                 artifacts_dir=artifacts_dir,
@@ -547,7 +551,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Subcommand: lrc
     p_lrc = subparsers.add_parser("lrc", help="Export synchronized .lrc from a video")
-    p_lrc.add_argument("video", help="Path to input video file")
+    p_lrc.add_argument("video", nargs="?", default=None, help="Path to input video file (optional if --artifacts is provided)")
     p_lrc.add_argument("-o", "--out", default="./lyrics.lrc", help="Output .lrc path (default: ./lyrics.lrc)")
     p_lrc.add_argument("--artifacts", default=None, help="Path to Phase 1 artifacts directory (optional)")
     p_lrc.add_argument("--tracker", choices=["greedy", "bytetrack"], default="bytetrack", help="Tracker (default: bytetrack)")

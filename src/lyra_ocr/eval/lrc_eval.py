@@ -69,6 +69,8 @@ def evaluate_text_selection(
             "cer": 0.0 if (not norm_ref and not norm_gen) else 1.0,
             "wer": 0.0 if (not norm_ref and not norm_gen) else 1.0,
             "extra_line_rate": 1.0 if norm_gen else 0.0,
+            "order_inversions": 0,
+            "order_inversion_rate": 0.0,
         }
 
     cost_matrix = np.zeros((len(norm_gen), len(norm_ref)), dtype=np.float32)
@@ -80,10 +82,23 @@ def evaluate_text_selection(
     row_ind, col_ind = linear_sum_assignment(cost_matrix)
 
     matched_pairs: list[tuple[str, str]] = []
+    matched_indices: list[tuple[int, int]] = []
     for r, c in zip(row_ind, col_ind):
         cost = cost_matrix[r, c]
         if cost <= (1.0 - match_threshold):
             matched_pairs.append((norm_gen[r], norm_ref[c]))
+            matched_indices.append((r, c))
+
+    # Evaluate temporal order consistency
+    matched_indices.sort(key=lambda p: p[0])
+    order_inversions = 0
+    ref_order = [c for _, c in matched_indices]
+    for i in range(len(ref_order)):
+        for j in range(i + 1, len(ref_order)):
+            if ref_order[i] > ref_order[j]:
+                order_inversions += 1
+    n_possible_pairs = max(1, len(ref_order) * (len(ref_order) - 1) // 2)
+    order_inversion_rate = round(order_inversions / n_possible_pairs, 4) if len(ref_order) > 1 else 0.0
 
     n_matched = len(matched_pairs)
     line_recall = n_matched / len(norm_ref)
@@ -124,6 +139,8 @@ def evaluate_text_selection(
         "cer": round(cer, 4),
         "wer": round(wer, 4),
         "extra_line_rate": round(extra_line_rate, 4),
+        "order_inversions": order_inversions,
+        "order_inversion_rate": order_inversion_rate,
         "n_matched": n_matched,
         "n_generated": len(norm_gen),
         "n_reference": len(norm_ref),

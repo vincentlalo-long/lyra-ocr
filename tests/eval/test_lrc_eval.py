@@ -20,6 +20,23 @@ def test_load_synced_lrc(tmp_path: Path):
     assert parsed[2] == (25000, "Multi tag line")
 
 
+def test_load_plain_lyrics_strips_section_headers(tmp_path: Path):
+    lyrics_txt = tmp_path / "lyrics" / "song1.txt"
+    lyrics_txt.parent.mkdir(parents=True)
+    lyrics_txt.write_text(
+        "[Intro]\n"
+        "Yeah yeah\n"
+        "[Verse 1]\n"
+        "First real line\n"
+        "(Chorus)\n"
+        "Sing it out loud\n"
+        "[Outro]\n",
+        encoding="utf-8",
+    )
+    lines = load_plain_lyrics(tmp_path, "song1")
+    assert lines == ["Yeah yeah", "First real line", "Sing it out loud"]
+
+
 def test_evaluate_text_selection_perfect_match():
     cues = [
         LyricCue(start_ms=1000, end_ms=3000, text="I feel the night explode"),

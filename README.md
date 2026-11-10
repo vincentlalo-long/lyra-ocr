@@ -31,7 +31,7 @@ flowchart LR
     A["Raw Video (1.0 FPS)"] --> B["PP-OCRv6 Det/Rec"]
     B --> C{"Tracker Strategy"}
     C -->|"Greedy (IoU + Centroid)"| D["1,417 Tracks"]
-    C -->|"ByteTrack (Kalman + 2-Stage)"| E["1,359 Tracks (4.1% cleaner)"]
+    C -->|"ByteTrack (Hungarian + 2-Stage)"| E["1,359 Tracks (4.1% cleaner)"]
     D --> F["Heuristic Classifier v2"]
     E --> F
     F --> G["Hungarian Evaluation vs Silver GT"]
@@ -67,7 +67,7 @@ flowchart LR
    - Expanded acceptable duration bounds from `1000–9000ms` to `500–16000ms`, capturing both fast ad-libs (0.5–1s) and slow ballad cues (10–14s).
    - Removed casing restrictions: all-caps lyrics (common in video typography) are evaluated strictly through spatial reading zone priors ($cy \in [0.20, 0.95]$, $cx \in [0.10, 0.90]$).
 3. **Greedy vs. ByteTrack Strategy**:
-   - **ByteTrack** leverages Kalman filtering and two-stage association, allowing tracks to persist through frame-to-frame OCR confidence drops or karaoke color transitions without splitting into fragmented pieces (reducing track count by 4.1%).
+   - **ByteTrack** leverages Hungarian matching and two-stage association, allowing tracks to persist through frame-to-frame OCR confidence drops or karaoke color transitions without splitting into fragmented pieces (reducing track count by 4.1%).
    - **Recommendation**: ByteTrack is recommended as the default tracker for video subtitle/lyric extraction.
 
 ---
