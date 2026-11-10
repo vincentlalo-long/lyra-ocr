@@ -44,7 +44,15 @@ def refine_timings(
         return cues
 
     try:
-        frame_index = json.loads(frame_index_path.read_text(encoding="utf-8"))
+        raw_fi = json.loads(frame_index_path.read_text(encoding="utf-8"))
+        if isinstance(raw_fi, list):
+            frame_index: dict[str, dict[str, Any]] = {
+                str(item.get("frame_id")): item for item in raw_fi if isinstance(item, dict)
+            }
+        elif isinstance(raw_fi, dict):
+            frame_index = raw_fi
+        else:
+            frame_index = {}
     except Exception as e:
         logger.warning("Failed to read frame_index.json: %s", e)
         return cues
@@ -87,6 +95,11 @@ def refine_timings(
             continue
 
         img_rel = frame_rec.get("image_path")
+        if not img_rel and frame_rec.get("dedup_of_frame") is not None:
+            dedup_fid = str(frame_rec["dedup_of_frame"])
+            dedup_rec = frame_index.get(dedup_fid)
+            if dedup_rec:
+                img_rel = dedup_rec.get("image_path")
         if not img_rel:
             continue
 
