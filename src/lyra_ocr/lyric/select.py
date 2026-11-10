@@ -84,8 +84,15 @@ def select_cues(
             continue
 
         # 3. Acceptance condition
-        is_accepted = (label == "lyric") and (
-            decision == "accept" or (include_review and decision == "review")
+        qa_flags = track.get("qa_flags") or []
+        is_chorus_rescue = (
+            "title_match_outside_intro" in qa_flags
+            or "potential_chorus" in qa_flags
+        )
+        is_accepted = (
+            (label == "lyric" and decision == "accept")
+            or (include_review and (label == "lyric" or is_chorus_rescue) and decision == "review")
+            or (label == "lyric" and is_chorus_rescue)
         )
         if not is_accepted:
             reason = "non_lyric" if label != "lyric" else "review"

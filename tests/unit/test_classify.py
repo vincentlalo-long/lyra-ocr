@@ -168,8 +168,8 @@ def test_classify_title_match_inside_intro_still_rejected():
 def test_classify_title_match_outside_intro_defers_to_review():
     from lyra_ocr.classify import classify_track
 
-    # Repeated hook equal to the song title, mid-video: not an intro card, so it
-    # must go to human review instead of being auto-rejected.
+    # Repeated hook equal to the song title, mid-video and in reading zone:
+    # not an intro card, so it must be classified as lyric under review.
     track = create_mock_track(
         track_id=21,
         start_ms=55000,
@@ -180,10 +180,31 @@ def test_classify_title_match_outside_intro_defers_to_review():
     )
     result = classify_track(track, metadata={"channel": "Clarx & Harddope", "title": "Castle"})
 
+    assert result.label == "lyric"
+    assert result.decision == "review"
+    assert "metadata_title_match" in result.qa_flags
+    assert "title_match_outside_intro" in result.qa_flags
+    assert "potential_chorus" in result.qa_flags
+
+
+def test_classify_title_match_outside_intro_outside_reading_zone():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=22,
+        start_ms=55000,
+        end_ms=60000,
+        texts=["CASTLE"],
+        bbox=[10, 10, 150, 40],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, metadata={"channel": "Clarx & Harddope", "title": "Castle"})
+
     assert result.label == "non_lyric"
     assert result.decision == "review"
     assert "metadata_title_match" in result.qa_flags
     assert "title_match_outside_intro" in result.qa_flags
+    assert "potential_chorus" not in result.qa_flags
 
 
 def test_classify_recurring_lyric_stream():

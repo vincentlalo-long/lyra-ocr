@@ -104,6 +104,13 @@ def classify_track(
     distinct_changes = feat.get("distinct_text_changes", n_text_changes)
     duration_ms = track.end_ms - track.start_ms
     word_count = len(dominant_text.split())
+    # Spatial prior: active reading zone (center or lower-third), not in extreme corners
+    in_reading_zone = (
+        not is_corner
+        and 0.10 <= mean_cx <= 0.90
+        and 0.20 <= mean_cy <= 0.95
+        and aspect_ratio >= 1.0
+    )
     # Card-shaped text: short overlays strictly bounded to the intro/outro window
     # are typically title cards or credit slides. Casing (uppercase vs lowercase)
     # is never used to judge lyrics, as song lyrics are frequently styled in all-caps.
@@ -225,17 +232,29 @@ def classify_track(
             return res
         if is_title_match:
             # Matching the title mid-video is often a repeated hook/chorus, not an
-            # intro card: flag it for human review instead of auto-rejecting.
-            res = ClassificationResult(
-                label="non_lyric",
-                confidence=0.55,
-                reason=(
-                    f"Title text matching video title metadata '{v_title}' "
-                    "outside the intro window"
-                ),
-                decision="review",
-                qa_flags=["metadata_title_match", "title_match_outside_intro"],
-            )
+            # intro card: if in reading zone and transient, classify as lyric for review.
+            if in_reading_zone and 500 <= duration_ms <= 16000 and not only_intro_outro:
+                res = ClassificationResult(
+                    label="lyric",
+                    confidence=0.75,
+                    reason=(
+                        f"Mid-video text matching video title metadata '{v_title}' "
+                        "in reading zone (likely chorus/hook)"
+                    ),
+                    decision="review",
+                    qa_flags=["metadata_title_match", "title_match_outside_intro", "potential_chorus"],
+                )
+            else:
+                res = ClassificationResult(
+                    label="non_lyric",
+                    confidence=0.55,
+                    reason=(
+                        f"Title text matching video title metadata '{v_title}' "
+                        "outside the intro window"
+                    ),
+                    decision="review",
+                    qa_flags=["metadata_title_match", "title_match_outside_intro"],
+                )
             track.classification = res
             return res
 

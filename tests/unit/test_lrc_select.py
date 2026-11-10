@@ -166,6 +166,27 @@ def test_select_cues_multi_segment_track():
     assert cues[1].text == "WHEN WE ARE TOGETHER"
 
 
+def test_select_cues_chorus_rescue():
+    tracks = [
+        {
+            "track_id": 10,
+            "start_ms": 45000,
+            "end_ms": 48000,
+            "label": "lyric",
+            "decision": "review",
+            "confidence": 0.85,
+            "qa_flags": ["metadata_title_match", "title_match_outside_intro", "potential_chorus"],
+            "features": {"dominant_text": "CASTLE", "mean_centroid": [0.5, 0.85]},
+            "segments": [{"segment_id": 0, "start_ms": 45000, "end_ms": 48000, "text": "CASTLE", "confidence": 0.85}],
+        }
+    ]
+    # Without include_review, chorus in reading zone is still rescued
+    cues, skipped = select_cues(tracks, human_labels={})
+    assert len(cues) == 1
+    assert cues[0].text == "CASTLE"
+    assert cues[0].review_required is True
+
+
 def test_load_artifacts(tmp_path: Path):
     manifest = {"video_id": "test_vid", "probe": {"duration": 60}}
     tracks_data = {
