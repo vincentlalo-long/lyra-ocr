@@ -12,7 +12,7 @@ A modular pipeline and command-line toolchain for video frame sampling, scene te
 |:---:|---|---|:---:|
 | **0** | **Foundations** | Video probing, PTS frame extraction, full-frame detection, and decoupled OCR engine. | Completed ✅ |
 | **1** | **Lyric Identification** | Temporal text tracking to filter out watermarks, channel logos, and title cards from actual lyrics. | Completed & Evaluated (F1 > 96%) ✅ |
-| **2** | **Timing & LRC** | Refining cue timestamps and exporting standard line-level `.lrc` lyric files. | Upcoming ⏳ |
+| **2** | **Timing & LRC** | Refining cue timestamps, NLP correction, deduplication, and exporting standard `.lrc` lyric files. | Available 🚀 |
 | **3** | **Trained Classifier** | Training lightweight models on user-confirmed review data to automate filtering. | Planned 📋 |
 | **4** | **Audio & Karaoke** | Voice alignment and syllable tracking for word-by-word karaoke synchronization. | Planned 📋 |
 
@@ -192,7 +192,32 @@ Re-running `pip install -r requirements.txt` or `pip install -e .` puts CPU
 happens. `pip check` also reports `onnxruntime` as missing because the GPU wheel
 is distributed under a different name — that warning is expected.
 
-### 3. Human Review & Annotation CLI
+### 3. Export Synchronized LRC Lyrics (Phase 2)
+
+Export standard, line-synchronized `.lrc` lyrics directly from Phase 1 artifacts or end-to-end from a raw video:
+
+```bash
+# Export from existing Phase 1 artifacts (instant)
+lyra-ocr lrc path/to/video.mp4 --artifacts ./output -o song.lrc
+
+# Run end-to-end from video with ByteTrack and corpus dictionary correction
+lyra-ocr lrc path/to/video.mp4 \
+  -o song.lrc \
+  --tracker bytetrack \
+  --correct dictionary \
+  --device auto
+```
+
+#### Key Options for `lyra-ocr lrc`:
+- `-o, --out`: Output `.lrc` file path (default: `./lyrics.lrc`). A companion structured JSON file (`*.cues.json`) is also generated containing bounding boxes, confidence scores, and skipped tracks.
+- `--artifacts`: Path to an existing Phase 1 artifact directory (`tracks.json`, `manifest.json`, `labels.jsonl`). When provided, avoids re-running video OCR.
+- `--correct`: Correction method (`none`, `consensus`, `dictionary`). Default is `dictionary` (corpus-frequency based token correction preserving rare proper nouns and casing).
+- `--include-review`: Include tracks marked with `decision=review` (default: excluded, only `accept` lyrics are included).
+- `--offset-ms`: Adjust global timestamp offset tag (`[offset:+/-ms]`).
+- `--refine`: Dense frame-level scan for sub-sampling boundary timing.
+- `--force`: Force re-running video OCR pipeline even if artifacts exist.
+
+### 4. Human Review & Annotation CLI
 
 Export blind batch CSV for offline labeling, inspect status, or ingest annotations:
 
@@ -207,7 +232,7 @@ lyra-ocr label export --artifacts ./output --out label_batch.csv --blind
 lyra-ocr label ingest --artifacts ./output --csv label_batch.csv --annotator reviewer_name
 ```
 
-### 4. Run Evaluation
+### 5. Run Evaluation
 
 Evaluate predictions against a labeled dataset manifest with Hungarian matching and optional charts:
 
@@ -215,7 +240,7 @@ Evaluate predictions against a labeled dataset manifest with Hungarian matching 
 lyra-ocr eval --golden path/to/dataset --out outputs/eval --charts --compare-trackers
 ```
 
-### 5. Run Automated Tests
+### 6. Run Automated Tests
 
 ```bash
 pytest
@@ -223,7 +248,7 @@ pytest
 
 ---
 
-### 6. Reproducing Benchmark & Evaluation Experiments
+### 7. Reproducing Benchmark & Evaluation Experiments
 
 You can independently reproduce the 25–30 video benchmark and tracker comparison using the automated pipeline scripts:
 
