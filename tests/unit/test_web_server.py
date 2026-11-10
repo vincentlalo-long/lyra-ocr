@@ -235,13 +235,22 @@ def test_web_server_post_label_track_validation(make_web_server, tmp_path: Path)
     mock_art = tmp_path / "mock_art_val"
     mock_art.mkdir()
     manifest = {"video_id": "test_web_val"}
-    tracks = {"tracks": [{"track_id": "42", "label": "lyric", "confidence": 0.95}]}
+    tracks = {
+        "tracks": [
+            {
+                "track_id": "42",
+                "label": "lyric",
+                "confidence": 0.95,
+                "segments": [{"segment_id": 0}, {"segment_id": 1}],
+            }
+        ]
+    }
     (mock_art / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     (mock_art / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
 
     url = f"{web_server['url']}/api/label"
 
-    # Case 1: non-existent track
+    # Case 1: non-existent base track
     bad_payload = {
         "artifact_dir": "mock_art_val",
         "video_id": "test_web_val",
@@ -258,7 +267,24 @@ def test_web_server_post_label_track_validation(make_web_server, tmp_path: Path)
         urllib.request.urlopen(req)
     assert exc.value.code == 404
 
-    # Case 2: composite track ID pointing to existing base track (e.g. 42.1)
+    # Case 2: non-existent segment suffix (42.999)
+    bad_seg_payload = {
+        "artifact_dir": "mock_art_val",
+        "video_id": "test_web_val",
+        "track_id": "42.999",
+        "human_label": "lyric",
+    }
+    req_bad_seg = urllib.request.Request(
+        url,
+        data=json.dumps(bad_seg_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req_bad_seg)
+    assert exc.value.code == 404
+
+    # Case 3: valid composite track ID pointing to existing segment (42.1)
     good_composite = {
         "artifact_dir": "mock_art_val",
         "video_id": "test_web_val",
@@ -542,3 +568,102 @@ def test_youtube_list_surfaces_error(ws_server, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(f"{ws_server['url']}/api/youtube/list?url=https://youtube.com%2F%40c%2Fvideos")
     assert exc.value.code == 502
+
+
+def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path):
+    """Test POST /api/lrc/generate, GET /api/lrc, and POST /api/lrc/save."""
+    server_info = make_web_server(tmp_path)
+    url = server_info["url"]
+
+    # 1. Reject empty generation request
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        http_request(f"{url}/api/lrc/generate", data={}, method="POST")
+    assert exc.value.code == 400
+
+    # 2. Setup mock artifact directory
+    art_dir = tmp_path / "outputs" / "lrc_sample"
+    art_dir.mkdir(parents=True)
+    manifest = {
+        "video_id": "vid_lrc",
+        "video_path": "sample.mp4",
+        "config_hash": "cfg1",
+        "fps": 1.0,
+        "tracker": "bytetrack",
+        "metadata": {"title": "LRC Test Song", "channel": "Artist"},
+    }
+    (art_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    tracks_data = {
+        "video_id": "vid_lrc",
+        "tracks": [
+            {
+                "track_id": 1,
+                "label": "lyric",
+                "confidence": 0.95,
+                "decision": "accept",
+                "start_ms": 1000,
+                "end_ms": 4000,
+                "duration_ms": 3000,
+                "occurrences": [
+                    {"timestamp_ms": 1000, "text": "Em ơi có biết", "confidence": 0.95, "bbox": [10, 800, 500, 850]},
+                    {"timestamp_ms": 2000, "text": "Em ơi có biết", "confidence": 0.96, "bbox": [10, 800, 500, 850]},
+                ],
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 1000,
+                        "end_ms": 4000,
+                        "text": "Em ơi có biết",
+                        "text_variants": ["Em ơi có biết"],
+                        "confidence": 0.95,
+                        "corrected_text": "Em ơi có biết",
+                    }
+                ],
+            }
+        ],
+    }
+    (art_dir / "tracks.json").write_text(json.dumps(tracks_data), encoding="utf-8")
+
+    # Generate LRC
+    gen_payload = {
+        "artifact_dir": "outputs/lrc_sample",
+        "title": "Em Ơi",
+        "artist": "Ca Sĩ",
+        "force": True,
+    }
+    status, gen_resp = http_request(f"{url}/api/lrc/generate", data=gen_payload, method="POST")
+    assert status == 200
+    assert gen_resp["ok"] is True
+    assert gen_resp["n_cues"] == 1
+    assert len(gen_resp["cues"]) == 1
+    assert "Em ơi có biết" in gen_resp["lrc_text"]
+    out_lrc = gen_resp["out_lrc"]
+
+    # 3. Get LRC
+    status, get_resp = http_request(f"{url}/api/lrc?path=outputs/lrc_sample/lrc_sample.lrc")
+    assert status == 200
+    assert "Em ơi có biết" in get_resp["lrc_text"]
+    assert len(get_resp["cues"]) == 1
+
+    # 4. Save modified LRC
+    save_payload = {
+        "out_lrc": "outputs/lrc_sample/lrc_sample.lrc",
+        "lrc_text": "[ti:Em Ơi]\n[ar:Ca Sĩ]\n[00:01.00]Em ơi có hiểu không\n",
+        "cues": [
+            {
+                "start_ms": 1000,
+                "end_ms": 4000,
+                "text": "Em ơi có hiểu không",
+                "confidence": 1.0,
+            }
+        ],
+        "metadata": {"title": "Em Ơi", "artist": "Ca Sĩ"},
+    }
+    status, save_resp = http_request(f"{url}/api/lrc/save", data=save_payload, method="POST")
+    assert status == 200
+    assert save_resp["ok"] is True
+
+    # Verify updated content on disk
+    saved_text = Path(out_lrc).read_text(encoding="utf-8")
+    assert "Em ơi có hiểu không" in saved_text
+

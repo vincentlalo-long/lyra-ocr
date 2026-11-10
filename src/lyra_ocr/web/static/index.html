@@ -11,9 +11,9 @@
   <!-- Top Header -->
   <header>
     <div class="brand">
-      <span>✦</span> LYRA OCR <span style="font-weight:400;color:var(--text-muted)">| Review & Label Tool</span>
+      <span>✦</span> LYRA OCR <span style="font-weight:400;color:var(--text-muted)">| LRC Studio & Track Review</span>
     </div>
-    <div class="header-controls" id="reviewHeaderControls">
+    <div class="header-controls" id="reviewHeaderControls" style="display:none">
       <label for="artifactSelect" style="color:var(--text-muted);font-size:12px">Artifact:</label>
       <select id="artifactSelect"></select>
       <div id="coveragePill" class="badge badge-lyric">100% Labeled</div>
@@ -23,14 +23,159 @@
 
   <!-- Tab Navigation -->
   <nav class="tabbar">
-    <button class="tab-btn active" data-tab="review">Review</button>
+    <button class="tab-btn active" data-tab="lrc">✦ LRC Studio</button>
+    <button class="tab-btn" data-tab="review">Review Tracks</button>
     <button class="tab-btn" data-tab="datasets">Datasets</button>
     <button class="tab-btn" data-tab="runs">Runs</button>
     <button class="tab-btn" data-tab="eval">Eval</button>
+    <a href="/labeling.html" target="_blank" class="tab-external-link" title="Open dedicated ground truth annotation tool">Labeling Tool ↗</a>
   </nav>
 
-  <!-- Main Body -->
-  <div class="main-container view active" id="view-review">
+  <!-- LRC Studio View -->
+  <div class="view active" id="view-lrc">
+    <div class="studio-layout">
+
+      <!-- Pipeline Configuration Card -->
+      <div class="studio-config-card">
+        <div class="config-section-title">
+          <span>⚙ Pipeline Configuration</span>
+          <span style="font-size:12px;color:var(--text-muted)">Extract synchronized lyrics directly from video or inspect existing OCR artifacts</span>
+        </div>
+
+        <div class="config-grid">
+          <div class="config-group" style="grid-column: span 2;">
+            <label for="lrcArtifactSelect">Existing Run Artifacts (Cached):</label>
+            <select id="lrcArtifactSelect">
+              <option value="">-- Choose Existing Artifact Directory --</option>
+            </select>
+          </div>
+
+          <div class="config-group" style="grid-column: span 2;">
+            <label for="lrcVideoInput">Or Video File Path (Runs Phase 1 Pipeline if not cached):</label>
+            <input type="text" id="lrcVideoInput" placeholder="outputs/raw/song.mp4 or /path/to/video.mp4">
+          </div>
+
+          <div class="config-group">
+            <label for="lrcTrackerSelect">Tracker:</label>
+            <select id="lrcTrackerSelect">
+              <option value="bytetrack" selected>ByteTrack (Recommended)</option>
+              <option value="greedy">Greedy</option>
+            </select>
+          </div>
+
+          <div class="config-group">
+            <label for="lrcCorrectSelect">OCR Text Correction:</label>
+            <select id="lrcCorrectSelect">
+              <option value="frequency" selected>Frequency / Medoid</option>
+              <option value="levenshtein">Levenshtein Alignment</option>
+              <option value="raw">Raw (No correction)</option>
+            </select>
+          </div>
+
+          <div class="config-group">
+            <label for="lrcTitleInput">Song Title (Metadata):</label>
+            <input type="text" id="lrcTitleInput" placeholder="Title">
+          </div>
+
+          <div class="config-group">
+            <label for="lrcArtistInput">Artist (Metadata):</label>
+            <input type="text" id="lrcArtistInput" placeholder="Artist">
+          </div>
+
+          <div class="config-group">
+            <label for="lrcOffsetMs">Sync Offset (ms):</label>
+            <input type="number" id="lrcOffsetMs" value="0" step="50" style="width:100%">
+          </div>
+
+          <div class="config-flags" style="grid-column: span 3;">
+            <label class="checkbox-row" title="Snap start timestamp to visual subtitle onset using difference peaks">
+              <input type="checkbox" id="lrcRefineTiming" checked>
+              <span>Refine Visual Timing</span>
+            </label>
+            <label class="checkbox-row" title="Include medium-confidence cues needing auditor review">
+              <input type="checkbox" id="lrcIncludeReview">
+              <span>Include Review Cues</span>
+            </label>
+            <label class="checkbox-row" title="Bypass cache and force-rerun extraction">
+              <input type="checkbox" id="lrcForceRerun">
+              <span>Force Re-run</span>
+            </label>
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:16px;">
+          <div id="lrcStatusBanner" class="status-banner" style="display:none"></div>
+          <button id="lrcGenerateBtn" class="primary" style="padding:10px 24px; font-size:14px; margin-left:auto;">
+            ▶ Generate LRC
+          </button>
+        </div>
+      </div>
+
+      <!-- Studio Workspace (split view) -->
+      <div id="studioMainContainer" class="studio-workspace" style="display:none">
+
+        <!-- Left: Synchronized Karaoke Player & Visualizer -->
+        <div class="studio-left-panel">
+          <div class="panel-header">
+            <span>Karaoke Preview & Timing</span>
+          </div>
+
+          <div class="karaoke-stage-wrapper">
+            <div id="studioKaraokeStage" class="karaoke-stage">
+              <div class="karaoke-line prev"></div>
+              <div class="karaoke-line active">✦ Press Play to Synchronize ✦</div>
+              <div class="karaoke-line next"></div>
+            </div>
+          </div>
+
+          <div class="studio-player-bar">
+            <button id="studioPlayBtn" class="primary">▶ Play</button>
+            <span id="studioCurrentTime" class="studio-time-code">00:00.00</span>
+            <input type="range" id="studioScrubber" min="0" max="180000" value="0" style="flex:1">
+          </div>
+
+          <div id="studioStatsBar" class="studio-stats-bar"></div>
+        </div>
+
+        <!-- Right: Interactive Cue Inspector & Raw LRC Editor -->
+        <div class="studio-right-panel">
+          <div class="panel-header" style="justify-content:space-between">
+            <div style="display:flex; gap:6px;">
+              <button id="studioTabCues" class="mini-btn active">Cue Inspector</button>
+              <button id="studioTabRaw" class="mini-btn">Raw .LRC</button>
+            </div>
+            <div style="display:flex; gap:6px;">
+              <button id="lrcAddCueBtn" class="mini-btn">+ Add Line</button>
+              <button id="lrcSaveBtn" class="mini-btn">💾 Save</button>
+              <button id="lrcCopyBtn" class="mini-btn">📋 Copy</button>
+              <button id="lrcDownloadBtn" class="mini-btn primary">⬇ Download .lrc</button>
+            </div>
+          </div>
+
+          <!-- Cue List Editor -->
+          <div id="studioCuesView" class="studio-tab-content">
+            <div class="cues-list-header">
+              <span style="width:75px">Timestamp</span>
+              <span style="flex:1">Lyric Text</span>
+              <span style="width:90px; text-align:right">Confidence</span>
+            </div>
+            <div id="studioCuesList" class="cues-list"></div>
+          </div>
+
+          <!-- Raw LRC Editor -->
+          <div id="studioRawView" class="studio-tab-content" style="display:none">
+            <textarea id="studioRawLrcText" class="raw-lrc-textarea" spellcheck="false" placeholder="[ti:]&#10;[ar:]&#10;[00:00.00]Lyric line"></textarea>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+  </div>
+  <!-- /view-lrc -->
+
+  <!-- Main Body: Review Tracks -->
+  <div class="main-container view" id="view-review">
 
     <!-- Left Panel: Tracks -->
     <div class="left-panel">

@@ -267,3 +267,59 @@ def test_build_lrc_from_artifacts_invalidates_cache_on_option_change(tmp_path: P
     assert res2["n_cues"] == 2
 
 
+def test_build_lrc_from_artifacts_cache_invalidates_on_labels_change(tmp_path: Path):
+    artifacts_dir = tmp_path / "art_lbl"
+    artifacts_dir.mkdir()
+    manifest = {"video_id": "v1", "probe": {"duration": 10.0}}
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "features": {"dominant_text": "ORIGINAL TEXT"},
+                "segments": [],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    out_lrc = tmp_path / "song.lrc"
+
+    # 1. First build without labels.jsonl
+    res1 = build_lrc_from_artifacts(artifacts_dir, out_lrc)
+    assert res1["n_cues"] == 1
+    assert "ORIGINAL TEXT" in out_lrc.read_text(encoding="utf-8")
+
+    # 2. Add labels.jsonl with human correction
+    labels_file = artifacts_dir / "labels.jsonl"
+    labels_file.write_text(
+        json.dumps({
+            "video_id": "v1",
+            "track_id": "1",
+            "human_label": "lyric",
+            "human_decision": "accept",
+            "corrected_text": "CORRECTED BY HUMAN",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    # 3. Second build: cache must invalidate because labels.jsonl was added
+    res2 = build_lrc_from_artifacts(artifacts_dir, out_lrc)
+    assert res2["n_cues"] == 1
+    assert "CORRECTED BY HUMAN" in out_lrc.read_text(encoding="utf-8")
+
+    # 4. Remove labels.jsonl
+    labels_file.unlink()
+
+    # 5. Third build: cache must invalidate because labels.jsonl was removed
+    res3 = build_lrc_from_artifacts(artifacts_dir, out_lrc)
+    assert res3["n_cues"] == 1
+    assert "ORIGINAL TEXT" in out_lrc.read_text(encoding="utf-8")
+
+
+

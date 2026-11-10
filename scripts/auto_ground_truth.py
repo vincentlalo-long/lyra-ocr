@@ -27,6 +27,7 @@ from typing import Any, Optional
 from lyra_ocr.dataset import ground_truth, registry
 from lyra_ocr.dataset.ground_truth import GroundTruthSegment
 from lyra_ocr.eval.dataset_eval import evaluate_run
+from lyra_ocr.eval.reference import clean_plain_lyrics
 from lyra_ocr.pipeline import PipelineEngines, run_phase1_pipeline
 
 
@@ -153,6 +154,7 @@ def get_reference_lyrics(
         if len(lrclib_lines) >= 8:
             lyrics = lrclib_lines
 
+    lyrics = clean_plain_lyrics(lyrics)
     if lyrics:
         cache_file.write_text(json.dumps(lyrics, ensure_ascii=False, indent=2), encoding="utf-8")
     return lyrics
@@ -346,7 +348,7 @@ def process_video(
         )
 
     # Include unmatched reference lyrics lines as false-negative ground truth items
-    clean_ref_lines = [l.strip() for l in lyrics if l.strip()]
+    clean_ref_lines = clean_plain_lyrics([l.strip() for l in lyrics if l.strip()])
     miss_idx = 0
     for ref_l in clean_ref_lines:
         c_ref = clean_text(ref_l)
@@ -372,7 +374,7 @@ def process_video(
                     annotator="silver_lyrics_alignment",
                     reviewed_at=now,
                     source_run_id=run_dir.name,
-                    source_track_id=None,
+                    source_track_id="",
                 )
             )
             miss_idx += 1
@@ -382,10 +384,9 @@ def process_video(
         if force_gt or not gt_file.exists():
             ground_truth.write_segments(dataset_dir, video_id, segments)
 
-    # 5. Write silver_labels.jsonl and labels.jsonl in run artifact dir
+    # 5. Write ONLY silver_labels.jsonl (never overwrite labels.jsonl which is reserved for human annotators)
     silver_labels_file = out_dir / "silver_labels.jsonl"
-    labels_file = out_dir / "labels.jsonl"
-    with open(silver_labels_file, "w", encoding="utf-8") as f_silver, open(labels_file, "w", encoding="utf-8") as f_labels:
+    with open(silver_labels_file, "w", encoding="utf-8") as f_silver:
         for item in aligned:
             row = {
                 "video_id": video_id,
@@ -396,9 +397,7 @@ def process_video(
                 "annotator": "silver_lyrics_alignment",
                 "reviewed_at": now,
             }
-            line = json.dumps(row, ensure_ascii=False) + "\n"
-            f_silver.write(line)
-            f_labels.write(line)
+            f_silver.write(json.dumps(row, ensure_ascii=False) + "\n")
 
     return {
         "video_id": video_id,

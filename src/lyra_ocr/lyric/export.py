@@ -78,6 +78,7 @@ def write_cues_json(
     tracker: str,
     skipped: list[dict[str, Any]],
     options: dict[str, Any] | None = None,
+    has_labels: bool = False,
 ) -> None:
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -88,6 +89,7 @@ def write_cues_json(
         "duration_ms": duration_ms,
         "tracker": tracker,
         "options": options or {},
+        "has_labels": has_labels,
         "metadata": {
             "title": metadata.title,
             "artist": metadata.artist,

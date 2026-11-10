@@ -89,7 +89,11 @@ class LabelRecord:
         return asdict(self)
 
 
-def load_labels_jsonl(labels_path: str | Path) -> dict[tuple[str, str], dict[str, Any]]:
+def load_labels_jsonl(
+    labels_path: str | Path,
+    *,
+    include_silver: bool = False,
+) -> dict[tuple[str, str], dict[str, Any]]:
     """Load latest records from append-only labels.jsonl indexed by (video_id, track_id)."""
     p = Path(labels_path)
     if not p.exists():
@@ -103,6 +107,8 @@ def load_labels_jsonl(labels_path: str | Path) -> dict[tuple[str, str], dict[str
                 continue
             try:
                 row = json.loads(line)
+                if not include_silver and row.get("annotator") == "silver_lyrics_alignment":
+                    continue
                 vid = str(row.get("video_id", ""))
                 tid = str(row.get("track_id", ""))
                 if vid and tid:
@@ -345,21 +351,28 @@ def get_label_status(artifacts_dir: str | Path) -> dict[str, Any]:
             m = json.load(f)
             video_id = m.get("video_id") or m.get("video_path", "unknown_video")
 
-    labels_map = load_labels_jsonl(labels_jsonl_path) if labels_jsonl_path.exists() else {}
+    labels_map = load_labels_jsonl(labels_jsonl_path, include_silver=False) if labels_jsonl_path.exists() else {}
 
     labeled_count = 0
     tracking_error_count = 0
     distribution: dict[str, int] = {k: 0 for k in VALID_LABELS}
 
+    # Group records by base track_id for video_id to support segment annotations (e.g. 42.0, 42.1)
+    labels_by_base: dict[str, list[dict[str, Any]]] = {}
+    for (v, tid), rec in labels_map.items():
+        if v == video_id or not v:
+            base_id = tid.split(".", 1)[0]
+            labels_by_base.setdefault(base_id, []).append(rec)
+
     for tr in tracks:
         tid_str = str(tr.get("track_id"))
-        key = (video_id, tid_str)
-        lbl = labels_map.get(key)
-        if lbl and lbl.get("human_label"):
+        lbls = labels_by_base.get(tid_str, [])
+        valid_lbls = [l for l in lbls if l.get("human_label")]
+        if valid_lbls:
             labeled_count += 1
-            hl = normalize_label(lbl["human_label"])
+            hl = normalize_label(valid_lbls[0]["human_label"])
             distribution[hl] = distribution.get(hl, 0) + 1
-            if lbl.get("tracking_error"):
+            if any(l.get("tracking_error") for l in valid_lbls):
                 tracking_error_count += 1
 
     coverage = (labeled_count / max(1, total_tracks)) * 100.0

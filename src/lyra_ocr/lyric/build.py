@@ -53,7 +53,11 @@ def build_lrc_from_artifacts(
             if tracks_file.exists() and tracks_file.stat().st_mtime > cues_mtime:
                 is_valid = False
             labels_file = art_path / "labels.jsonl"
-            if labels_file.exists() and labels_file.stat().st_mtime > cues_mtime:
+            cached_had_labels = bool(cached_cues.get("has_labels", False))
+            current_has_labels = labels_file.is_file()
+            if cached_had_labels != current_has_labels:
+                is_valid = False
+            elif labels_file.exists() and labels_file.stat().st_mtime > cues_mtime:
                 is_valid = False
 
             if is_valid:
@@ -79,11 +83,15 @@ def build_lrc_from_artifacts(
 
     video_id = manifest.get("video_id") or art_path.name
     eff_video_path = str(video_path) if video_path else (manifest.get("video_path") or "")
-    duration_ms = int(manifest.get("probe", {}).get("duration", 0) * 1000)
-    tracker_name = manifest.get("tracker", {}).get("name", "bytetrack")
+    probe = manifest.get("probe") if isinstance(manifest.get("probe"), dict) else {}
+    duration_ms = int(probe.get("duration", 0) * 1000)
 
-    m_title = title if title is not None else manifest.get("metadata", {}).get("title", "")
-    m_artist = artist if artist is not None else manifest.get("metadata", {}).get("channel", "")
+    tracker_raw = manifest.get("tracker")
+    tracker_name = tracker_raw.get("name", "bytetrack") if isinstance(tracker_raw, dict) else (tracker_raw or "bytetrack")
+
+    meta = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
+    m_title = title if title is not None else meta.get("title", "")
+    m_artist = artist if artist is not None else meta.get("channel", "")
 
     metadata = LrcMetadata(
         title=m_title or "",
@@ -91,8 +99,8 @@ def build_lrc_from_artifacts(
         offset_ms=offset_ms,
     )
 
-    frame_width = manifest.get("probe", {}).get("width", 1280)
-    frame_height = manifest.get("probe", {}).get("height", 720)
+    frame_width = probe.get("width", 1280)
+    frame_height = probe.get("height", 720)
     cues, skipped = select_cues(
         tracks,
         human_labels,
@@ -125,6 +133,7 @@ def build_lrc_from_artifacts(
         tracker=tracker_name,
         skipped=skipped,
         options=target_options,
+        has_labels=(art_path / "labels.jsonl").is_file(),
     )
 
     return {

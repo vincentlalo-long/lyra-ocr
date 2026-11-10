@@ -106,7 +106,11 @@ def correct_text(
     variants: list[tuple[str, float]] = []
 
     if segment is not None:
-        seg_text = segment.get("text", "")
+        seg_text = (
+            segment.get("text")
+            or segment.get("corrected_text")
+            or (segment.get("text_variants", [""])[0] if segment.get("text_variants") else "")
+        )
         seg_conf = float(segment.get("confidence", 0.0))
         if seg_text:
             norm_seg = _normalize_string(seg_text)
@@ -118,7 +122,7 @@ def correct_text(
             if target_seg_id is not None and occ.get("segment_id") is not None:
                 if occ.get("segment_id") != target_seg_id:
                     continue
-            t = occ.get("text_norm", "")
+            t = occ.get("text_norm") or occ.get("text_raw") or occ.get("text", "")
             c = float(occ.get("confidence", 0.0))
             norm_t = _normalize_string(t)
             if norm_t:
@@ -132,14 +136,18 @@ def correct_text(
                 variants.append((norm_dom, dom_conf))
 
         for seg in track.get("segments", []):
-            t = seg.get("text", "")
+            t = (
+                seg.get("text")
+                or seg.get("corrected_text")
+                or (seg.get("text_variants", [""])[0] if seg.get("text_variants") else "")
+            )
             c = float(seg.get("confidence", 0.0))
             norm_t = _normalize_string(t)
             if norm_t:
                 variants.append((norm_t, c))
 
         for occ in track.get("occurrences", []):
-            t = occ.get("text_norm", "")
+            t = occ.get("text_norm") or occ.get("text_raw") or occ.get("text", "")
             c = float(occ.get("confidence", 0.0))
             norm_t = _normalize_string(t)
             if norm_t:

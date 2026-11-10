@@ -281,3 +281,60 @@ def test_ingest_label_batch_csv(mock_artifacts: Path, tmp_path: Path):
     assert status["tracking_error_count"] == 1
     assert status["distribution"]["lyric"] == 1
     assert status["distribution"]["non_lyric"] == 1
+
+
+def test_load_labels_jsonl_excludes_silver_by_default(tmp_path: Path):
+    labels_file = tmp_path / "labels.jsonl"
+    lines = [
+        json.dumps({
+            "video_id": "v1",
+            "track_id": "1",
+            "human_label": "lyric",
+            "annotator": "human_tester",
+        }),
+        json.dumps({
+            "video_id": "v1",
+            "track_id": "2",
+            "human_label": "lyric",
+            "annotator": "silver_lyrics_alignment",
+        }),
+    ]
+    labels_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    loaded_human = load_labels_jsonl(labels_file)
+    assert len(loaded_human) == 1
+    assert ("v1", "1") in loaded_human
+    assert ("v1", "2") not in loaded_human
+
+    loaded_all = load_labels_jsonl(labels_file, include_silver=True)
+    assert len(loaded_all) == 2
+    assert ("v1", "2") in loaded_all
+
+
+def test_get_label_status_handles_multisegment_and_ignores_silver(tmp_path: Path):
+    art_dir = tmp_path / "art_multi"
+    art_dir.mkdir()
+    (art_dir / "manifest.json").write_text(json.dumps({"video_id": "v_multi"}), encoding="utf-8")
+    tracks = {
+        "tracks": [
+            {"track_id": "42", "label": "lyric"},
+            {"track_id": "99", "label": "non_lyric"},
+        ]
+    }
+    (art_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    labels_file = art_dir / "labels.jsonl"
+    lines = [
+        # Segment-level human labels for track 42
+        json.dumps({"video_id": "v_multi", "track_id": "42.0", "human_label": "lyric", "annotator": "alice"}),
+        json.dumps({"video_id": "v_multi", "track_id": "42.1", "human_label": "lyric", "annotator": "alice"}),
+        # Silver label for track 99 (should NOT count as human-labeled)
+        json.dumps({"video_id": "v_multi", "track_id": "99", "human_label": "non_lyric", "annotator": "silver_lyrics_alignment"}),
+    ]
+    labels_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    status = get_label_status(art_dir)
+    assert status["total_tracks"] == 2
+    assert status["labeled_tracks"] == 1  # only track 42 has human labels
+    assert status["coverage_percent"] == 50.0
+

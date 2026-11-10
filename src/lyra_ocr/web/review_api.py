@@ -252,8 +252,21 @@ class ReviewAPIMixin:
                 td = json.load(f)
                 for tr in td.get("tracks", []):
                     tr_id = str(tr.get("track_id"))
-                    if tr_id == target_tid or tr_id == base_tid:
+                    if tr_id == target_tid:
                         track_found = True
+                    elif tr_id == base_tid:
+                        if "." in target_tid:
+                            seg_suffix = target_tid.split(".", 1)[1]
+                            segments = tr.get("segments") or []
+                            seg_ids = {str(s.get("segment_id")) for s in segments if s.get("segment_id") is not None}
+                            if seg_ids and seg_suffix in seg_ids:
+                                track_found = True
+                            elif not seg_ids and seg_suffix == "0":
+                                track_found = True
+                        else:
+                            track_found = True
+
+                    if track_found:
                         model_label = normalize_label(tr.get("label"))
                         model_confidence = tr.get("confidence")
                         break

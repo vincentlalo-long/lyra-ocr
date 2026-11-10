@@ -66,50 +66,6 @@ def select_cues(
         tid = str(track.get("track_id", ""))
         h = human_labels.get(tid) or {}
 
-        # 1. Label and decision determination
-        if h.get("human_label"):
-            label = h["human_label"]
-            decision = h.get("human_decision") or ("accept" if label == "lyric" else "reject")
-        else:
-            label = track.get("label", "non_lyric")
-            decision = track.get("decision", "review")
-
-        # 2. Tracking error check
-        if h.get("tracking_error"):
-            skipped_records.append({
-                "track_id": track.get("track_id"),
-                "reason": "tracking_error",
-                "label": label,
-                "decision": decision,
-                "text": track.get("features", {}).get("dominant_text", ""),
-            })
-            continue
-
-        # 3. Acceptance condition
-        if decision == "reject":
-            is_accepted = False
-        else:
-            qa_flags = track.get("qa_flags") or []
-            is_chorus_rescue = (
-                "potential_chorus" in qa_flags
-                or (label == "lyric" and "title_match_outside_intro" in qa_flags)
-            )
-            is_accepted = (label == "lyric") and (
-                decision == "accept"
-                or (include_review and decision == "review")
-                or is_chorus_rescue
-            )
-        if not is_accepted:
-            reason = "non_lyric" if label != "lyric" else "review"
-            skipped_records.append({
-                "track_id": track.get("track_id"),
-                "reason": reason,
-                "label": label,
-                "decision": decision,
-                "text": track.get("features", {}).get("dominant_text", ""),
-            })
-            continue
-
         # Spatial info
         bbox = track.get("bbox", [])
         mean_centroid = track.get("features", {}).get("mean_centroid")
@@ -123,7 +79,7 @@ def select_cues(
             x_center = 0.0
             y_center = 0.0
 
-        # 4. Text resolution & timing per segment
+        # Segment-level evaluation
         segments = track.get("segments") or []
         if not segments:
             segments = [{
@@ -136,10 +92,66 @@ def select_cues(
 
         for seg in segments:
             seg_id = seg.get("segment_id")
-            # Check segment-specific human label first, then fallback to track-level
             h_seg = human_labels.get(f"{tid}.{seg_id}") if seg_id is not None else None
-            h_eff = h_seg or h
-            seg_human_text = (h_eff.get("corrected_text") or "").strip()
+            seg_h = h_seg if (h_seg and (h_seg.get("human_label") or h_seg.get("human_decision") or "tracking_error" in h_seg)) else h
+
+            # 1. Label and decision determination (segment preferred, fallback to track)
+            if seg_h.get("human_label"):
+                seg_label = seg_h["human_label"]
+                seg_decision = seg_h.get("human_decision") or ("accept" if seg_label == "lyric" else "reject")
+            else:
+                seg_label = track.get("label", "non_lyric")
+                seg_decision = track.get("decision", "review")
+
+            # 2. Tracking error check (segment-specific takes precedence, else track-level)
+            is_tracking_error = bool(h_seg.get("tracking_error")) if (h_seg and "tracking_error" in h_seg) else bool(h.get("tracking_error"))
+            if is_tracking_error:
+                skipped_records.append({
+                    "track_id": track.get("track_id"),
+                    "segment_id": seg_id,
+                    "reason": "tracking_error",
+                    "label": seg_label,
+                    "decision": seg_decision,
+                    "text": seg.get("text", "") or track.get("features", {}).get("dominant_text", ""),
+                })
+                continue
+
+            # 3. Acceptance condition per segment
+            if seg_decision == "reject":
+                is_accepted = False
+            else:
+                qa_flags = track.get("qa_flags") or []
+                is_chorus_rescue = (
+                    "potential_chorus" in qa_flags
+                    or (seg_label == "lyric" and "title_match_outside_intro" in qa_flags)
+                )
+                is_accepted = (seg_label == "lyric") and (
+                    seg_decision == "accept"
+                    or (include_review and seg_decision == "review")
+                    or is_chorus_rescue
+                )
+
+            if not is_accepted:
+                reason = "non_lyric" if seg_label != "lyric" else "review"
+                skipped_records.append({
+                    "track_id": track.get("track_id"),
+                    "segment_id": seg_id,
+                    "reason": reason,
+                    "label": seg_label,
+                    "decision": seg_decision,
+                    "text": seg.get("text", "") or track.get("features", {}).get("dominant_text", ""),
+                })
+                continue
+
+            # 4. Text resolution & corrected_text
+            # If multi-segment track, ONLY use segment-specific corrected text.
+            # If single-segment or no segments, track-level corrected text is allowed.
+            if h_seg and (h_seg.get("corrected_text") or "").strip():
+                seg_human_text = h_seg["corrected_text"].strip()
+            elif len(segments) <= 1 and (h.get("corrected_text") or "").strip():
+                seg_human_text = h["corrected_text"].strip()
+            else:
+                seg_human_text = ""
 
             if seg_human_text:
                 final_text = seg_human_text
@@ -156,8 +168,8 @@ def select_cues(
                     "track_id": track.get("track_id"),
                     "segment_id": seg_id,
                     "reason": "empty_text",
-                    "label": label,
-                    "decision": decision,
+                    "label": seg_label,
+                    "decision": seg_decision,
                     "text": raw_text,
                 })
                 continue
@@ -175,8 +187,8 @@ def select_cues(
                 source_track_ids=[track.get("track_id")] if track.get("track_id") is not None else [],
                 source_segment_ids=[seg_id] if seg_id is not None else [],
                 confidence=float(seg.get("confidence", track.get("confidence", 0.0))),
-                decision=decision,
-                review_required=(decision == "review"),
+                decision=seg_decision,
+                review_required=(seg_decision == "review"),
                 bbox=bbox,
                 x_center=x_center,
                 y_center=y_center,

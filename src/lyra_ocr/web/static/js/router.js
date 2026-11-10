@@ -5,7 +5,7 @@
 // register their activate/deactivate hooks from main.js at boot.
 // =========================================================================
 
-export let activeTab = "review";
+export let activeTab = "lrc";
 
 const tabs = new Map();
 let reviewDeeplink = null;

@@ -257,3 +257,63 @@ def test_human_reject_always_wins_over_chorus_rescue():
     assert len(skipped) == 1
     assert skipped[0]["decision"] == "reject"
 
+
+def test_segment_level_human_labels_enforced():
+    tracks = [
+        {
+            "track_id": 42,
+            "label": "lyric",
+            "decision": "accept",
+            "features": {"dominant_text": "MULTI SEGMENT LINE"},
+            "segments": [
+                {"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "LINE ONE"},
+                {"segment_id": 1, "start_ms": 3500, "end_ms": 5500, "text": "LINE TWO"},
+            ],
+        }
+    ]
+    # Human rejects segment 1 specifically
+    human_labels = {
+        "42.1": {
+            "human_label": "non_lyric",
+            "human_decision": "reject",
+        }
+    }
+    cues, skipped = select_cues(tracks, human_labels=human_labels)
+    assert len(cues) == 1
+    assert cues[0].text == "LINE ONE"
+    assert cues[0].source_segment_ids == [0]
+
+    assert len(skipped) == 1
+    assert skipped[0]["track_id"] == 42
+    assert skipped[0]["segment_id"] == 1
+    assert skipped[0]["reason"] == "non_lyric"
+
+
+def test_multisegment_track_level_correction_not_repeated():
+    tracks = [
+        {
+            "track_id": 42,
+            "label": "lyric",
+            "decision": "accept",
+            "features": {"dominant_text": "RAW DOMINANT"},
+            "segments": [
+                {"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "FIRST ORIGINAL"},
+                {"segment_id": 1, "start_ms": 3500, "end_ms": 5500, "text": "SECOND ORIGINAL"},
+            ],
+        }
+    ]
+    # Human sets corrected_text at TRACK level only
+    human_labels = {
+        "42": {
+            "human_label": "lyric",
+            "human_decision": "accept",
+            "corrected_text": "GLOBAL TRACK TEXT",
+        }
+    }
+    cues, skipped = select_cues(tracks, human_labels=human_labels, correct_method="none")
+    assert len(cues) == 2
+    # Neither segment should be overwritten by track-level corrected_text
+    assert cues[0].text == "FIRST ORIGINAL"
+    assert cues[1].text == "SECOND ORIGINAL"
+
+

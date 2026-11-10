@@ -119,8 +119,11 @@ def _artifact_labels_count(ds_dir: Path, entry: dict[str, Any]) -> int:
     if not labels.is_file():
         return 0
     try:
-        return sum(1 for line in labels.read_text(encoding="utf-8").splitlines() if line.strip())
-    except OSError:
+        from lyra_ocr.labels import load_labels_jsonl
+        records = load_labels_jsonl(labels, include_silver=False)
+        base_tracks = {tid.split(".", 1)[0] for (vid, tid) in records.keys()}
+        return len(base_tracks)
+    except Exception:
         return 0
 
 

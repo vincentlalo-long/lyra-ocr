@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Lyra OCR - Track Review & Ground Truth Tool</title>
+  <link rel="stylesheet" href="/css/app.css">
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand">
+      <span>✦</span> LYRA OCR <span style="font-weight:400;color:var(--text-muted)">| Legacy Review & Label Tool</span>
+    </div>
+    <div class="header-controls" id="reviewHeaderControls">
+      <a href="/" style="color:var(--accent);font-size:12px;text-decoration:none;margin-right:12px">← Back to LRC Studio</a>
+      <label for="artifactSelect" style="color:var(--text-muted);font-size:12px">Artifact:</label>
+      <select id="artifactSelect"></select>
+      <div id="coveragePill" class="badge badge-lyric">100% Labeled</div>
+      <button id="refreshBtn" title="Reload state">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Tab Navigation -->
+  <nav class="tabbar">
+    <button class="tab-btn active" data-tab="review">Review</button>
+    <button class="tab-btn" data-tab="datasets">Datasets</button>
+    <button class="tab-btn" data-tab="runs">Runs</button>
+    <button class="tab-btn" data-tab="eval">Eval</button>
+  </nav>
+
+  <!-- Main Body -->
+  <div class="main-container view active" id="view-review">
+
+    <!-- Left Panel: Tracks -->
+    <div class="left-panel">
+      <div class="panel-header">
+        <span>Video Tracks (<span id="trackCount">0</span>)</span>
+      </div>
+      <div class="filter-bar">
+        <button class="filter-btn active" data-filter="all">All</button>
+        <button class="filter-btn" data-filter="unlabeled">Unlabeled</button>
+        <button class="filter-btn" data-filter="lyric">Lyric</button>
+        <button class="filter-btn" data-filter="non_lyric">Non-lyric</button>
+      </div>
+      <div class="track-list" id="trackList"></div>
+    </div>
+
+    <!-- Center Panel: Canvas & Playback -->
+    <div class="center-panel">
+      <div class="frame-toolbar">
+        <div>
+          <strong>Frame <span id="frameNum">0</span></strong> / <span id="frameTotal">0</span>
+          <span style="color:var(--text-muted);margin-left:10px" id="ptsTime">00:00.000</span>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;">
+          <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:4px">
+            <input type="checkbox" id="showAllBoxes" checked> Show All Boxes
+          </label>
+        </div>
+      </div>
+
+      <div class="canvas-container" id="canvasContainer">
+        <canvas id="frameCanvas"></canvas>
+      </div>
+
+      <div class="playback-bar">
+        <button id="prevBtn" title="Previous frame (A / Left Arrow)">◀ Prev</button>
+        <button id="playBtn" class="primary" title="Play/Pause (Space)">▶ Play</button>
+        <button id="nextBtn" title="Next frame (D / Right Arrow)">Next ▶</button>
+        <div class="slider-container">
+          <input type="range" id="frameSlider" min="0" max="0" value="0">
+        </div>
+        <select id="fpsSelect" style="width:70px">
+          <option value="1">1.0x</option>
+          <option value="2" selected>2.0x</option>
+          <option value="4">4.0x</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Right Panel: Track & Labeling Inspector -->
+    <div class="right-panel">
+      <div>
+        <div class="section-title">Selected Track</div>
+        <div class="info-card" id="trackInfoCard">
+          <div style="color:var(--text-muted);font-style:italic">Select a track or click a bounding box</div>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Human Annotation</div>
+        <div class="info-card" style="gap:12px">
+          <div class="label-grid" id="labelOptions">
+            <div class="label-option" data-label="lyric"><span class="hotkey-badge">1</span> Lyric</div>
+            <div class="label-option" data-label="non_lyric"><span class="hotkey-badge">2</span> Non-Lyric</div>
+          </div>
+
+          <label class="checkbox-row">
+            <input type="checkbox" id="trackingErrorCheckbox">
+            <span>Tracking Error / Fragmented Track <span class="hotkey-badge">E</span></span>
+          </label>
+
+          <div class="form-group">
+            <label for="correctedTextInput">Corrected Text (optional):</label>
+            <input type="text" id="correctedTextInput" placeholder="Override OCR errors">
+          </div>
+
+          <div class="form-group">
+            <label for="notesInput">Review Notes:</label>
+            <input type="text" id="notesInput" placeholder="Auditor rationale / observations">
+          </div>
+
+          <button id="saveLabelBtn" class="primary" style="padding:10px;font-size:14px;margin-top:4px">
+            💾 Save Label (Enter)
+          </button>
+        </div>
+      </div>
+
+      <div>
+        <div class="section-title">Keyboard Shortcuts</div>
+        <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
+          • <kbd>1</kbd> / <kbd>2</kbd> : Lyric / Non-Lyric<br>
+          • <kbd>A</kbd> / <kbd>D</kbd> or <kbd>←</kbd> / <kbd>→</kbd> : Step Frames<br>
+          • <kbd>Space</kbd> : Play / Pause Video<br>
+          • <kbd>E</kbd> : Toggle Tracking Error<br>
+          • <kbd>Enter</kbd> : Save & Advance Track
+        </div>
+      </div>
+    </div>
+
+  </div>
+  <!-- /view-review -->
+
+  <!-- Datasets View -->
+  <div class="view" id="view-datasets">
+    <div class="datasets-layout">
+      <div class="ds-sidebar">
+        <div class="ds-card">
+          <h4>Dataset</h4>
+          <select id="dsSelect"></select>
+          <input type="text" id="dsNewName" placeholder="New dataset name">
+          <input type="text" id="dsNewDesc" placeholder="Description (optional)">
+          <button class="primary" id="dsCreateBtn">+ Create Dataset</button>
+        </div>
+
+        <div class="ds-card">
+          <h4>YouTube Channel / Playlist</h4>
+          <input type="text" id="ytUrl" placeholder="https://www.youtube.com/@channel/videos">
+          <div class="opts-row">
+            <div>Max items
+              <input type="number" id="ytLimit" value="200" min="1" max="1000">
+            </div>
+            <div style="flex:0 0 auto; justify-content:flex-end">
+              <button id="ytFetchBtn">Fetch list</button>
+            </div>
+          </div>
+          <div id="ytStatus" style="font-size:12px;color:var(--text-muted)"></div>
+          <div id="ytResults" style="max-height:260px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; display:none">
+            <table class="data-table" id="ytTable"></table>
+          </div>
+        </div>
+
+        <div class="ds-card">
+          <h4>Local Video Files (workspace-relative paths, one per line)</h4>
+          <textarea id="localPaths" placeholder="outputs/raw/myvideo.mp4&#10;/abs/path/inside/workspace.mp4"></textarea>
+        </div>
+
+        <div class="ds-card">
+          <h4>Download / Ingest</h4>
+          <div class="opts-row">
+            <div>Max height
+              <input type="number" id="optMaxHeight" value="720" step="60" min="0">
+            </div>
+          </div>
+          <button class="primary" id="downloadBtn">Download selected videos</button>
+          <div style="font-size:11px;color:var(--text-muted)">
+            This only downloads media into the dataset. Create a run in the <strong>Runs</strong> tab to process it.
+          </div>
+        </div>
+      </div>
+
+      <div class="ds-main">
+        <div id="dsStats" class="stat-chips"></div>
+        <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
+          <span id="dsTitle">No dataset selected</span>
+          <span style="display:flex;gap:8px">
+            <button class="mini-btn danger" id="dsCancelAllBtn" title="Cancel all running and queued jobs">⏹ Cancel All</button>
+            <button class="mini-btn" id="dsRunsBtn">Runs →</button>
+            <button class="mini-btn" id="dsRefreshBtn">↻ Refresh</button>
+          </span>
+        </div>
+        <div style="border:1px solid var(--border); border-top:none; border-radius:0 0 var(--radius) var(--radius); overflow:auto; max-height: calc(100vh - 240px)">
+          <table class="data-table" id="dsVideoTable"></table>
+        </div>
+        <div id="dsDetailError" style="font-size:12px;color:var(--channel)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Runs View -->
+  <div class="view" id="view-runs">
+    <div class="datasets-layout">
+      <div class="ds-sidebar">
+        <div class="ds-card">
+          <h4>Dataset</h4>
+          <select id="runDsSelect"></select>
+        </div>
+
+        <div class="ds-card">
+          <h4>New Run</h4>
+          <div class="opts-row">
+            <div>Tracker
+              <select id="runTracker">
+                <option value="greedy" selected>greedy</option>
+                <option value="bytetrack">bytetrack</option>
+              </select>
+            </div>
+            <div>FPS <input type="number" id="runFps" value="1.0" step="0.5" min="0.1" max="8"></div>
+          </div>
+          <div class="opts-row">
+            <div>Device
+              <select id="runDevice">
+                <option value="auto" selected>auto</option>
+                <option value="cpu">cpu</option>
+                <option value="cuda">cuda</option>
+              </select>
+            </div>
+            <div>Rec batch <input type="number" id="runRecBatch" value="8" step="1" min="1" max="64"></div>
+          </div>
+          <label class="checkbox-row">
+            <input type="checkbox" id="runDedup"> Frame dedup (reuse OCR for near-identical frames)
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="runForce"> Force re-run (reprocess finished videos)
+          </label>
+          <button class="primary" id="runCreateBtn">+ Create run</button>
+        </div>
+
+        <div class="ds-card">
+          <h4>Run</h4>
+          <select id="runSelect"></select>
+          <div id="runMeta" style="font-size:11px;color:var(--text-muted)"></div>
+          <button class="primary" id="runQueueAllBtn">Queue all videos</button>
+          <button id="runQueueMissingBtn">Queue missing videos</button>
+          <button class="danger" id="runCancelAllBtn" title="Cancel all queued and running jobs in this dataset">⏹ Cancel all jobs</button>
+          <button class="danger" id="runDeleteBtn" title="Delete selected run and its output artifacts">🗑 Delete run</button>
+          <button id="runPromoteBtn" title="Copy labels from this run into canonical dataset ground truth">Promote labels to Ground Truth</button>
+          <button id="runEvalBtn">Eval this run →</button>
+        </div>
+      </div>
+
+      <div class="ds-main">
+        <div id="runStats" class="stat-chips"></div>
+        <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
+          <span id="runTitle">No run selected</span>
+          <span style="display:flex;gap:8px">
+            <button class="mini-btn danger" id="runTableDeleteBtn" title="Delete selected run">🗑 Delete Run</button>
+            <button class="mini-btn danger" id="runTableCancelAllBtn" title="Cancel all queued and running jobs">⏹ Cancel All</button>
+            <button class="mini-btn" id="runRefreshBtn">↻ Refresh</button>
+          </span>
+        </div>
+        <div style="border:1px solid var(--border); border-top:none; border-radius:0 0 var(--radius) var(--radius); overflow:auto; max-height: calc(100vh - 240px)">
+          <table class="data-table" id="runVideoTable"></table>
+        </div>
+        <div id="runDetailError" style="font-size:12px;color:var(--channel)"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Eval View -->
+  <div class="view" id="view-eval">
+    <div class="eval-layout">
+      <div class="eval-toolbar">
+        <label style="color:var(--text-muted);font-size:12px" for="evalDatasetSelect">Dataset:</label>
+        <select id="evalDatasetSelect" style="min-width:220px"></select>
+        <label style="color:var(--text-muted);font-size:12px" for="evalRunSelect">Run:</label>
+        <select id="evalRunSelect" style="min-width:220px"></select>
+        <button class="primary" id="evalRunBtn">Run Evaluation</button>
+        <span id="evalStatus" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
+      <div id="evalContent">
+        <div style="color:var(--text-muted);font-style:italic;padding:30px">
+          Select a dataset and run. Ground truth comes from the dataset, not from individual runs.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast">Label Saved Successfully!</div>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

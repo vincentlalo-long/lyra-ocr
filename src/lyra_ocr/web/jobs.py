@@ -399,6 +399,8 @@ class JobQueue:
         src = VideoSource.from_dict(rec.source)
         cancel_event = self._cancel_events.setdefault(rec.job_id, threading.Event())
         with self._lock:
+            if rec.job_id not in self._jobs or rec.state != "queued" or cancel_event.is_set():
+                return
             rec.state = "running"
             rec.stage = "starting"
             rec.updated_at = int(time.time())

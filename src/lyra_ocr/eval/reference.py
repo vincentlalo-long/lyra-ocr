@@ -62,6 +62,9 @@ def _clean_plain_lyrics(raw_lines: list[str]) -> list[str]:
     return cleaned
 
 
+clean_plain_lyrics = _clean_plain_lyrics
+
+
 def load_plain_lyrics(dataset_dir: str | Path, video_id: str) -> list[str]:
     d = Path(dataset_dir)
 

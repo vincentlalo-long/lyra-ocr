@@ -15,6 +15,7 @@ from lyra_ocr.web.base import ReviewHandlerBase
 from lyra_ocr.web.dataset_api import DatasetAPIMixin
 from lyra_ocr.web.eval_api import EvalAPIMixin
 from lyra_ocr.web.jobs import JobQueue
+from lyra_ocr.web.lrc_api import LrcAPIMixin
 from lyra_ocr.web.review_api import ReviewAPIMixin
 
 #: POST bodies larger than this are rejected before being read into memory.
@@ -94,15 +95,18 @@ GET_ROUTES: dict[str, Callable[[Any, Query], None]] = {
     "/api/datasets": _get_datasets,
     "/api/jobs": _list_jobs,
     "/api/youtube/list": _youtube_list,
+    "/api/lrc": lambda handler, query: handler._handle_get_lrc(_query_param(query, "path")),
 }
 
 POST_ROUTES: dict[str, Callable[[Any], None]] = {
     "/api/label": lambda handler: handler._handle_post_label(),
     "/api/datasets": lambda handler: handler._handle_create_dataset(),
+    "/api/lrc/generate": lambda handler: handler._handle_post_lrc_generate(),
+    "/api/lrc/save": lambda handler: handler._handle_post_lrc_save(),
 }
 
 
-class LyraReviewHandler(ReviewAPIMixin, DatasetAPIMixin, EvalAPIMixin, ReviewHandlerBase):
+class LyraReviewHandler(ReviewAPIMixin, DatasetAPIMixin, EvalAPIMixin, LrcAPIMixin, ReviewHandlerBase):
     """Composed request handler: routing here, API handlers grouped by domain."""
 
     def do_GET(self) -> None:
