@@ -131,13 +131,16 @@ def select_cues(
                 "confidence": track.get("confidence", 0.0),
             }]
 
-        human_text = (h.get("corrected_text") or "").strip()
-
         for seg in segments:
             seg_id = seg.get("segment_id")
-            if human_text and (len(segments) == 1 or seg_id in (0, None)):
-                final_text = human_text
-                raw_text = seg.get("text") or track.get("features", {}).get("dominant_text") or human_text
+            # Check segment-specific human label first, then fallback to track-level
+            h_seg = human_labels.get(f"{tid}.{seg_id}") if seg_id is not None else None
+            h_eff = h_seg or h
+            seg_human_text = (h_eff.get("corrected_text") or "").strip()
+
+            if seg_human_text:
+                final_text = seg_human_text
+                raw_text = seg.get("text") or track.get("features", {}).get("dominant_text") or seg_human_text
                 corr_info = CorrectionInfo(method="human", changed=True, confidence=1.0)
             else:
                 cfg = CorrectionConfig(method=correct_method)

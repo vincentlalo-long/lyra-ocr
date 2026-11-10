@@ -278,7 +278,15 @@ def ingest_label_batch_csv(
                 stats["errors"] += 1
                 continue
 
-            if tid not in tracks_map:
+            track_info = None
+            if tid in tracks_map:
+                track_info = tracks_map[tid]
+            else:
+                base_tid = tid.split(".")[0] if "." in tid else tid
+                if base_tid in tracks_map:
+                    track_info = tracks_map[base_tid]
+
+            if track_info is None:
                 stats["errors"] += 1
                 continue
 
@@ -286,8 +294,6 @@ def ingest_label_batch_csv(
             if row_video_id and manifest_video_id != "unknown_video" and row_video_id != manifest_video_id:
                 stats["errors"] += 1
                 continue
-
-            track_info = tracks_map[tid]
             vid = manifest_video_id if manifest_video_id != "unknown_video" else (row_video_id or "unknown_video")
             err_raw = str(row.get("tracking_error", "")).strip().lower()
             is_tracking_error = err_raw in ("true", "1", "yes", "y")

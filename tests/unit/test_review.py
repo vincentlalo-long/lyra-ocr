@@ -153,3 +153,69 @@ def test_export_tracks_json_and_review_csv():
             updated_rows = list(reader)
             assert updated_rows[0]["human_label"] == "lyric"
             assert updated_rows[0]["human_decision"] == "accept"
+
+
+def test_segment_review_csv_roundtrip(tmp_path):
+    from lyra_ocr.review import export_review_csv, export_tracks_json
+    from lyra_ocr.labels import ingest_label_batch_csv
+    from lyra_ocr.lyric.select import load_artifacts, select_cues
+
+    tr = TextTrack(track_id=42)
+    tr.start_ms = 1000
+    tr.end_ms = 8000
+    tr.bbox = [100, 100, 400, 200]
+    tr.classification = ClassificationResult(
+        label="lyric",
+        confidence=0.95,
+        reason="lyric",
+        decision="accept",
+    )
+    tr.segments = [
+        TextSegment(segment_id=0, start_ms=1000, end_ms=4000, text="RAW LINE ONE", confidence=0.9, num_occurrences=3),
+        TextSegment(segment_id=1, start_ms=4500, end_ms=8000, text="RAW LINE TWO", confidence=0.9, num_occurrences=3),
+    ]
+    tr.occurrences = []
+    tr.features = {"dominant_text": "RAW LINE ONE", "mean_centroid": [0.5, 0.8]}
+
+    # 1. Export tracks and manifest
+    export_tracks_json([tr], tmp_path / "tracks.json")
+    (tmp_path / "manifest.json").write_text(json.dumps({"video_id": "test_vid", "probe": {"duration": 10.0}}))
+
+    # 2. Export review CSV (should produce 42.0 and 42.1)
+    csv_path = tmp_path / "review.csv"
+    export_review_csv([tr], csv_path, video_id="test_vid")
+
+    # 3. Simulate human editing the CSV
+    with open(csv_path, "r", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) == 2
+    assert rows[0]["track_id"] == "42.0"
+    assert rows[1]["track_id"] == "42.1"
+
+    # Annotate row 1
+    rows[0]["human_label"] = "lyric"
+    rows[0]["human_decision"] = "accept"
+    rows[0]["corrected_text"] = "CORRECTED LINE ONE"
+
+    # Annotate row 2
+    rows[1]["human_label"] = "lyric"
+    rows[1]["human_decision"] = "accept"
+    rows[1]["corrected_text"] = "CORRECTED LINE TWO"
+
+    with open(csv_path, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+
+    # 4. Ingest CSV
+    stats = ingest_label_batch_csv(tmp_path, csv_path)
+    assert stats["errors"] == 0
+    assert stats["ingested"] == 2
+
+    # 5. Load artifacts and select cues
+    manifest, tracks, human_labels = load_artifacts(tmp_path)
+    cues, skipped = select_cues(tracks, human_labels)
+    assert len(cues) == 2
+    assert cues[0].text == "CORRECTED LINE ONE"
+    assert cues[1].text == "CORRECTED LINE TWO"
+
