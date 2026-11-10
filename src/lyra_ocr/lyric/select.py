@@ -41,6 +41,8 @@ def load_artifacts(artifacts_dir: str | Path) -> tuple[dict[str, Any], list[dict
     if labels_path.exists():
         records = load_labels_jsonl(labels_path)
         for (_, tid), row in records.items():
+            if row.get("annotator") == "silver_lyrics_alignment":
+                continue
             human_labels[str(tid)] = row
 
     return manifest, tracks, human_labels

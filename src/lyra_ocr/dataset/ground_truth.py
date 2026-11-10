@@ -122,6 +122,8 @@ def promote_run(dataset_dir: Path, run: dict[str, Any], video_ids: set[str] | No
             label = labels.get((video_id, track_id))
             if not label or not label.get("human_label"):
                 continue
+            if label.get("annotator") == "silver_lyrics_alignment":
+                continue
             features = track.get("features", {})
             start_ms = int(track.get("start_ms", 0))
             end_ms = int(track.get("end_ms", start_ms))

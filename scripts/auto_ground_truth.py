@@ -324,6 +324,8 @@ def process_video(
     # 4. Write canonical Ground Truth segments
     segments: list[GroundTruthSegment] = []
     now = datetime.now(timezone.utc).isoformat()
+    matched_texts = {clean_text(item["text"]) for item in aligned if item["label"] == "lyric"}
+
     for item in aligned:
         segments.append(
             GroundTruthSegment(
@@ -342,14 +344,48 @@ def process_video(
                 source_track_id=item["track_id"],
             )
         )
+
+    # Include unmatched reference lyrics lines as false-negative ground truth items
+    clean_ref_lines = [l.strip() for l in lyrics if l.strip()]
+    miss_idx = 0
+    for ref_l in clean_ref_lines:
+        c_ref = clean_text(ref_l)
+        if not c_ref:
+            continue
+        # Check if this reference lyric line was detected by any track
+        is_covered = any(
+            SequenceMatcher(None, c_ref, m_t).ratio() >= 0.50 or c_ref in m_t or m_t in c_ref
+            for m_t in matched_texts
+        )
+        if not is_covered:
+            segments.append(
+                GroundTruthSegment(
+                    video_id=video_id,
+                    segment_id=f"gt_miss_{miss_idx}",
+                    start_ms=0,
+                    end_ms=0,
+                    human_label="lyric",
+                    text=ref_l,
+                    bbox=[0, 0, 0, 0],
+                    human_decision="accept",
+                    notes="unmatched_reference_lyric",
+                    annotator="silver_lyrics_alignment",
+                    reviewed_at=now,
+                    source_run_id=run_dir.name,
+                    source_track_id=None,
+                )
+            )
+            miss_idx += 1
+
     if write_gt:
         gt_file = dataset_dir / "ground_truth" / f"{video_id}.json"
         if force_gt or not gt_file.exists():
             ground_truth.write_segments(dataset_dir, video_id, segments)
 
-    # 5. Write labels.jsonl in run artifact dir
+    # 5. Write silver_labels.jsonl and labels.jsonl in run artifact dir
+    silver_labels_file = out_dir / "silver_labels.jsonl"
     labels_file = out_dir / "labels.jsonl"
-    with open(labels_file, "w", encoding="utf-8") as f:
+    with open(silver_labels_file, "w", encoding="utf-8") as f_silver, open(labels_file, "w", encoding="utf-8") as f_labels:
         for item in aligned:
             row = {
                 "video_id": video_id,
@@ -360,7 +396,9 @@ def process_video(
                 "annotator": "silver_lyrics_alignment",
                 "reviewed_at": now,
             }
-            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            line = json.dumps(row, ensure_ascii=False) + "\n"
+            f_silver.write(line)
+            f_labels.write(line)
 
     return {
         "video_id": video_id,
