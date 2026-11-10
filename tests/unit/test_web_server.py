@@ -570,7 +570,7 @@ def test_youtube_list_surfaces_error(ws_server, monkeypatch):
     assert exc.value.code == 502
 
 
-def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path):
+def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path, monkeypatch):
     """Test POST /api/lrc/generate, GET /api/lrc, and POST /api/lrc/save."""
     server_info = make_web_server(tmp_path)
     url = server_info["url"]
@@ -666,4 +666,28 @@ def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path):
     # Verify updated content on disk
     saved_text = Path(out_lrc).read_text(encoding="utf-8")
     assert "Em ơi có hiểu không" in saved_text
+
+    # 5. YouTube URL handling
+    def mock_download(url_str, out_dir, **kwargs):
+        mock_mp4 = Path(out_dir) / "mock_yt.mp4"
+        mock_mp4.write_bytes(b"dummy")
+        art_yt = Path(out_dir).parent / "mock_yt"
+        art_yt.mkdir(parents=True, exist_ok=True)
+        yt_manifest = dict(manifest)
+        yt_manifest["video_path"] = str(mock_mp4)
+        (art_yt / "manifest.json").write_text(json.dumps(yt_manifest), encoding="utf-8")
+        (art_yt / "tracks.json").write_text(json.dumps(tracks_data), encoding="utf-8")
+        return {"video_path": str(mock_mp4), "title": "Mock YouTube Song", "id": "mock123"}
+
+    monkeypatch.setattr("lyra_ocr.video.downloader.download_video", mock_download)
+    monkeypatch.setattr("lyra_ocr.pipeline.run_phase1_pipeline", lambda **kwargs: None)
+    yt_payload = {
+        "video_path": "https://www.youtube.com/watch?v=mock123",
+        "force": False,
+    }
+    status, yt_resp = http_request(f"{url}/api/lrc/generate", data=yt_payload, method="POST")
+    assert status == 200
+    assert yt_resp["ok"] is True
+    assert "Em ơi có biết" in yt_resp["lrc_text"]
+
 

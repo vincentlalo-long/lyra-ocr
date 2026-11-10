@@ -142,8 +142,16 @@ async function handleGenerateLrc() {
   };
 
   genBtn.disabled = true;
-  genBtn.innerHTML = '<span class="spinner"></span> Processing OCR & Generating LRC...';
-  showStatus("Processing video and extracting synchronized lyrics...", "info");
+  const isUrl = videoPath.startsWith("http://") || videoPath.startsWith("https://");
+  genBtn.innerHTML = isUrl
+    ? '<span class="spinner"></span> Downloading & Processing Video...'
+    : '<span class="spinner"></span> Processing OCR & Generating LRC...';
+  showStatus(
+    isUrl
+      ? "Downloading YouTube video & extracting synchronized lyrics..."
+      : "Processing video and extracting synchronized lyrics...",
+    "info"
+  );
 
   try {
     const res = await fetch("/api/lrc/generate", {

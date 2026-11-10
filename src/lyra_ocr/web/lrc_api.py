@@ -71,12 +71,23 @@ class LrcAPIMixin:
                     video_path=video_path or None,
                     force=force,
                 )
-            # Case 2: Build from video path
+            # Case 2: Build from video path or URL
             elif video_path:
-                resolved_vid = _safe_resolve(video_path, root)
-                if not resolved_vid or not resolved_vid.is_file():
-                    self._send_error(f"Video file not found: {video_path}", 404)
-                    return
+                if video_path.startswith(("http://", "https://")):
+                    from lyra_ocr.video.downloader import download_video
+
+                    dl_dir = root / "outputs" / "downloads"
+                    dl_dir.mkdir(parents=True, exist_ok=True)
+                    logger.info("Downloading video from URL: %s", video_path)
+                    dl_info = download_video(video_path, str(dl_dir), max_height=720)
+                    resolved_vid = Path(dl_info["video_path"])
+                    if not title and dl_info.get("title"):
+                        title = dl_info["title"]
+                else:
+                    resolved_vid = _safe_resolve(video_path, root)
+                    if not resolved_vid or not resolved_vid.is_file():
+                        self._send_error(f"Video file not found: {video_path}", 404)
+                        return
                 if not out_lrc_str:
                     out_dir = root / "outputs" / resolved_vid.stem
                     out_dir.mkdir(parents=True, exist_ok=True)
@@ -87,6 +98,7 @@ class LrcAPIMixin:
                 result = build_lrc_from_video(
                     resolved_vid,
                     out_lrc,
+                    artifacts_dir=out_lrc.parent,
                     fps=fps,
                     tracker=tracker,
                     include_review=include_review,
