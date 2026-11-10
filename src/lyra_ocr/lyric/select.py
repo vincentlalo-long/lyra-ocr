@@ -60,7 +60,7 @@ def select_cues(
 ) -> tuple[list[LyricCue], list[dict[str, Any]]]:
     accepted_cues: list[LyricCue] = []
     skipped_records: list[dict[str, Any]] = []
-    corpus_vocab = build_corpus_vocab(tracks) if correct_method == "dictionary" else None
+    corpus_vocab = build_corpus_vocab(tracks, human_labels=human_labels) if correct_method == "dictionary" else None
 
     for track in tracks:
         tid = str(track.get("track_id", ""))

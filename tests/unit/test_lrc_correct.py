@@ -109,3 +109,50 @@ def test_build_corpus_vocab_ignores_rejected_and_non_lyric():
     assert "subscribe" not in vocab
     assert "singing" in vocab
 
+
+def test_build_corpus_vocab_respects_human_labels():
+    from lyra_ocr.lyric.correct import build_corpus_vocab
+
+    tracks = [
+        {
+            "track_id": "1",
+            "label": "lyric",
+            "decision": "accept",
+            "features": {"dominant_text": "BAD WATERMARK"},
+        },
+        {
+            "track_id": "2",
+            "label": "lyric",
+            "decision": "accept",
+            "features": {"dominant_text": "GENUINE LYRICS"},
+        },
+    ]
+    human_labels = {
+        "1": {"decision": "reject", "human_label": "non_lyric"},
+    }
+    vocab = build_corpus_vocab(tracks, human_labels=human_labels)
+    assert "watermark" not in vocab
+    assert "bad" not in vocab
+    assert "genuine" in vocab
+
+
+def test_correct_text_protects_ordinals_and_short_codes():
+    all_tracks = [
+        {"features": {"dominant_text": "FIRST TIME IN THE CITY"}},
+        {"features": {"dominant_text": "SECOND TIME AROUND"}},
+    ]
+    track = {
+        "features": {"dominant_text": "THE 1st AND 2nd IN 3D AND 4K FROM THE 90s"},
+        "occurrences": [
+            {"text_norm": "THE 1st AND 2nd IN 3D AND 4K FROM THE 90s", "confidence": 0.95}
+        ],
+    }
+    cfg = CorrectionConfig(method="dictionary")
+    final, raw, info = correct_text(track, all_tracks, cfg)
+    assert "1st" in final
+    assert "2nd" in final
+    assert "3D" in final
+    assert "4K" in final
+    assert "90s" in final
+
+

@@ -49,6 +49,9 @@ flowchart LR
 | **Total Generated Tracks** | 1,646 (30 vid) | **1,417** (25 vid) | **1,359** (25 vid) | — | ByteTrack produces 58 fewer fragmented tracks |
 | **Inference Latency** | ~15.3s / video | **15.3s / video** | **15.1s / video** | — | Real-time on GPU (~12x faster than playback) |
 
+> [!NOTE]
+> **Ground Truth Provenance**: The metrics reported above reflect evaluation against an automatic Silver Ground Truth alignment. Golden Ground Truth promotion strictly requires human annotators (`promote_run` skips silver records). True false negatives for tracks missed by the detector are retained as missing segments during evaluation.
+
 ### 2. Confusion Matrix (25 Videos Benchmark)
 
 | Classification Category | Greedy Tracker | ByteTrack | Technical Significance |
@@ -62,7 +65,7 @@ flowchart LR
 
 1. **Title Matching Trap Resolved**:
    - *Previous Failure Mode*: Song lyrics frequently repeat words from the title in their hook/chorus (e.g. *"Tell It To My Heart"*, *"Anymore"*, *"High Forever"*). An overly broad video title overlap rule previously rejected these chorus lines when they appeared mid-video.
-   - *Resolution*: Title-card matching is now strictly bound to the intro/outro window ($\le 15\%$ or $\ge 90\%$ of duration) and requires significant title token coverage ($\ge 50\%$). Mid-video hook lines in active reading zones are reliably accepted.
+   - *Resolution*: Title-card matching is now strictly bound to the intro window ($\le 25\%$ of duration) and requires significant title token coverage ($\ge 50\%$). Mid-video hook lines in active reading zones are reliably accepted.
 2. **Reading Zone Cadence & Duration Tuning**:
    - Expanded acceptable duration bounds from `1000–9000ms` to `500–16000ms`, capturing both fast ad-libs (0.5–1s) and slow ballad cues (10–14s).
    - Removed casing restrictions: all-caps lyrics (common in video typography) are evaluated strictly through spatial reading zone priors ($cy \in [0.20, 0.95]$, $cx \in [0.10, 0.90]$).
@@ -104,7 +107,7 @@ flowchart LR
 
 - **Python**: 3.11 or 3.12
 - **System Tools**: `ffmpeg` and `ffprobe` available on `PATH`
-- **Core Dependencies**: `rapidocr>=3.0.0`, `onnxruntime>=1.17.0`, `opencv-python>=4.8.0`, `numpy>=1.24.0`, `pillow>=10.0.0`, `yt-dlp>=2024.0.0`, `pytest>=8.0.0`, `scipy>=1.12.0`, `scikit-learn>=1.4.0`
+- **Core Dependencies**: `rapidocr>=3.0.0`, `onnxruntime>=1.17.0`, `opencv-python>=4.8.0`, `numpy>=1.24.0`, `pillow>=10.0.0`, `yt-dlp>=2024.0.0`, `pytest>=8.0.0`, `scipy>=1.12.0`
 - **Optional Dependencies**: `matplotlib>=3.8.0` (for publication evaluation charts)
 
 ---

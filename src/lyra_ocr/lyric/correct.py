@@ -51,9 +51,23 @@ def _match_casing(candidate: str, original: str) -> str:
     return candidate
 
 
-def build_corpus_vocab(all_tracks: list[dict[str, Any]], *, only_accepted: bool = True) -> Counter[str]:
+def build_corpus_vocab(
+    all_tracks: list[dict[str, Any]],
+    *,
+    only_accepted: bool = True,
+    human_labels: dict[str, Any] | None = None,
+) -> Counter[str]:
     vocab: Counter[str] = Counter()
     for tr in all_tracks:
+        tid = str(tr.get("track_id", ""))
+        if human_labels:
+            hl = human_labels.get(tid)
+            if hl:
+                h_decision = hl.get("decision") or hl.get("human_decision")
+                h_label = hl.get("human_label") or hl.get("label")
+                if h_decision == "reject" or h_label == "non_lyric":
+                    continue
+
         if only_accepted:
             label = tr.get("label")
             decision = tr.get("decision")
@@ -185,9 +199,16 @@ def correct_text(
     # Method: dictionary (corpus-derived)
     effective_vocab = vocab if vocab is not None else build_corpus_vocab(all_tracks)
 
+    # Pattern for ordinals, short alphanumeric codes, or decade specs (e.g. 1st, 2nd, 3D, 4K, 2U, V8, 90s)
+    # that should be preserved as-is rather than being coerced into dictionary words.
+    ordinal_or_code_re = re.compile(
+        r"^(?:\d+(?:st|nd|rd|th)|\d{1,4}[a-zA-Z]{1,2}|[a-zA-Z]\d{1,4}|\d{2,4}s)$",
+        re.IGNORECASE,
+    )
+
     def _replace_token(match: re.Match) -> str:
         tok = match.group(0)
-        if _is_cjk(tok) or tok.isdigit():
+        if _is_cjk(tok) or tok.isdigit() or ordinal_or_code_re.match(tok):
             return tok
         if len(tok) < config.min_token_len:
             return tok
