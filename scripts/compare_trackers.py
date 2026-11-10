@@ -62,6 +62,7 @@ def run_tracker_batch(
         vid = v["video_id"]
         vtitle = v.get("title", "")[:32]
         print(f"  [{tracker_name}] ({idx:>2}/{len(videos)}) {vid} [{vtitle}]...", end="", flush=True)
+        gt_file = dataset_dir / "ground_truth" / f"{vid}.json"
         res = process_video(
             v,
             dataset_dir,
@@ -72,6 +73,7 @@ def run_tracker_batch(
             rec_batch_size=rec_batch_size,
             dedup=dedup,
             engines=engines,
+            write_gt=not gt_file.exists(),
         )
         registry.sync_run_entry(
             workspace_root,

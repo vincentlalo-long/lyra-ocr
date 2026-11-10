@@ -282,6 +282,8 @@ def process_video(
     rec_batch_size: int = 8,
     dedup: bool = True,
     engines: Optional[PipelineEngines] = None,
+    write_gt: bool = True,
+    force_gt: bool = False,
 ) -> dict[str, Any]:
     """Run pipeline and generate ground truth for one video."""
     video_id = video_entry["video_id"]
@@ -340,7 +342,10 @@ def process_video(
                 source_track_id=item["track_id"],
             )
         )
-    ground_truth.write_segments(dataset_dir, video_id, segments)
+    if write_gt:
+        gt_file = dataset_dir / "ground_truth" / f"{video_id}.json"
+        if force_gt or not gt_file.exists():
+            ground_truth.write_segments(dataset_dir, video_id, segments)
 
     # 5. Write labels.jsonl in run artifact dir
     labels_file = out_dir / "labels.jsonl"
