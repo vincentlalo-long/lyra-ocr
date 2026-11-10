@@ -210,3 +210,50 @@ def test_load_artifacts(tmp_path: Path):
     assert len(tr) == 1
     assert "10" in hl
     assert hl["10"]["corrected_text"] == "TEST"
+
+
+def test_include_review_does_not_leak_non_lyric():
+    # Track is non-lyric, under review with title_match_outside_intro flag
+    tracks = [
+        {
+            "track_id": 99,
+            "start_ms": 50000,
+            "end_ms": 53000,
+            "label": "non_lyric",
+            "decision": "review",
+            "qa_flags": ["metadata_title_match", "title_match_outside_intro"],
+            "features": {"dominant_text": "CORNER TITLE CARD", "mean_centroid": [0.05, 0.05]},
+            "segments": [{"segment_id": 0, "start_ms": 50000, "end_ms": 53000, "text": "CORNER TITLE CARD"}],
+        }
+    ]
+    # Even with include_review=True, non_lyric must NEVER be accepted as lyric cue
+    cues, skipped = select_cues(tracks, human_labels={}, include_review=True)
+    assert len(cues) == 0
+    assert len(skipped) == 1
+    assert skipped[0]["reason"] == "non_lyric"
+
+
+def test_human_reject_always_wins_over_chorus_rescue():
+    tracks = [
+        {
+            "track_id": 10,
+            "start_ms": 45000,
+            "end_ms": 48000,
+            "label": "lyric",
+            "decision": "review",
+            "qa_flags": ["potential_chorus"],
+            "features": {"dominant_text": "CASTLE", "mean_centroid": [0.5, 0.85]},
+            "segments": [{"segment_id": 0, "start_ms": 45000, "end_ms": 48000, "text": "CASTLE"}],
+        }
+    ]
+    human_labels = {
+        "10": {
+            "human_label": "non_lyric",
+            "human_decision": "reject",
+        }
+    }
+    cues, skipped = select_cues(tracks, human_labels=human_labels, include_review=True)
+    assert len(cues) == 0
+    assert len(skipped) == 1
+    assert skipped[0]["decision"] == "reject"
+
