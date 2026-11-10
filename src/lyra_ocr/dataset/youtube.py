@@ -57,17 +57,31 @@ def list_channel_or_playlist(url: str, limit: int = 1000) -> list[dict[str, Any]
         for e in entries:
             if not e:
                 continue
-            vid = e.get("id", "")
-            if not vid or vid.startswith("https://"):
-                # Flat entries for single videos may already be URLs; skip non-video rows
-                if not vid:
+            vid = str(e.get("id") or "").strip()
+            if vid.startswith(("http://", "https://")):
+                m = _WATCH_RE.search(vid)
+                if m:
+                    vid = m.group(1)
+                else:
                     continue
+            elif not vid:
+                entry_url = str(e.get("url") or e.get("webpage_url") or "")
+                m = _WATCH_RE.search(entry_url)
+                if m:
+                    vid = m.group(1)
+                else:
+                    continue
+
+            final_url = str(e.get("webpage_url") or e.get("url") or "").strip()
+            if not final_url or not final_url.startswith(("http://", "https://")):
+                final_url = f"https://www.youtube.com/watch?v={vid}"
+
             items.append(
                 {
                     "id": vid,
                     "title": e.get("title", ""),
                     "duration": e.get("duration"),
-                    "url": e.get("url") or e.get("webpage_url") or f"https://www.youtube.com/watch?v={vid}",
+                    "url": final_url,
                     "channel": e.get("channel") or channel,
                 }
             )

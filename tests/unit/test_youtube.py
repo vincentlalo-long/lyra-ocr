@@ -93,3 +93,34 @@ def test_playlist_url_not_treated_as_watch(patch_ydl):
     captured = patch_ydl({"entries": [{"id": "Z" * 11, "title": "z", "url": "u"}]})
     yt.list_channel_or_playlist("https://www.youtube.com/playlist?list=PLabc123")
     assert captured.get("extract_flat") == "in_playlist"
+
+
+def test_channel_listing_url_as_id_extraction(patch_ydl):
+    patch_ydl({
+        "channel": "URL Channel",
+        "entries": [
+            {
+                "id": "https://www.youtube.com/watch?v=1234567890a",
+                "title": "Song with URL ID",
+                "duration": 180,
+            },
+            {
+                "id": "",
+                "url": "https://youtu.be/0987654321b",
+                "title": "Song with missing ID but watch URL",
+                "duration": 200,
+            },
+            {
+                "id": "not_a_valid_url_or_empty",
+                "url": "invalid",
+            },
+        ],
+    })
+    items = yt.list_channel_or_playlist("https://www.youtube.com/@urlchannel/videos")
+    assert len(items) == 3
+    assert items[0]["id"] == "1234567890a"
+    assert items[0]["url"] == "https://www.youtube.com/watch?v=1234567890a"
+    assert items[1]["id"] == "0987654321b"
+    assert items[1]["url"] == "https://youtu.be/0987654321b"
+    assert items[2]["id"] == "not_a_valid_url_or_empty"
+

@@ -186,3 +186,26 @@ def test_delete_run_and_delete_all_runs(tmp_path):
     deleted = registry.delete_all_runs(tmp_path, "ds_del")
     assert deleted == [run2["run_id"]]
     assert registry.list_runs(tmp_path, "ds_del") == []
+
+
+def test_set_split_and_freeze_manifest(tmp_path):
+    registry.create_dataset(tmp_path, "ds_split")
+    art_dir = tmp_path / "datasets" / "ds_split" / "artifacts" / "vid1"
+    art_dir.mkdir(parents=True)
+    (art_dir / "tracks.json").write_text(json.dumps({"tracks": []}), encoding="utf-8")
+    (art_dir / "manifest.json").write_text(json.dumps({"config_hash": "cfg123"}), encoding="utf-8")
+
+    registry.sync_entry(tmp_path, "ds_split", video_id="vid1", artifact_dir="artifacts/vid1")
+    registry.set_split(tmp_path, "ds_split", "vid1", "train")
+
+    ds = registry.get_dataset(tmp_path, "ds_split")
+    assert ds["videos"][0]["split"] == "train"
+
+    with pytest.raises(ValueError):
+        registry.set_split(tmp_path, "ds_split", "vid1", "invalid_split")
+
+    frozen = registry.freeze_dataset(tmp_path, "ds_split")
+    assert frozen["videos"] == 1
+    ds_frozen = registry.get_dataset(tmp_path, "ds_split")
+    assert ds_frozen["videos"][0]["config_hash"] == "cfg123"
+

@@ -110,6 +110,11 @@ def probe_video(video_path: str | Path) -> dict[str, Any]:
                 except ValueError:
                     pass
 
+    # When video is rotated 90 or 270 degrees, ffmpeg auto-rotates decoded frames,
+    # swapping display width and height. Swap dimensions to match decoded frames.
+    if rotation in (90, 270):
+        width, height = height, width
+
     return {
         "video_path": str(path),
         "duration": duration,

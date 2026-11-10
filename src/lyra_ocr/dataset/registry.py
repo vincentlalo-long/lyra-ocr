@@ -393,37 +393,39 @@ def set_split(workspace_root: Path, name: str, video_id: str, split: str) -> Non
     if split not in ("train", "test"):
         raise ValueError(f"Invalid split '{split}' (expected 'train' or 'test')")
     manifest = _manifest_path(workspace_root, name)
-    data = _read_manifest(manifest)
-    for v in data.get("videos", []):
-        if v.get("video_id") == video_id:
-            v["split"] = split
-            break
-    else:
-        raise KeyError(f"video_id '{video_id}' not in dataset '{name}'")
-    _write_manifest(manifest, data)
+    with MANIFEST_LOCK:
+        data = _read_manifest(manifest)
+        for v in data.get("videos", []):
+            if v.get("video_id") == video_id:
+                v["split"] = split
+                break
+        else:
+            raise KeyError(f"video_id '{video_id}' not in dataset '{name}'")
+        _write_manifest(manifest, data)
 
 
 def freeze_dataset(workspace_root: Path, name: str) -> dict[str, Any]:
     """Recompute artifact_hash/config_hash for every entry (golden-manifest freeze)."""
     manifest = _manifest_path(workspace_root, name)
-    data = _read_manifest(manifest)
-    ds_dir = manifest.parent
-    changed = 0
-    for video in data.get("videos", []):
-        art_dir = ds_dir / video.get("artifact_dir", "")
-        tracks_path = art_dir / "tracks.json"
-        if not tracks_path.exists():
-            raise FileNotFoundError(f"missing {tracks_path} for video {video.get('video_id')}")
-        new_hash = sha256_prefix(tracks_path)
-        if new_hash != video.get("artifact_hash"):
-            video["artifact_hash"] = new_hash
-            changed += 1
-        art_manifest = art_dir / "manifest.json"
-        if art_manifest.exists():
-            video["config_hash"] = _read_manifest(art_manifest).get("config_hash", "")
-    data["frozen_at"] = date.today().isoformat()
-    _write_manifest(manifest, data)
-    return {"frozen_at": data["frozen_at"], "changed": changed, "videos": len(data.get("videos", []))}
+    with MANIFEST_LOCK:
+        data = _read_manifest(manifest)
+        ds_dir = manifest.parent
+        changed = 0
+        for video in data.get("videos", []):
+            art_dir = ds_dir / video.get("artifact_dir", "")
+            tracks_path = art_dir / "tracks.json"
+            if not tracks_path.exists():
+                raise FileNotFoundError(f"missing {tracks_path} for video {video.get('video_id')}")
+            new_hash = sha256_prefix(tracks_path)
+            if new_hash != video.get("artifact_hash"):
+                video["artifact_hash"] = new_hash
+                changed += 1
+            art_manifest = art_dir / "manifest.json"
+            if art_manifest.exists():
+                video["config_hash"] = _read_manifest(art_manifest).get("config_hash", "")
+        data["frozen_at"] = date.today().isoformat()
+        _write_manifest(manifest, data)
+        return {"frozen_at": data["frozen_at"], "changed": changed, "videos": len(data.get("videos", []))}
 
 
 def derive_video_id(source: VideoSource) -> str:

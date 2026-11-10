@@ -177,6 +177,47 @@ def test_cancel_all_cancels_queued_and_running(dataset):
         q.shutdown()
 
 
+def test_delete_run_jobs_while_running(dataset):
+    running_started = False
+
+    def blocking_run_runner(rec, src, cancel_event, progress):
+        nonlocal running_started
+        running_started = True
+        while not cancel_event.is_set():
+            time.sleep(0.05)
+        raise PipelineCancelled("deleted")
+
+    registry.upsert_video(dataset, "qd", video_id="run1", video_path="videos/run1.mp4")
+    run = registry.create_run(dataset, "qd", tracker="greedy")
+    run_id = run["run_id"]
+
+    q = JobQueue(dataset, run_runner=blocking_run_runner)
+    q.start()
+    try:
+        jobs = q.enqueue_run("qd", run_id, ["run1"])
+        assert len(jobs) == 1
+        jid = jobs[0].job_id
+
+        # Wait until it starts running
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not running_started:
+            time.sleep(0.05)
+        assert running_started
+
+        # Delete run jobs while running
+        removed = q.delete_run_jobs("qd", run_id)
+        assert removed == 1
+
+        # Wait for worker thread to finish clean-up
+        deadline = time.time() + 3.0
+        while time.time() < deadline and q.get(jid) is not None:
+            time.sleep(0.05)
+        assert q.get(jid) is None
+    finally:
+        q.shutdown()
+
+
+
 def test_downloaded_videos_matches_only_the_completed_merge(tmp_path):
     """Already-downloaded detection must use the literal "[<id>]" suffix.
 

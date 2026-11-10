@@ -45,6 +45,7 @@ class JobQueue:
         self._jobs: dict[str, JobRecord] = {}
         self._order: list[str] = []
         self._cancel_events: dict[str, threading.Event] = {}
+        self._pending_delete: set[str] = set()
 
         self._stop = threading.Event()
         self._wake = threading.Event()
@@ -100,6 +101,7 @@ class JobQueue:
                         rec.state = "queued"  # interrupted by restart
                     self._jobs[rec.job_id] = rec
                     self._order.append(rec.job_id)
+                    self._cancel_events[rec.job_id] = threading.Event()
 
     def _persist_dataset(self, dataset: str, force: bool = False) -> None:
         now = time.time()
@@ -314,13 +316,18 @@ class JobQueue:
                 if rec.dataset == dataset and rec.run_id == run_id
             ]
             for jid in to_remove:
-                ev = self._cancel_events.get(jid)
-                if ev is not None:
-                    ev.set()
-                self._jobs.pop(jid, None)
-                if jid in self._order:
-                    self._order.remove(jid)
-                self._cancel_events.pop(jid, None)
+                rec = self._jobs.get(jid)
+                ev = self._cancel_events.setdefault(jid, threading.Event())
+                ev.set()
+                if rec and rec.state == "running":
+                    rec.state = "cancelled"
+                    rec.updated_at = int(time.time())
+                    self._pending_delete.add(jid)
+                else:
+                    self._jobs.pop(jid, None)
+                    if jid in self._order:
+                        self._order.remove(jid)
+                    self._cancel_events.pop(jid, None)
                 removed += 1
             if removed:
                 self._persist_dataset(dataset, force=True)
@@ -335,13 +342,18 @@ class JobQueue:
                 if rec.dataset == dataset and rec.kind == "run"
             ]
             for jid in to_remove:
-                ev = self._cancel_events.get(jid)
-                if ev is not None:
-                    ev.set()
-                self._jobs.pop(jid, None)
-                if jid in self._order:
-                    self._order.remove(jid)
-                self._cancel_events.pop(jid, None)
+                rec = self._jobs.get(jid)
+                ev = self._cancel_events.setdefault(jid, threading.Event())
+                ev.set()
+                if rec and rec.state == "running":
+                    rec.state = "cancelled"
+                    rec.updated_at = int(time.time())
+                    self._pending_delete.add(jid)
+                else:
+                    self._jobs.pop(jid, None)
+                    if jid in self._order:
+                        self._order.remove(jid)
+                    self._cancel_events.pop(jid, None)
                 removed += 1
             if removed:
                 self._persist_dataset(dataset, force=True)
@@ -385,7 +397,7 @@ class JobQueue:
 
     def _run_item(self, rec: JobRecord) -> None:
         src = VideoSource.from_dict(rec.source)
-        cancel_event = self._cancel_events.get(rec.job_id, threading.Event())
+        cancel_event = self._cancel_events.setdefault(rec.job_id, threading.Event())
         with self._lock:
             rec.state = "running"
             rec.stage = "starting"
@@ -400,6 +412,8 @@ class JobQueue:
             self._persist_dataset(rec.dataset)
 
         try:
+            if cancel_event.is_set():
+                raise PipelineCancelled()
             if rec.kind == "ingest":
                 result = self._ingest_runner(rec, src, cancel_event, progress)
             elif rec.kind == "run":
@@ -407,17 +421,19 @@ class JobQueue:
             else:
                 result = self._runner(rec, src, cancel_event, progress)
             with self._lock:
-                rec.state = "done"
-                rec.stage = "done"
-                rec.percent = 100.0
-                rec.error = ""
-                rec.updated_at = int(time.time())
-                if rec.artifact_dir:
-                    rec.options["force"] = False
-            if rec.kind == "run":
-                self._sync_run(rec, result or {})
-            elif rec.kind == "pipeline":
-                self._sync_manifest(rec, result or {})
+                if rec.job_id not in self._pending_delete and not cancel_event.is_set():
+                    rec.state = "done"
+                    rec.stage = "done"
+                    rec.percent = 100.0
+                    rec.error = ""
+                    rec.updated_at = int(time.time())
+                    if rec.artifact_dir:
+                        rec.options["force"] = False
+            if rec.job_id not in self._pending_delete and not cancel_event.is_set():
+                if rec.kind == "run":
+                    self._sync_run(rec, result or {})
+                elif rec.kind == "pipeline":
+                    self._sync_manifest(rec, result or {})
         except PipelineCancelled:
             with self._lock:
                 rec.state = "cancelled"
@@ -429,6 +445,13 @@ class JobQueue:
                 rec.failed_stage = rec.stage or "unknown"
                 rec.updated_at = int(time.time())
         finally:
+            with self._lock:
+                if rec.job_id in self._pending_delete:
+                    self._pending_delete.remove(rec.job_id)
+                    self._jobs.pop(rec.job_id, None)
+                    if rec.job_id in self._order:
+                        self._order.remove(rec.job_id)
+                    self._cancel_events.pop(rec.job_id, None)
             self._persist_dataset(rec.dataset, force=True)
 
     def _sync_manifest(self, rec: JobRecord, result: dict[str, Any]) -> None:

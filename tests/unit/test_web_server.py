@@ -229,6 +229,57 @@ def test_web_server_post_label_rejects_invalid_payloads(make_web_server, tmp_pat
         assert exc.value.code == 400
 
 
+def test_web_server_post_label_track_validation(make_web_server, tmp_path: Path):
+    """POST /api/label must return 404 if track does not exist in tracks.json, but support composite IDs."""
+    web_server = make_web_server(tmp_path)
+    mock_art = tmp_path / "mock_art_val"
+    mock_art.mkdir()
+    manifest = {"video_id": "test_web_val"}
+    tracks = {"tracks": [{"track_id": "42", "label": "lyric", "confidence": 0.95}]}
+    (mock_art / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (mock_art / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    url = f"{web_server['url']}/api/label"
+
+    # Case 1: non-existent track
+    bad_payload = {
+        "artifact_dir": "mock_art_val",
+        "video_id": "test_web_val",
+        "track_id": "999",
+        "human_label": "lyric",
+    }
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(bad_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req)
+    assert exc.value.code == 404
+
+    # Case 2: composite track ID pointing to existing base track (e.g. 42.1)
+    good_composite = {
+        "artifact_dir": "mock_art_val",
+        "video_id": "test_web_val",
+        "track_id": "42.1",
+        "human_label": "lyric",
+    }
+    req2 = urllib.request.Request(
+        url,
+        data=json.dumps(good_composite).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req2) as resp:
+        assert resp.status == 200
+        res_data = json.loads(resp.read().decode("utf-8"))
+        assert res_data["ok"] is True
+        assert res_data["record"]["track_id"] == "42.1"
+        assert res_data["record"]["model_label"] == "lyric"
+
+
+
 @requires_golden
 def test_web_server_get_eval(make_web_server):
     """Verify GET /api/eval?golden=golden/v1 executes evaluation."""

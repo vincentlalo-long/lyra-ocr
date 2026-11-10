@@ -235,18 +235,35 @@ class ReviewAPIMixin:
             )
             return
 
-        # Get track info from tracks.json
+        # Validate that track_id exists in tracks.json
         tracks_file = art_path / "tracks.json"
+        if not tracks_file.exists():
+            self._send_error(f"tracks.json not found in artifact directory: {art_dir_str}", 404)
+            return
+
+        target_tid = str(track_id).strip()
+        base_tid = target_tid.split(".", 1)[0] if "." in target_tid else target_tid
+
         model_label = None
         model_confidence = None
-        if tracks_file.exists():
+        track_found = False
+        try:
             with open(tracks_file, "r", encoding="utf-8") as f:
                 td = json.load(f)
                 for tr in td.get("tracks", []):
-                    if str(tr.get("track_id")) == str(track_id):
+                    tr_id = str(tr.get("track_id"))
+                    if tr_id == target_tid or tr_id == base_tid:
+                        track_found = True
                         model_label = normalize_label(tr.get("label"))
                         model_confidence = tr.get("confidence")
                         break
+        except (json.JSONDecodeError, OSError) as e:
+            self._send_error(f"Failed to read tracks.json: {e}", 500)
+            return
+
+        if not track_found:
+            self._send_error(f"Track '{track_id}' not found in tracks.json", 404)
+            return
 
         labels_path = art_path / "labels.jsonl"
         record = LabelRecord(

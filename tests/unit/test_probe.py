@@ -56,6 +56,8 @@ def test_probe_fractional_fps(tmp_path):
 
     assert meta["fps"] == 29.97
     assert meta["rotation"] == 270  # -90 % 360
+    assert meta["width"] == 720  # swapped from 1280 due to 270 deg rotation
+    assert meta["height"] == 1280  # swapped from 720 due to 270 deg rotation
     assert meta["has_audio"] is False
 
 
