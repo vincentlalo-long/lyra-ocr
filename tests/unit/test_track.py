@@ -262,6 +262,31 @@ def test_merge_fragmented_tracks_keeps_distinct_text_and_large_gaps():
     assert len(merged) == 3
 
 
+def test_merge_fragmented_tracks_preserves_short_adlibs():
+    from lyra_ocr.track import TextTrack, merge_fragmented_tracks
+
+    # t1 is "Oh", t2 is "Yeah" 500ms later at the same spatial position
+    t1 = TextTrack(
+        track_id=1,
+        start_ms=1000,
+        end_ms=1500,
+        bbox=[100, 100, 400, 150],
+        occurrences=[make_occurrence(0, 1000, "Oh")],
+    )
+    t2 = TextTrack(
+        track_id=2,
+        start_ms=2000,
+        end_ms=2500,
+        bbox=[100, 100, 400, 150],
+        occurrences=[make_occurrence(1, 2000, "Yeah")],
+    )
+
+    merged = merge_fragmented_tracks([t1, t2], video_duration_ms=60000)
+    assert len(merged) == 2
+    assert merged[0].occurrences[0].text_norm == "Oh"
+    assert merged[1].occurrences[0].text_norm == "Yeah"
+
+
 def test_text_track_to_dict_includes_occurrences():
     from lyra_ocr.track import TextTrack, DetectionOccurrence
 

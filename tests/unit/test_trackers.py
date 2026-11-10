@@ -80,6 +80,34 @@ def test_ocr_jitter_of_one_line_does_not_split_it(tracker_cls):
     assert len(tracks[0].occurrences) == 3
 
 
+@pytest.mark.parametrize("tracker_cls", [GreedyTracker, ByteTextTracker])
+def test_turnover_does_not_rematch_in_same_frame(tracker_cls):
+    """When a track turns over, the newly spawned track must not be matched again in the same frame."""
+    tracker = tracker_cls(frame_width=1280, frame_height=720)
+    # Frame 0: LINE_A
+    tracker.update(
+        {"frame_id": 0, "timestamp_ms": 0, "boxes": [make_box(*LYRIC_BOX, LINE_A)]}
+    )
+    # Frame 1: Two detections at roughly the same position (e.g. duplicate detector boxes)
+    # First detection is LINE_B (triggers turnover). Second detection is ANOTHER.
+    tracker.update(
+        {
+            "frame_id": 1,
+            "timestamp_ms": 1000,
+            "boxes": [
+                make_box(*LYRIC_BOX, LINE_B),
+                make_box(*LYRIC_BOX, LINE_B),
+            ],
+        }
+    )
+    tracks = tracker.finalize(video_duration_ms=5000)
+    # There should be at least 3 tracks (LINE_A, LINE_B, SECOND DETECTION),
+    # and no track should contain two occurrences at timestamp_ms == 1000!
+    for tr in tracks:
+        timestamps = [occ.timestamp_ms for occ in tr.occurrences]
+        assert len(timestamps) == len(set(timestamps)), f"Track {tr.track_id} has duplicate occurrences at same timestamp!"
+
+
 def test_static_watermark_survives_while_lyric_slot_rotates():
     """One constant overlay plus three consecutive lines => four distinct tracks."""
     tracker = GreedyTracker(frame_width=1280, frame_height=720)

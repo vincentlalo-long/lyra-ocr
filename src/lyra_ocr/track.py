@@ -337,8 +337,16 @@ def merge_fragmented_tracks(
                 or centroid_distance(track.bbox, group.bbox, frame_width, frame_height)
                 <= centroid_threshold
             )
-            text_sim = string_similarity(track_text, _track_dominant_text(group))
-            tiny_fragment = min(len(track_text.strip()), len(_track_dominant_text(group).strip())) <= 2
+            group_text = _track_dominant_text(group)
+            text_sim = string_similarity(track_text, group_text)
+            t1 = track_text.strip().lower()
+            t2 = group_text.strip().lower()
+            # Only treat as tiny fragment if text is similar or one is a substring of the other
+            # (e.g. OCR single-char drop), never merge distinct short words like "Oh" and "Yeah".
+            tiny_fragment = (
+                min(len(t1), len(t2)) <= 2
+                and (text_sim >= 0.70 or (bool(t1) and bool(t2) and (t1 in t2 or t2 in t1)))
+            )
 
             if spatial_match and (text_sim >= text_similarity_threshold or tiny_fragment):
                 _merge_occurrences(group, track)

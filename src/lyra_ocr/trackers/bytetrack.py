@@ -96,8 +96,9 @@ class ByteTextTracker(BaseTracker):
 
                 # Gating condition
                 if iou >= self.match_threshold_high or (iou >= 0.10 and c_dist <= 0.08):
-                    self.associate(tr, det)
+                    owning_track = self.associate(tr, det)
                     matched_track_ids.add(tr.track_id)
+                    matched_track_ids.add(owning_track.track_id)
                     matched_high_indices.add(c)
 
         unmatched_tracks = [
@@ -132,8 +133,9 @@ class ByteTextTracker(BaseTracker):
 
                 # Relaxed gating for low-confidence recovery
                 if iou >= self.match_threshold_low or (iou >= 0.08 and c_dist <= 0.08):
-                    self.associate(tr, det)
+                    owning_track = self.associate(tr, det)
                     matched_track_ids.add(tr.track_id)
+                    matched_track_ids.add(owning_track.track_id)
 
         # 4. Handle tracks still unmatched after Stage 2
         still_active: list[TextTrack] = []
