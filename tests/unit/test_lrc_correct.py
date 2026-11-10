@@ -87,3 +87,25 @@ def test_correct_text_recovers_ocr_digit_substitution():
     assert "EXPLODE" in final
     assert "EXPL0DE" not in final
     assert info.changed is True
+    assert "EXPL0DE" in info.diff and "EXPLODE" in info.diff
+
+
+def test_build_corpus_vocab_ignores_rejected_and_non_lyric():
+    from lyra_ocr.lyric.correct import build_corpus_vocab
+
+    tracks = [
+        {
+            "label": "non_lyric",
+            "decision": "reject",
+            "features": {"dominant_text": "SUBSCRIBE TO CHANNEL"},
+        },
+        {
+            "label": "lyric",
+            "decision": "accept",
+            "features": {"dominant_text": "SINGING IN THE RAIN"},
+        },
+    ]
+    vocab = build_corpus_vocab(tracks)
+    assert "subscribe" not in vocab
+    assert "singing" in vocab
+

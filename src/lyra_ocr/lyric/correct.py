@@ -51,9 +51,16 @@ def _match_casing(candidate: str, original: str) -> str:
     return candidate
 
 
-def build_corpus_vocab(all_tracks: list[dict[str, Any]]) -> Counter[str]:
+def build_corpus_vocab(all_tracks: list[dict[str, Any]], *, only_accepted: bool = True) -> Counter[str]:
     vocab: Counter[str] = Counter()
     for tr in all_tracks:
+        if only_accepted:
+            label = tr.get("label")
+            decision = tr.get("decision")
+            # If classification info is present, exclude rejected and non-lyric tracks
+            if label == "non_lyric" or decision == "reject":
+                continue
+
         texts: list[str] = []
         dom = tr.get("features", {}).get("dominant_text")
         if dom:
@@ -192,9 +199,10 @@ def correct_text(
 
         max_dist = max(1, int(len(tok) * config.max_edit_ratio))
         candidates: list[tuple[str, int]] = []
+        min_multiplier = 4 if tok_freq > 0 else 3
 
         for cand, cand_freq in effective_vocab.items():
-            if cand_freq >= 3 * max(1, tok_freq):
+            if cand_freq >= min_multiplier * max(1, tok_freq):
                 if abs(len(cand) - len(tok_lower)) <= max_dist:
                     dist = _levenshtein(tok_lower, cand)
                     if dist <= max_dist:
@@ -211,8 +219,11 @@ def correct_text(
     if not cleaned_final:
         cleaned_final = medoid
 
+    diff_str = f"'{raw_text}' -> '{cleaned_final}'" if cleaned_final != raw_text else ""
+
     return cleaned_final, raw_text, CorrectionInfo(
         method="dictionary",
         changed=(cleaned_final != raw_text),
         confidence=medoid_conf,
+        diff=diff_str,
     )

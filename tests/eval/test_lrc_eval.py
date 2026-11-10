@@ -53,6 +53,12 @@ def test_evaluate_text_selection_unscorable_version_mismatch():
     assert res["line_recall"] == 0.0
 
 
+def test_evaluate_text_selection_empty_inputs_unscorable():
+    res = evaluate_text_selection([], [])
+    assert res["scorable"] is False
+    assert res["line_f1"] == 0.0
+
+
 def test_evaluate_synced_reference():
     # 5 matching cues with a known +1000ms offset
     cues = [

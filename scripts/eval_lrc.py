@@ -70,7 +70,11 @@ def evaluate_run(
         )
         cues = dedupe_and_group(cues)
 
-        video_path = manifest.get("video_path") or str(ds_path / "videos" / f"{vid}.mp4")
+        cand_vpath = manifest.get("video_path")
+        if cand_vpath and Path(cand_vpath).is_file():
+            video_path = cand_vpath
+        else:
+            video_path = str(ds_path / "videos" / f"{vid}.mp4")
 
         # Visual timing
         timing_vis = measure_visual_timing(video_path, cues, str(art_dir))

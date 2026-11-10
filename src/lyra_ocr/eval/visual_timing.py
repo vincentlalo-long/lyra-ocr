@@ -27,11 +27,13 @@ def measure_visual_timing(
     if not cues or not v_path.is_file() or not art_path.is_dir():
         return {
             "status": "not_measured",
+            "refinement_delta_ms": None,
             "median_abs_error_ms": None,
+            "p90_refinement_delta_ms": None,
             "p90_abs_error_ms": None,
             "percent_within_100ms": 0.0,
             "percent_within_300ms": 0.0,
-            "oracle_confidence_mean": 0.0,
+            "oracle_confidence_mean": None,
             "n_measured_cues": 0,
         }
 
@@ -63,11 +65,13 @@ def measure_visual_timing(
         if not errors_ms:
             return {
                 "status": "unmatched_visual",
+                "refinement_delta_ms": None,
                 "median_abs_error_ms": None,
+                "p90_refinement_delta_ms": None,
                 "p90_abs_error_ms": None,
                 "percent_within_100ms": 0.0,
                 "percent_within_300ms": 0.0,
-                "oracle_confidence_mean": 0.0,
+                "oracle_confidence_mean": None,
                 "n_measured_cues": 0,
             }
 
@@ -76,14 +80,18 @@ def measure_visual_timing(
         p90_err = float(np.percentile(arr, 90))
         p100 = float(np.mean(arr <= 100.0))
         p300 = float(np.mean(arr <= 300.0))
+        cue_conf_mean = float(np.mean([cues[i].confidence for i in refined_indices])) if refined_indices else None
 
         return {
             "status": "ok",
+            "metric_type": "refinement_delta",
+            "refinement_delta_ms": round(median_err, 1),
             "median_abs_error_ms": round(median_err, 1),
+            "p90_refinement_delta_ms": round(p90_err, 1),
             "p90_abs_error_ms": round(p90_err, 1),
             "percent_within_100ms": round(p100, 3),
             "percent_within_300ms": round(p300, 3),
-            "oracle_confidence_mean": 0.95,
+            "oracle_confidence_mean": round(cue_conf_mean, 4) if cue_conf_mean is not None else None,
             "n_measured_cues": len(errors_ms),
         }
     except Exception as e:
@@ -91,10 +99,12 @@ def measure_visual_timing(
         return {
             "status": "error",
             "error": str(e),
+            "refinement_delta_ms": None,
             "median_abs_error_ms": None,
+            "p90_refinement_delta_ms": None,
             "p90_abs_error_ms": None,
             "percent_within_100ms": 0.0,
             "percent_within_300ms": 0.0,
-            "oracle_confidence_mean": 0.0,
+            "oracle_confidence_mean": None,
             "n_measured_cues": 0,
         }

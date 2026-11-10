@@ -47,6 +47,21 @@ def load_synced_lrc(path: str | Path) -> list[tuple[int, str]]:
     return results
 
 
+def _clean_plain_lyrics(raw_lines: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    for line in raw_lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Filter section headers like [Verse 1], [Chorus], (Chorus), [Bridge], etc.
+        if re.match(r"^\[\s*(verse|chorus|bridge|intro|outro|hook|pre-chorus|drop|breakdown|solo|instrumental).*?\]$", line, re.IGNORECASE):
+            continue
+        if re.match(r"^\(\s*(verse|chorus|bridge|intro|outro|hook|pre-chorus|drop|breakdown|solo|instrumental).*?\)$", line, re.IGNORECASE):
+            continue
+        cleaned.append(line)
+    return cleaned
+
+
 def load_plain_lyrics(dataset_dir: str | Path, video_id: str) -> list[str]:
     d = Path(dataset_dir)
 
@@ -56,13 +71,13 @@ def load_plain_lyrics(dataset_dir: str | Path, video_id: str) -> list[str]:
         try:
             data = json.loads(cache_json.read_text(encoding="utf-8"))
             if isinstance(data, list):
-                return [str(line).strip() for line in data if str(line).strip()]
+                return _clean_plain_lyrics([str(line) for line in data])
             if isinstance(data, dict):
                 lines = data.get("lines") or data.get("plain_lyrics") or []
                 if isinstance(lines, list):
-                    return [str(l).strip() for l in lines if str(l).strip()]
+                    return _clean_plain_lyrics([str(l) for l in lines])
                 if isinstance(lines, str):
-                    return [l.strip() for l in lines.splitlines() if l.strip()]
+                    return _clean_plain_lyrics(lines.splitlines())
         except Exception:
             pass
 
@@ -71,7 +86,7 @@ def load_plain_lyrics(dataset_dir: str | Path, video_id: str) -> list[str]:
     if txt_path.is_file():
         try:
             content = txt_path.read_text(encoding="utf-8")
-            return [l.strip() for l in content.splitlines() if l.strip()]
+            return _clean_plain_lyrics(content.splitlines())
         except Exception:
             pass
 

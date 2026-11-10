@@ -60,25 +60,14 @@ def evaluate_text_selection(
     norm_ref = [normalize_text_for_eval(l) for l in reference_lines]
     norm_ref = [t for t in norm_ref if t]
 
-    if not norm_ref and not norm_gen:
-        return {
-            "scorable": True,
-            "line_recall": 1.0,
-            "line_precision": 1.0,
-            "line_f1": 1.0,
-            "cer": 0.0,
-            "wer": 0.0,
-            "extra_line_rate": 0.0,
-        }
-
     if not norm_ref or not norm_gen:
         return {
             "scorable": False,
             "line_recall": 0.0,
             "line_precision": 0.0,
             "line_f1": 0.0,
-            "cer": 1.0,
-            "wer": 1.0,
+            "cer": 0.0 if (not norm_ref and not norm_gen) else 1.0,
+            "wer": 0.0 if (not norm_ref and not norm_gen) else 1.0,
             "extra_line_rate": 1.0 if norm_gen else 0.0,
         }
 
