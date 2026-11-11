@@ -92,3 +92,37 @@ def test_cli_lrc_zero_cues(tmp_path: Path, capsys: pytest.CaptureFixture[str]):
     ])
 
     assert exit_code == 2
+
+
+def test_cli_lrc_use_reference_flags(tmp_path: Path, monkeypatch, capsys: pytest.CaptureFixture[str]):
+    from unittest.mock import MagicMock
+
+    mock_build = MagicMock(return_value={
+        "out_lrc": str(tmp_path / "out.lrc"),
+        "n_cues": 2,
+        "n_skipped": 0,
+        "review_required": 0,
+        "reference_source": "lrclib_synced",
+        "n_reference_matches": 1,
+        "n_reference_gap_fills": 1,
+        "reference_warnings": [],
+    })
+    monkeypatch.setattr("lyra_ocr.lyric.build.build_lrc_from_artifacts", mock_build)
+
+    exit_code = main([
+        "lrc",
+        "--artifacts",
+        str(tmp_path),
+        "-o",
+        str(tmp_path / "out.lrc"),
+        "--use-reference",
+        "--no-caption-fallback",
+    ])
+    assert exit_code == 0
+    assert mock_build.call_count == 1
+    call_kwargs = mock_build.call_args.kwargs
+    assert call_kwargs["use_online_reference"] is True
+    assert call_kwargs["no_caption_fallback"] is True
+    out = capsys.readouterr().out
+    assert "Reference: source=lrclib_synced, replaced=1, gap_fills=1" in out
+

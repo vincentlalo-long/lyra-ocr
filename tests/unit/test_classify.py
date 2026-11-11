@@ -61,6 +61,10 @@ def create_mock_track(
         "spatial_variance": spatial_variance,
         "is_corner": bbox[0] < 100 and bbox[1] < 100,
         "aspect_ratio": (bbox[2] - bbox[0]) / max(1, bbox[3] - bbox[1]),
+        "mean_centroid": [
+            ((bbox[0] + bbox[2]) / 2.0) / 1280.0,
+            ((bbox[1] + bbox[3]) / 2.0) / 720.0,
+        ],
         "dominant_text": texts[0] if texts else "",
     }
     return track
@@ -374,3 +378,67 @@ def test_classify_short_lyric_line_is_accepted():
 
     assert result.label == "lyric"
     assert result.decision == "accept"
+
+
+def test_classify_intro_lower_third_lyric_line_is_accepted():
+    from lyra_ocr.classify import classify_track
+
+    # Lower-third lyric line early in video (start_ms=4000 of 212000, mean_cy=0.85)
+    track = create_mock_track(
+        track_id=50,
+        start_ms=4000,
+        end_ms=7500,
+        texts=["YOUVE BEEN RUNNIN ROUND"],
+        bbox=[300, 580, 980, 640],
+        video_duration_ms=212000,
+    )
+    result = classify_track(track, metadata={"title": "Attention"})
+
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+
+
+def test_classify_early_repeated_word_lyric_not_treated_as_card():
+    from lyra_ocr.classify import classify_track
+
+    # Real Attention-style first lyric: 8 words but only 4 unique tokens, high
+    # on screen early in the video. It must not be mistaken for a title card.
+    track = create_mock_track(
+        track_id=53,
+        start_ms=9000,
+        end_ms=13000,
+        texts=["YOUVE BEEN RUNNIN ROUND RUNNIN ROUND RUNNIN"],
+        bbox=[320, 304, 960, 354],
+        video_duration_ms=212000,
+    )
+    result = classify_track(track, metadata={"title": "Attention"})
+
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+
+
+def test_classify_isolated_presents_and_sound_only():
+    from lyra_ocr.classify import classify_track
+
+    track_presents = create_mock_track(
+        track_id=51,
+        start_ms=1000,
+        end_ms=4000,
+        texts=["Presents"],
+        bbox=[500, 300, 780, 360],
+        video_duration_ms=100000,
+    )
+    res_presents = classify_track(track_presents)
+    assert res_presents.label == "non_lyric"
+
+    track_sound = create_mock_track(
+        track_id=52,
+        start_ms=1000,
+        end_ms=4000,
+        texts=["SOUND"],
+        bbox=[500, 300, 780, 360],
+        video_duration_ms=100000,
+    )
+    res_sound = classify_track(track_sound)
+    assert res_sound.label == "non_lyric"
+

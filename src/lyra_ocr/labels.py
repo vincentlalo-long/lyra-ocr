@@ -107,6 +107,8 @@ def load_labels_jsonl(
                 continue
             try:
                 row = json.loads(line)
+                if not isinstance(row, dict):
+                    continue
                 if not include_silver and row.get("annotator") == "silver_lyrics_alignment":
                     continue
                 vid = str(row.get("video_id", ""))
@@ -162,13 +164,15 @@ def export_label_batch_csv(
 
     with open(tracks_path, "r", encoding="utf-8") as f:
         tracks_data = json.load(f)
-    tracks = tracks_data.get("tracks", [])
+    raw_tracks = tracks_data.get("tracks", []) if isinstance(tracks_data, dict) else []
+    tracks = [t for t in raw_tracks if isinstance(t, dict)] if isinstance(raw_tracks, list) else []
 
     video_id = "unknown_video"
     config_hash = ""
     if manifest_path.exists():
         with open(manifest_path, "r", encoding="utf-8") as f:
             manifest_data = json.load(f)
+        if isinstance(manifest_data, dict):
             video_id = manifest_data.get("video_id") or manifest_data.get("video_path", "unknown_video")
             config_hash = manifest_data.get("config_hash", "")
 

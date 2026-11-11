@@ -96,6 +96,7 @@ GET_ROUTES: dict[str, Callable[[Any, Query], None]] = {
     "/api/jobs": _list_jobs,
     "/api/youtube/list": _youtube_list,
     "/api/lrc": lambda handler, query: handler._handle_get_lrc(_query_param(query, "path")),
+    "/api/media": lambda handler, query: handler._handle_get_media(_query_param(query, "path")),
 }
 
 POST_ROUTES: dict[str, Callable[[Any], None]] = {

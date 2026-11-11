@@ -1,0 +1,25 @@
+{
+  "wireMagic": "pb3",
+  "events": [
+    {
+      "tStartMs": 1000,
+      "dDurationMs": 2000,
+      "segs": [{"utf8": "[Music]"}]
+    },
+    {
+      "tStartMs": 4000,
+      "dDurationMs": 3000,
+      "segs": [{"utf8": "You've been "}, {"utf8": "runnin' round"}]
+    },
+    {
+      "tStartMs": 6500,
+      "dDurationMs": 1500,
+      "segs": [{"utf8": "runnin' round"}]
+    },
+    {
+      "tStartMs": 7000,
+      "dDurationMs": 3500,
+      "segs": [{"utf8": "Throwin' that dirt on my name"}]
+    }
+  ]
+}

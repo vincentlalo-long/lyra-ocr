@@ -49,6 +49,13 @@ class ReviewAPIMixin:
             for item in s_root.glob("**/tracks.json"):
                 candidates += 1
                 art_dir = item.parent
+                # Ignore hidden directories and archive folders
+                try:
+                    rel_parts = art_dir.relative_to(s_root).parts
+                    if any(part.startswith((".", "_")) or part in ("archive", "_archive", ".archive") for part in rel_parts):
+                        continue
+                except ValueError:
+                    pass
                 if not (art_dir / "manifest.json").exists():
                     continue
                 resolved = art_dir.resolve()

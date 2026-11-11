@@ -381,6 +381,8 @@ def run_lrc(args: argparse.Namespace) -> int:
                 title=args.title or None,
                 artist=args.channel or None,
                 force=bool(getattr(args, "force", False)),
+                use_online_reference=bool(getattr(args, "use_reference", False)),
+                no_caption_fallback=bool(getattr(args, "no_caption_fallback", False)),
             )
         else:
             result = build_lrc_from_video(
@@ -402,6 +404,8 @@ def run_lrc(args: argparse.Namespace) -> int:
                 correct_method=args.correct,
                 refine=bool(getattr(args, "refine", False)),
                 offset_ms=args.offset_ms,
+                use_online_reference=bool(getattr(args, "use_reference", False)),
+                no_caption_fallback=bool(getattr(args, "no_caption_fallback", False)),
             )
 
         n_cues = result["n_cues"]
@@ -416,6 +420,15 @@ def run_lrc(args: argparse.Namespace) -> int:
         print(f"Wrote {n_cues} cues to {result['out_lrc']}")
         print(f"Skipped {n_skipped} tracks ({skipped_summary})")
         print(f"Review required: {result['review_required']}")
+
+        ref_src = result.get("reference_source") or "none"
+        n_ref_matches = result.get("n_reference_matches", 0)
+        n_ref_gaps = result.get("n_reference_gap_fills", 0)
+        ref_warnings = result.get("reference_warnings", [])
+        if ref_src != "none":
+            print(f"Reference: source={ref_src}, replaced={n_ref_matches}, gap_fills={n_ref_gaps}")
+            for w in ref_warnings:
+                print(f"Reference warning: {w}", file=sys.stderr)
 
         if n_cues == 0:
             print("Warning: Generated LRC has 0 cues.", file=sys.stderr)
@@ -568,6 +581,8 @@ def main(argv: list[str] | None = None) -> int:
     p_lrc.add_argument("--correct", choices=["none", "consensus", "dictionary"], default="dictionary", help="Correction method (default: dictionary)")
     p_lrc.add_argument("--include-review", action="store_true", help="Include tracks marked review (default: false)")
     p_lrc.add_argument("--offset-ms", type=int, default=0, help="LRC offset tag in ms (default: 0)")
+    p_lrc.add_argument("--use-reference", action="store_true", default=False, help="Auto reference lyrics (LRCLIB then YouTube captions fallback)")
+    p_lrc.add_argument("--no-caption-fallback", action="store_true", default=False, help="Disable YouTube caption fallback if LRCLIB reference is unavailable")
     p_lrc.add_argument("--force", action="store_true", help="Force rerun even if artifacts exist")
 
     args = parser.parse_args(argv)

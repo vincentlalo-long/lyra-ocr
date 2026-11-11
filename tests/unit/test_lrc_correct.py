@@ -156,3 +156,86 @@ def test_correct_text_protects_ordinals_and_short_codes():
     assert "90s" in final
 
 
+def test_repair_text_splits_merged_words_and_fixes_ocr_chars():
+    from lyra_ocr.lyric.text_repair import repair_text
+
+    text = repair_text("Iwalk in like thunder, nothinginmy way")
+    assert text == "I walk in like thunder, nothing in my way"
+
+    for bad, good in [
+        ("oniy", "only"),
+        ("lhis", "this"),
+        ("worid", "world"),
+        ("timp", "time"),
+        ("trom", "from"),
+    ]:
+        assert repair_text(bad) == good
+
+
+def test_repair_text_protects_names_codes_urls_and_cjk():
+    from lyra_ocr.lyric.text_repair import repair_text, text_quality
+
+    text = "Xerath 1st 2nd 3D 4K 90s https://example.com/oniy 世界"
+    assert repair_text(text) == text
+    # Accented Latin (e.g. Vietnamese) must also be preserved untouched.
+    vi = "Em ơi có biết oniy"
+    assert repair_text(vi) == vi
+    assert text_quality(vi) == 1.0
+
+
+def test_repair_text_is_idempotent():
+    from lyra_ocr.lyric.text_repair import repair_text
+
+    once = repair_text("Iwalk in like thunder, nothinginmy way")
+    assert repair_text(once) == once
+
+
+def test_text_quality_separates_readable_from_garbage():
+    from lyra_ocr.lyric.text_repair import text_quality
+
+    assert text_quality("I walk in like thunder, nothing in my way") > 0.9
+    assert text_quality("W.ihnit. warchme nowand") < 0.55
+    assert text_quality("Myheartdoessomeihngstrange") < 0.4
+
+
+def test_correct_text_repairs_concatenations_with_nlp():
+    track = {
+        "features": {"dominant_text": "Iwalk in like thunder, nothinginmy way"},
+        "occurrences": [
+            {"text_norm": "Iwalk in like thunder, nothinginmy way", "confidence": 0.96}
+        ],
+    }
+    cfg = CorrectionConfig(method="dictionary")
+    final, raw, info = correct_text(track, [], cfg)
+    assert final == "I walk in like thunder, nothing in my way"
+    assert raw == "Iwalk in like thunder, nothinginmy way"
+    assert info.changed is True
+
+
+def test_correct_text_selects_spaced_variant_over_repeated_merge():
+    merged = "Myheartdoessomeihngstrange"
+    good = "My heart does something strange"
+    track = {
+        "features": {"dominant_text": merged},
+        "occurrences": [
+            {"text_norm": merged, "confidence": 0.99},
+            {"text_norm": merged, "confidence": 0.99},
+            {"text_norm": good, "confidence": 0.80},
+        ],
+    }
+    cfg = CorrectionConfig(method="consensus")
+    final, raw, info = correct_text(track, [], cfg)
+    assert final == good
+    assert raw == merged
+
+
+def test_consensus_method_does_not_apply_nlp_repair():
+    track = {
+        "features": {"dominant_text": "Iwalk in like thunder"},
+        "occurrences": [{"text_norm": "Iwalk in like thunder", "confidence": 0.95}],
+    }
+    final, raw, info = correct_text(track, [], CorrectionConfig(method="consensus"))
+    assert final == "Iwalk in like thunder"
+    assert info.method == "consensus"
+
+

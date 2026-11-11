@@ -43,6 +43,31 @@ def test_dedupe_duplicate_tracks_within_window():
     assert result[0].confidence == 0.98
 
 
+def test_dedupe_same_line_one_second_apart():
+    cue1 = LyricCue(
+        start_ms=17000,
+        end_ms=18500,
+        text="My heart does something strange",
+        source_track_ids=[1],
+        confidence=0.90,
+        y_center=0.9,
+        bbox=[200, 620, 900, 660],
+    )
+    cue2 = LyricCue(
+        start_ms=18000,
+        end_ms=19500,
+        text="My heart does something strange",
+        source_track_ids=[2],
+        confidence=0.95,
+        y_center=0.9,
+        bbox=[202, 621, 902, 661],
+    )
+
+    result = dedupe_and_group([cue1, cue2])
+    assert len(result) == 1
+    assert result[0].source_track_ids == [1, 2]
+
+
 def test_keep_distinct_lines_same_timestamp():
     # Two different lyrics at the same time at different vertical positions (multi-line)
     cue_top = LyricCue(

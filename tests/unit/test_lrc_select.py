@@ -317,3 +317,167 @@ def test_multisegment_track_level_correction_not_repeated():
     assert cues[1].text == "SECOND ORIGINAL"
 
 
+def test_low_confidence_garbage_is_gated_to_review():
+    garbage = "W.ihnit. warchme nowand"
+    tracks = [
+        {
+            "track_id": 7,
+            "start_ms": 1000,
+            "end_ms": 3000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.62,
+            "features": {"dominant_text": garbage, "mean_centroid": [0.5, 0.8]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": garbage, "confidence": 0.62}
+            ],
+        }
+    ]
+    cues, skipped = select_cues(tracks, human_labels={})
+    assert cues == []
+    assert len(skipped) == 1
+    assert skipped[0]["reason"] in {"low_ocr_confidence", "low_text_quality"}
+    assert skipped[0]["ocr_confidence"] == pytest.approx(0.62)
+    assert skipped[0]["text_quality"] is not None
+
+    cues_review, _ = select_cues(tracks, human_labels={}, include_review=True)
+    assert len(cues_review) == 1
+    assert cues_review[0].review_required is True
+    assert cues_review[0].text_quality is not None
+
+
+def test_high_confidence_garbled_multiword_line_is_gated():
+    garbage = "Wntctomeyatot ine now and"
+    tracks = [
+        {
+            "track_id": 9,
+            "start_ms": 95000,
+            "end_ms": 97500,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.93,
+            "features": {"dominant_text": garbage, "mean_centroid": [0.5, 0.9]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 95000, "end_ms": 97500, "text": garbage, "confidence": 0.93}
+            ],
+        }
+    ]
+    cues, skipped = select_cues(tracks, human_labels={})
+    assert cues == []
+    assert skipped[0]["reason"] == "low_text_quality"
+
+
+def test_high_confidence_readable_lyric_still_accepted():
+    tracks = [
+        {
+            "track_id": 8,
+            "start_ms": 1000,
+            "end_ms": 3000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.95,
+            "features": {"dominant_text": "I walk in like thunder", "mean_centroid": [0.5, 0.8]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "I walk in like thunder", "confidence": 0.95}
+            ],
+        }
+    ]
+    cues, skipped = select_cues(tracks, human_labels={})
+    assert len(cues) == 1
+    assert skipped == []
+    assert cues[0].text == "I walk in like thunder"
+    assert cues[0].text_quality is not None and cues[0].text_quality > 0.9
+
+
+def test_select_cues_conservative_rescue_with_trusted_reference():
+    tracks = [
+        {
+            "track_id": 9,
+            "start_ms": 1000,
+            "end_ms": 4000,
+            "label": "non_lyric",
+            "decision": "reject",
+            "confidence": 0.85,
+            "features": {"dominant_text": "YOUVE BEEN RUNNIN ROUND", "mean_centroid": [0.5, 0.8]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 1000, "end_ms": 4000, "text": "YOUVE BEEN RUNNIN ROUND", "confidence": 0.85}
+            ],
+        }
+    ]
+    ref_lines = ["You've been runnin' round"]
+
+    # 1. Trusted LRCLIB reference rescues a classifier-rejected track
+    cues1, skipped1 = select_cues(
+        tracks,
+        human_labels={},
+        reference_lines=ref_lines,
+        reference_source="lrclib_synced",
+    )
+    assert len(cues1) == 1
+    assert "RUNNIN" in cues1[0].text or "RUNNING" in cues1[0].text
+    assert "reference_rescue" in cues1[0].qa_flags
+
+    # 2. Captions NEVER rescue a non_lyric track
+    cues2, skipped2 = select_cues(
+        tracks,
+        human_labels={},
+        reference_lines=ref_lines,
+        reference_source="youtube_captions",
+    )
+    assert len(cues2) == 0
+    assert len(skipped2) == 1
+    assert skipped2[0]["reason"] == "non_lyric"
+
+
+def test_select_cues_reference_rescue_respects_human_and_card_rejects():
+    def _track(**overrides):
+        track = {
+            "track_id": 10,
+            "start_ms": 1000,
+            "end_ms": 4000,
+            "label": "non_lyric",
+            "decision": "reject",
+            "confidence": 0.85,
+            "features": {"dominant_text": "YOUVE BEEN RUNNIN ROUND", "mean_centroid": [0.5, 0.8]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 1000, "end_ms": 4000, "text": "YOUVE BEEN RUNNIN ROUND", "confidence": 0.85}
+            ],
+        }
+        track.update(overrides)
+        return track
+
+    ref_lines = ["You've been runnin' round"]
+
+    # Human reject wins over reference evidence.
+    cues_human, skipped_human = select_cues(
+        [_track()],
+        human_labels={"10": {"human_label": "non_lyric", "human_decision": "reject"}},
+        reference_lines=ref_lines,
+        reference_source="lrclib_synced",
+    )
+    assert cues_human == []
+    assert skipped_human[0]["decision"] == "reject"
+
+    # Known card/credit subtype is not rescued.
+    cues_card, _ = select_cues(
+        [_track(qa_flags=["intro_bounded_card"])],
+        human_labels={},
+        reference_lines=ref_lines,
+        reference_source="lrclib_synced",
+    )
+    assert cues_card == []
+
+    # Rescue can be disabled through ReferenceConfig.
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    cues_disabled, _ = select_cues(
+        [_track()],
+        human_labels={},
+        reference_lines=ref_lines,
+        reference_source="lrclib_synced",
+        reference_config=ReferenceConfig(rescue_non_lyric=False),
+    )
+    assert cues_disabled == []
+
+
+

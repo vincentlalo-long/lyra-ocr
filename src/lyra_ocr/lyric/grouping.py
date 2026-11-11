@@ -54,9 +54,19 @@ def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
     for cue in sorted_cues:
         matched_idx = -1
         for i, existing in enumerate(merged):
-            # Check dedupe criteria
+            # Check dedupe criteria. A line sampled at 2 fps can appear as two
+            # tracks starting ~1s apart; allow a wider window only for
+            # near-identical text so genuine short consecutive lines survive.
             sim = string_similarity(existing.text, cue.text)
-            if sim >= 0.90 and abs(existing.start_ms - cue.start_ms) <= 500:
+            start_delta = abs(existing.start_ms - cue.start_ms)
+            time_close = start_delta <= 500 or (
+                sim >= 0.92
+                and start_delta <= 1500
+                and min(existing.end_ms, cue.end_ms)
+                - max(existing.start_ms, cue.start_ms)
+                >= -500
+            )
+            if sim >= 0.90 and time_close:
                 y_diff = abs(existing.y_center - cue.y_center)
                 iou = _bbox_iou(existing.bbox, cue.bbox)
                 if y_diff <= 0.08 or iou >= 0.3:

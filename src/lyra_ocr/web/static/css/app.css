@@ -632,6 +632,20 @@ input[type=range] {
   overflow: hidden;
 }
 
+.studio-video-wrapper {
+  padding: 14px 14px 0;
+  flex-shrink: 0;
+}
+
+.studio-video {
+  width: 100%;
+  max-height: 320px;
+  background: #000;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: block;
+}
+
 .karaoke-stage-wrapper {
   padding: 24px;
   flex: 1;

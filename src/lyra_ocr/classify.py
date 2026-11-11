@@ -36,6 +36,17 @@ class ClassificationResult:
         }
 
 
+CHAT_CONTENT_RE = re.compile(
+    r"(?:"
+    r"[:;=8][\-^o']?[)(\]\[DPpOo/\\|]"  # emoticons such as :) or :D
+    r"|[oO0]\s*\(\s*['\u2019]?\^\s*\)\s*[oO0]"  # o('^)o style
+    r"|!{2,}|\?!|!\?"  # excited chat punctuation
+    r"|\bchat\b|\blivestream\b|\bstream\b"  # stream/chat vocabulary
+    r")",
+    re.IGNORECASE,
+)
+
+
 SUPPLEMENTARY_KEYWORDS = [
     "subscribe",
     "subscribers",
@@ -65,6 +76,8 @@ SUPPLEMENTARY_KEYWORDS = [
     "link in description",
     "watch now",
     "out now",
+    "presents",
+    "sound only",
 ]
 
 
@@ -95,12 +108,24 @@ def classify_track(
     n_text_changes = feat.get("n_text_changes", 0)
     spatial_variance = feat.get("spatial_variance", 0.0)
     aspect_ratio = feat.get("aspect_ratio", 1.0)
+    area_ratio = feat.get("area_ratio")
+    if area_ratio is None:
+        _bb = track.bbox or [0, 0, 0, 0]
+        area_ratio = (max(0, _bb[2] - _bb[0]) * max(0, _bb[3] - _bb[1])) / max(
+            1, frame_width * frame_height
+        )
     is_corner = feat.get("is_corner", False)
     dominant_text = feat.get("dominant_text", "").strip()
     dom_lower = dominant_text.lower()
     dom_tokens = set(re.findall(r"\w+", dom_lower))
-    mean_centroid = feat.get("mean_centroid", [0.5, 0.5])
-    mean_cx, mean_cy = mean_centroid[0], mean_centroid[1]
+    mean_centroid = feat.get("mean_centroid")
+    if mean_centroid and len(mean_centroid) >= 2:
+        mean_cx, mean_cy = float(mean_centroid[0]), float(mean_centroid[1])
+    elif track.bbox and len(track.bbox) >= 4:
+        mean_cx = ((track.bbox[0] + track.bbox[2]) / 2.0) / max(1, frame_width)
+        mean_cy = ((track.bbox[1] + track.bbox[3]) / 2.0) / max(1, frame_height)
+    else:
+        mean_cx, mean_cy = 0.5, 0.5
     distinct_changes = feat.get("distinct_text_changes", n_text_changes)
     duration_ms = track.end_ms - track.start_ms
     word_count = len(dominant_text.split())
@@ -114,7 +139,11 @@ def classify_track(
     # Card-shaped text: short overlays strictly bounded to the intro/outro window
     # are typically title cards or credit slides. Casing (uppercase vs lowercase)
     # is never used to judge lyrics, as song lyrics are frequently styled in all-caps.
-    looks_like_card = len(dom_tokens) <= 4
+    looks_like_card = word_count <= 4 and (
+        (start_time_ratio <= 0.01 and track.start_ms == 0)
+        or mean_cy <= 0.65
+        or (area_ratio >= 0.03 and aspect_ratio <= 3.5)
+    )
     end_time_ratio = start_time_ratio + lifetime_ratio
     only_intro_outro = (
         (end_time_ratio <= 0.08 and looks_like_card)
@@ -122,6 +151,18 @@ def classify_track(
     ) and (video_duration_ms > 0 or lifetime_ratio > 0)
 
     qa_flags: list[str] = []
+
+    # Rule 0: Isolated single fragment or credit word
+    if word_count == 1 and dom_lower in ("sound", "only", "presents"):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.85,
+            reason=f"Isolated fragment or title credit word '{dominant_text}'",
+            decision="reject" if dom_lower == "presents" else "review",
+            qa_flags=["isolated_fragment_word"],
+        )
+        track.classification = res
+        return res
 
     # Rule 1: Supplementary / Social Keywords
     for kw in SUPPLEMENTARY_KEYWORDS:
@@ -175,6 +216,40 @@ def classify_track(
             )
             track.classification = res
             return res
+
+    # Rule 3b: Right-rail chat / stream overlay.
+    # Live-stream comments occupy a narrow right-hand column, last only a few
+    # seconds, and are much wider than they are tall. They are not lyrics even
+    # though they can fall inside a naive reading-zone test.
+    if (
+        mean_cx >= 0.78
+        and area_ratio <= 0.02
+        and duration_ms <= 5000
+        and aspect_ratio >= 3.0
+    ):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.72,
+            reason="Right-rail short-lived wide overlay (chat/stream comment)",
+            decision="review",
+            qa_flags=["chat_overlay_suspect"],
+        )
+        track.classification = res
+        return res
+
+    # Rule 3c: Chat-like content cues anywhere on screen. Review, never reject:
+    # words like "stream" can legitimately appear in a lyric, but emoticons and
+    # repeated exclamation marks are strong chat signatures.
+    if CHAT_CONTENT_RE.search(dominant_text):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.62,
+            reason="Chat/stream content cue in on-screen text",
+            decision="review",
+            qa_flags=["chat_like_content"],
+        )
+        track.classification = res
+        return res
 
     # Persistent invariant text (> 45% of total video)
     if lifetime_ratio >= 0.45 and n_text_changes <= 1:
@@ -293,10 +368,39 @@ def classify_track(
         track.classification = res
         return res
 
+    # Rule 5a: Lower-third lyric line with OCR character fluctuation.
+    # A real lyric line sampled at low fps can alternate between OCR variants, so
+    # n_text_changes is often > 1 without being a new text object. The reading
+    # zone (rather than the corner/side prior) is what separates it from overlay
+    # noise; readability is judged later by the OCR/text-quality gates.
+    if (
+        500 <= duration_ms <= 16000
+        and in_reading_zone
+        and not is_corner
+        and word_count >= 2
+        and n_text_changes >= 1
+        and not only_intro_outro
+    ):
+        res = ClassificationResult(
+            label="lyric",
+            confidence=0.90,
+            reason="Transient lower-third line with OCR character fluctuation",
+            decision="accept",
+            qa_flags=["ocr_fluctuation_lyric_line"],
+        )
+        track.classification = res
+        return res
+
     # Rule 5b: Static text with OCR character fluctuation in a corner/side region.
     # Without metadata title evidence this is not confidently non-lyric,
-    # so route it to review instead of guessing.
-    if distinct_changes == 0 and n_text_changes >= 1 and (mean_cx < 0.25 or is_corner or mean_cy > 0.85):
+    # so route it to review instead of guessing. The reading zone is excluded so
+    # lower-third lyric lines are not mistaken for corner overlays.
+    if (
+        distinct_changes == 0
+        and n_text_changes >= 1
+        and not in_reading_zone
+        and (mean_cx < 0.25 or mean_cx > 0.75 or is_corner or mean_cy > 0.95)
+    ):
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.60,
@@ -345,8 +449,9 @@ def classify_track(
     # it is a full multi-word phrase within the lyric reading zone.
     if len(track.occurrences) <= 1 and n_text_changes == 0 and not is_corner:
         if (
-            len(dominant_text.split()) >= 3
+            len(dominant_text.split()) >= 2
             and in_reading_zone
+            and aspect_ratio >= 2.0
             and has_text
             and not only_intro_outro
         ):

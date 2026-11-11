@@ -580,6 +580,17 @@ def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path, monkeypatch):
         http_request(f"{url}/api/lrc/generate", data={}, method="POST")
     assert exc.value.code == 400
 
+    # 1b. Reject a JSON body that is not an object (e.g. null)
+    req = urllib.request.Request(
+        f"{url}/api/lrc/generate",
+        data=b"null",
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req)
+    assert exc.value.code == 400
+
     # 2. Setup mock artifact directory
     art_dir = tmp_path / "outputs" / "lrc_sample"
     art_dir.mkdir(parents=True)
@@ -637,7 +648,29 @@ def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path, monkeypatch):
     assert gen_resp["n_cues"] == 1
     assert len(gen_resp["cues"]) == 1
     assert "Em ơi có biết" in gen_resp["lrc_text"]
+    assert "n_reference_gap_fills" in gen_resp
+    assert "reference_warnings" in gen_resp
     out_lrc = gen_resp["out_lrc"]
+
+    # Test with reference flags passed
+    from unittest.mock import patch
+    from lyra_ocr.lyric.reference import ReferenceBundle
+
+    gen_ref_payload = {
+        "artifact_dir": "outputs/lrc_sample",
+        "title": "Em Ơi",
+        "artist": "Ca Sĩ",
+        "force": True,
+        "use_reference": True,
+        "no_caption_fallback": True,
+    }
+    with patch("lyra_ocr.lyric.build.fetch_reference_bundle") as mock_ref:
+        mock_ref.return_value = ReferenceBundle(lines=[], source="", provider="")
+        status_ref, gen_ref_resp = http_request(f"{url}/api/lrc/generate", data=gen_ref_payload, method="POST")
+        assert status_ref == 200
+        assert gen_ref_resp["ok"] is True
+        assert gen_ref_resp["n_reference_gap_fills"] == 0
+        assert isinstance(gen_ref_resp["reference_warnings"], list)
 
     # 3. Get LRC
     status, get_resp = http_request(f"{url}/api/lrc?path=outputs/lrc_sample/lrc_sample.lrc")

@@ -64,7 +64,11 @@ def refine_timings(
         try:
             raw_tr = json.loads(tracks_path.read_text(encoding="utf-8"))
             tr_list = raw_tr.get("tracks", []) if isinstance(raw_tr, dict) else raw_tr
+            if not isinstance(tr_list, list):
+                tr_list = []
             for tr in tr_list:
+                if not isinstance(tr, dict):
+                    continue
                 tid = tr.get("track_id")
                 if tid is not None:
                     tracks_by_id[int(tid)] = tr

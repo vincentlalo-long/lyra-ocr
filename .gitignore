@@ -48,6 +48,7 @@ smoke_*/
 reports/
 golden/
 datasets/
+archive/
 runs/
 temp/
 tmp/

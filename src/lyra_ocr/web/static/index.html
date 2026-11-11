@@ -59,8 +59,32 @@
           </div>
 
           <div class="config-group" style="grid-column: span 2;">
+            <label for="lrcLoadPath">Side-by-side Test: Load Existing .LRC</label>
+            <div style="display:flex; gap:6px;">
+              <input type="text" id="lrcLoadPath" placeholder="lyra_output/.../song.lrc">
+              <button type="button" id="lrcLoadBtn" class="mini-btn">Load</button>
+            </div>
+          </div>
+
+          <div class="config-group" style="grid-column: span 2;">
             <label for="lrcVideoInput">Or Video File Path / YouTube URL (Auto-download & process):</label>
             <input type="text" id="lrcVideoInput" placeholder="https://www.youtube.com/watch?v=... or local path outputs/raw/song.mp4">
+          </div>
+
+          <div class="config-group" style="grid-column: span 2;">
+            <label for="lrcReferencePath">Reference Lyrics File (.lrc/.txt, optional):</label>
+            <input type="text" id="lrcReferencePath" placeholder="Path to trusted lyrics used to repair OCR text">
+          </div>
+
+          <div class="config-group" style="grid-column: span 2; display: flex; flex-direction: row; gap: 1.5rem; justify-content: flex-end; align-items: center;">
+            <label class="checkbox-row" title="Look up lyrics on lrclib.net, with automatic fallback to YouTube captions if LRCLIB is unavailable.">
+              <input type="checkbox" id="lrcUseReference">
+              <span>Auto reference lyrics (LRCLIB, YouTube captions fallback)</span>
+            </label>
+            <label class="checkbox-row" title="Disable automatic fallback to YouTube captions when LRCLIB has no lyrics.">
+              <input type="checkbox" id="lrcNoCaptionFallback">
+              <span>No caption fallback</span>
+            </label>
           </div>
 
           <div class="config-group">
@@ -105,7 +129,7 @@
               <span>Include Review Cues</span>
             </label>
             <label class="checkbox-row" title="Bypass cache and force-rerun extraction">
-              <input type="checkbox" id="lrcForceRerun">
+              <input type="checkbox" id="lrcForceRerun" checked>
               <span>Force Re-run</span>
             </label>
           </div>
@@ -131,6 +155,10 @@
         <div class="studio-left-panel">
           <div class="panel-header">
             <span>Karaoke Preview & Timing</span>
+          </div>
+
+          <div class="studio-video-wrapper" id="studioVideoWrapper" style="display:none">
+            <video id="studioVideo" class="studio-video" controls preload="metadata"></video>
           </div>
 
           <div class="karaoke-stage-wrapper">

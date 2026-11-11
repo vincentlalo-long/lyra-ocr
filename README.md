@@ -214,11 +214,51 @@ lyra-ocr lrc path/to/video.mp4 \
 #### Key Options for `lyra-ocr lrc`:
 - `-o, --out`: Output `.lrc` file path (default: `./lyrics.lrc`). A companion structured JSON file (`*.cues.json`) is also generated containing bounding boxes, confidence scores, and skipped tracks.
 - `--artifacts`: Path to an existing Phase 1 artifact directory (`tracks.json`, `manifest.json`, `labels.jsonl`). When provided, avoids re-running video OCR.
-- `--correct`: Correction method (`none`, `consensus`, `dictionary`). Default is `dictionary` (corpus-frequency based token correction preserving rare proper nouns and casing).
+- `--correct`: Correction method (`none`, `consensus`, `dictionary`). Default is `dictionary` (corpus-frequency based token correction plus conservative dictionary word-boundary/spell repair, preserving rare proper nouns and casing).
 - `--include-review`: Include tracks marked with `decision=review` (default: excluded, only `accept` lyrics are included).
 - `--offset-ms`: Adjust global timestamp offset tag (`[offset:+/-ms]`).
 - `--refine`: Dense frame-level scan for sub-sampling boundary timing.
+- `--use-reference`: Opt-in auto reference lyrics repair (LRCLIB, with fallback to YouTube captions). Preserves detected OCR cue timing; fills missing gaps using synchronized reference timestamps.
+- `--no-caption-fallback`: Disable YouTube caption fallback when `--use-reference` is enabled and LRCLIB has no matching lyrics.
 - `--force`: Force re-running video OCR pipeline even if artifacts exist.
+
+#### Text Quality & Reference Lyrics (single-lyric videos)
+
+The current LRC runtime targets **single-lyric** videos: at any timestamp there is
+at most one active lyric line. Multi-line/simultaneous lyrics are deferred.
+
+`--correct dictionary` (the default) performs conservative English word-boundary
+and spell repair using the bundled SymSpell lexicon, with no network, LLM, or
+reference-lyrics input:
+
+- merged OCR words are split only when every piece is a real word
+  (`Iwalk` → `I walk`, `nothinginmy` → `nothing in my`);
+- obvious one-edit OCR errors are repaired (`oniy` → `only`, `lhis` → `this`);
+- proper nouns, numbers, ordinals, codes, URLs, CJK, and corpus-frequent tokens
+  are preserved.
+
+Text that is still unreadable is routed to `review` with an explicit reason
+(`low_ocr_confidence`, `low_text_quality`) instead of being emitted as lyrics.
+`--include-review` includes those cues for auditing. Chat/stream overlays are
+classified out before lyric selection.
+
+##### Reference-Assisted Repair & Gap Recovery (`--use-reference`)
+
+When enabled via `--use-reference` (CLI) or the UI checkbox:
+- **Provider Priority:** Manual reference (`.lrc`/`.txt`) > LRCLIB (synced or plain) > YouTube captions fallback.
+- **Source-Aware Matching:** Stricter similarity thresholds are applied to captions (0.90) than LRCLIB (0.85) to mitigate ASR errors. Original-language captions are enforced (translated captions are rejected).
+- **Caption Source Resolution & Cache:** Captions resolve from the original URL, artifact `source_url`, or an 11-character YouTube ID in the manifest/path; local media paths are never passed to `yt-dlp`. Caption results, including empty lookups, are cached in `reference_cache/` for one hour.
+- **Conservative Timing:** Visual OCR timing for detected cues is **never** altered by reference lyrics. Synchronized references are only used to fill gaps (cues that were entirely missed by OCR) in unoccupied intervals. Edge or overlapping gap fills are skipped with a `reference_warnings` entry instead of forcing a duplicate/degraded cue.
+- **Full Provenance:** Every `.cues.json` records `reference_source`, `n_reference_matches`, `n_reference_gap_fills`, and `reference_warnings`.
+
+Inspect text quality for an export:
+
+```bash
+python scripts/eval_lrc_text.py outputs/song/song.cues.json
+```
+
+The evaluation script is CJK-aware and expands multiple timestamps on one reference
+line, so repeated chorus sections are counted independently in recall.
 
 ### 4. Human Review & Annotation CLI
 
@@ -258,7 +298,7 @@ You can independently reproduce the 25–30 video benchmark and tracker comparis
 #### A. Dataset Preparation (`Fix_lyric_EN`)
 The benchmark dataset consists of 100 YouTube lyric videos managed under `datasets/Fix_lyric_EN/`. You can ingest videos or fetch channels directly via the Web UI:
 ```bash
-lyra-ocr web --port 8000
+lyra-ocr review-ui --port 8000
 # Open http://localhost:8000 -> Datasets tab -> Ingest YouTube Playlist or Channel
 ```
 
@@ -281,7 +321,7 @@ python scripts/compare_trackers.py \
 #### D. Interactive Visual Verification & Audit
 Audit individual frame detections, inspect Hungarian matching alignments, and modify labels interactively:
 ```bash
-lyra-ocr web --port 8000
+lyra-ocr review-ui --port 8000
 ```
 - **Runs tab**: Compare run metrics, inspect job queue status, and create or delete runs.
 - **Review tab**: Step frame-by-frame (`A`/`D` or Arrow keys), inspect track bounding boxes, toggle labels (`1`/`2`), and save corrections (`Enter`).

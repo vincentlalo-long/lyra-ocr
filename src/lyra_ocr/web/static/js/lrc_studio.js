@@ -15,6 +15,7 @@ let playbackTimeMs = 0;
 let isPlaying = false;
 let playTimer = null;
 let maxDurationMs = 180000;
+let studioVideo = null;
 
 let allRawArtifacts = [];
 let showDatasetRuns = false;
@@ -22,6 +23,7 @@ let showDatasetRuns = false;
 export async function initLrcStudio() {
   await loadArtifactOptions();
   bindStudioEvents();
+  attachVideoEvents();
 }
 
 async function loadArtifactOptions() {
@@ -117,10 +119,19 @@ export function resetStudioView() {
   const revIn = document.getElementById("lrcIncludeReview");
   if (revIn) revIn.checked = false;
   const forceIn = document.getElementById("lrcForceRerun");
-  if (forceIn) forceIn.checked = false;
+  if (forceIn) forceIn.checked = true;
+  const loadIn = document.getElementById("lrcLoadPath");
+  if (loadIn) loadIn.value = "";
+  const refIn = document.getElementById("lrcReferencePath");
+  if (refIn) refIn.value = "";
+  const refCheck = document.getElementById("lrcUseReference");
+  if (refCheck) refCheck.checked = false;
+  setVideoSource("");
 
   const banner = document.getElementById("lrcStatusBanner");
   if (banner) banner.style.display = "none";
+  const statsBar = document.getElementById("studioStatsBar");
+  if (statsBar) statsBar.innerHTML = "";
   const mainCont = document.getElementById("studioMainContainer");
   if (mainCont) mainCont.style.display = "none";
 
@@ -145,6 +156,12 @@ function bindStudioEvents() {
         document.getElementById("lrcVideoInput").value = "";
       }
     });
+  }
+
+  const loadBtn = document.getElementById("lrcLoadBtn");
+  if (loadBtn && !loadBtn.dataset.bound) {
+    loadBtn.dataset.bound = "true";
+    loadBtn.addEventListener("click", handleLoadLrc);
   }
 
   const hideBtn = document.getElementById("lrcHideArtifactBtn");
@@ -242,6 +259,130 @@ function bindStudioEvents() {
   }
 }
 
+function attachVideoEvents() {
+  studioVideo = document.getElementById("studioVideo");
+  if (!studioVideo || studioVideo.dataset.bound) return;
+  studioVideo.dataset.bound = "true";
+
+  studioVideo.addEventListener("timeupdate", () => {
+    if (studioVideo.src && !studioVideo.paused) {
+      playbackTimeMs = Math.round(studioVideo.currentTime * 1000);
+      updatePlaybackUI();
+    }
+  });
+  studioVideo.addEventListener("seeked", () => {
+    playbackTimeMs = Math.round(studioVideo.currentTime * 1000);
+    updatePlaybackUI();
+  });
+  studioVideo.addEventListener("loadedmetadata", () => {
+    if (isFinite(studioVideo.duration) && studioVideo.duration > 0) {
+      maxDurationMs = Math.round(studioVideo.duration * 1000);
+      const scrubber = document.getElementById("studioScrubber");
+      if (scrubber) scrubber.max = maxDurationMs;
+    }
+  });
+  studioVideo.addEventListener("play", () => {
+    isPlaying = true;
+    clearInterval(playTimer);
+    const btn = document.getElementById("studioPlayBtn");
+    if (btn) btn.innerHTML = "⏸ Pause";
+  });
+  studioVideo.addEventListener("pause", () => {
+    isPlaying = false;
+    const btn = document.getElementById("studioPlayBtn");
+    if (btn) btn.innerHTML = "▶ Play";
+  });
+  studioVideo.addEventListener("ended", () => {
+    isPlaying = false;
+    const btn = document.getElementById("studioPlayBtn");
+    if (btn) btn.innerHTML = "▶ Play";
+  });
+}
+
+function setVideoSource(path) {
+  if (!studioVideo) studioVideo = document.getElementById("studioVideo");
+  const wrapper = document.getElementById("studioVideoWrapper");
+  if (!studioVideo) return;
+
+  if (!path) {
+    studioVideo.pause();
+    studioVideo.removeAttribute("src");
+    studioVideo.load();
+    if (wrapper) wrapper.style.display = "none";
+    return;
+  }
+
+  const isRemote = path.startsWith("http://") || path.startsWith("https://");
+  studioVideo.src = isRemote ? path : `/api/media?path=${encodeURIComponent(path)}`;
+  if (wrapper) wrapper.style.display = "";
+}
+
+function parseLrcText(text) {
+  const cues = [];
+  const timestampRe = /\[(\d{1,3}):(\d{2})(?:[.:](\d{1,3}))?\]/g;
+  for (const raw of (text || "").split(/\r?\n/)) {
+    timestampRe.lastIndex = 0;
+    const starts = [];
+    let match;
+    while ((match = timestampRe.exec(raw)) !== null) {
+      const minutes = parseInt(match[1], 10);
+      const seconds = parseInt(match[2], 10);
+      const fraction = match[3] ? parseInt(match[3].padEnd(3, "0"), 10) : 0;
+      starts.push((minutes * 60 + seconds) * 1000 + fraction);
+    }
+    const lyricText = raw.replace(/\[[^\]]*\]/g, "").trim();
+    if (!lyricText || starts.length === 0) continue;
+    for (const start of starts) {
+      cues.push({ start_ms: start, end_ms: start + 3000, text: lyricText, confidence: 1.0, review_required: false });
+    }
+  }
+  cues.sort((a, b) => a.start_ms - b.start_ms);
+  cues.forEach((cue, idx) => {
+    cue.end_ms = cues[idx + 1] ? cues[idx + 1].start_ms : cue.start_ms + 4000;
+  });
+  return cues;
+}
+
+async function handleLoadLrc() {
+  const input = document.getElementById("lrcLoadPath");
+  const lrcPath = (input ? input.value : "").trim();
+  if (!lrcPath) {
+    showStatus("Enter a .lrc file path to load for side-by-side testing.", "error");
+    return;
+  }
+
+  try {
+    const res = await fetch(`/api/lrc?path=${encodeURIComponent(lrcPath)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Failed to load LRC");
+
+    currentCues = Array.isArray(data.cues) && data.cues.length ? data.cues : parseLrcText(data.lrc_text || "");
+    currentMetadata = data.metadata || { title: "", artist: "", album: "", by: "Lyra OCR", offset_ms: 0 };
+    currentLrcText = data.lrc_text || "";
+    currentOutLrc = data.path || lrcPath;
+    currentArtifactDir = "";
+    currentVideoPath = data.video_path || "";
+    playbackTimeMs = 0;
+    setVideoSource(currentVideoPath);
+    maxDurationMs = currentCues.length
+      ? Math.max(...currentCues.map(c => c.end_ms || c.start_ms)) + 5000
+      : 180000;
+    const scrubber = document.getElementById("studioScrubber");
+    if (scrubber) scrubber.max = maxDurationMs;
+
+    renderCuesList();
+    renderKaraokeView();
+    syncCuesToRawLrc();
+    document.getElementById("studioMainContainer").style.display = "grid";
+    showStatus(
+      `Loaded ${currentCues.length} cues${currentVideoPath ? " with video" : " (no video path found)"}.`,
+      "success"
+    );
+  } catch (err) {
+    showStatus(`Load error: ${err.message}`, "error");
+  }
+}
+
 async function handleGenerateLrc() {
   const genBtn = document.getElementById("lrcGenerateBtn");
   const statusEl = document.getElementById("lrcStatusBanner");
@@ -264,6 +405,9 @@ async function handleGenerateLrc() {
     title: document.getElementById("lrcTitleInput").value.trim(),
     artist: document.getElementById("lrcArtistInput").value.trim(),
     force: document.getElementById("lrcForceRerun").checked,
+    use_reference: document.getElementById("lrcUseReference").checked,
+    no_caption_fallback: document.getElementById("lrcNoCaptionFallback") ? document.getElementById("lrcNoCaptionFallback").checked : false,
+    reference_path: document.getElementById("lrcReferencePath").value.trim() || undefined,
   };
 
   genBtn.disabled = true;
@@ -295,7 +439,8 @@ async function handleGenerateLrc() {
     currentLrcText = data.lrc_text || "";
     currentOutLrc = data.out_lrc || "";
     currentArtifactDir = artDir;
-    currentVideoPath = videoPath;
+    currentVideoPath = data.video_path || videoPath;
+    setVideoSource(currentVideoPath);
 
     // Estimate duration from cues
     if (currentCues.length > 0) {
@@ -313,6 +458,7 @@ async function handleGenerateLrc() {
 
     showStatus(`Generated ${data.n_cues} lyric cues successfully! Saved to: ${data.out_lrc}`, "success");
     document.getElementById("studioMainContainer").style.display = "grid";
+    loadArtifactOptions();
   } catch (err) {
     showStatus(`Error: ${err.message}`, "error");
   } finally {
@@ -324,10 +470,15 @@ async function handleGenerateLrc() {
 function updateStatsSummary(data) {
   const container = document.getElementById("studioStatsBar");
   if (!container) return;
+  const hasRef = (data.n_reference_matches || 0) > 0 || (data.n_reference_gap_fills || 0) > 0;
+  const isCaption = Boolean(data.reference_source && data.reference_source.includes("caption"));
   container.innerHTML = `
     <span class="stat-badge"><strong>${data.n_cues || 0}</strong> Accepted Cues</span>
     <span class="stat-badge"><strong>${data.n_skipped || 0}</strong> Filtered Distractors</span>
     <span class="stat-badge ${data.review_required > 0 ? "warning" : ""}"><strong>${data.review_required || 0}</strong> Review Flags</span>
+    ${data.cached ? `<span class="stat-badge warning">♻️ Loaded from cached LRC</span>` : ""}
+    ${hasRef ? `<span class="stat-badge"><strong>${data.n_reference_matches || 0}</strong> Ref Matches, <strong>${data.n_reference_gap_fills || 0}</strong> Gap Fills (${data.reference_source || "ref"})</span>` : ""}
+    ${isCaption ? `<span class="stat-badge warning">⚠️ ASR caption fallback used</span>` : ""}
     <span class="stat-badge file-path" title="${data.out_lrc}">📄 ${basename(data.out_lrc)}</span>
   `;
 }
@@ -494,6 +645,14 @@ function downloadLrcFile() {
 
 function togglePlayback() {
   const btn = document.getElementById("studioPlayBtn");
+  if (studioVideo && studioVideo.src) {
+    if (studioVideo.paused) {
+      studioVideo.play().catch(() => {});
+    } else {
+      studioVideo.pause();
+    }
+    return;
+  }
   if (isPlaying) {
     clearInterval(playTimer);
     isPlaying = false;
@@ -516,6 +675,11 @@ function togglePlayback() {
 
 function seekTo(ms) {
   playbackTimeMs = Math.max(0, Math.min(maxDurationMs, ms));
+  if (studioVideo && studioVideo.src) {
+    try {
+      studioVideo.currentTime = playbackTimeMs / 1000;
+    } catch (_) { /* metadata not ready yet */ }
+  }
   updatePlaybackUI();
 }
 

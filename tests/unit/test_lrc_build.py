@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lyra_ocr.lyric.build import build_lrc_from_artifacts, build_lrc_from_video
+from lyra_ocr.lyric.models import CorrectionConfig
 
 
 def test_build_lrc_from_artifacts_success(tmp_path: Path):
@@ -322,4 +323,305 @@ def test_build_lrc_from_artifacts_cache_invalidates_on_labels_change(tmp_path: P
     assert "ORIGINAL TEXT" in out_lrc.read_text(encoding="utf-8")
 
 
+def test_build_lrc_frequency_method_without_explicit_vocab(tmp_path: Path):
+    artifacts_dir = tmp_path / "freq_art"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "manifest.json").write_text(json.dumps({"video_id": "freq"}), encoding="utf-8")
+    tracks = {
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "HELLO WORLD", "avg_confidence": 0.95},
+                "occurrences": [
+                    {"timestamp_ms": 1000, "text_norm": "HELLO WORLD", "confidence": 0.95},
+                    {"timestamp_ms": 2000, "text_norm": "HELLO WORD", "confidence": 0.90},
+                ],
+            }
+        ]
+    }
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
 
+    res = build_lrc_from_artifacts(
+        artifacts_dir, tmp_path / "freq.lrc", correct_method="frequency", force=True
+    )
+    assert res["n_cues"] == 1
+    assert "HELLO WORLD" in (tmp_path / "freq.lrc").read_text(encoding="utf-8")
+
+
+def test_build_lrc_tolerates_null_manifest_labels_and_features(tmp_path: Path):
+    artifacts_dir = tmp_path / "null_art"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "manifest.json").write_text("null", encoding="utf-8")
+    (artifacts_dir / "labels.jsonl").write_text("null\n", encoding="utf-8")
+    tracks = {
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": None,
+                "segments": [
+                    {"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "HELLO WORLD", "confidence": 0.95}
+                ],
+            }
+        ]
+    }
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    res = build_lrc_from_artifacts(artifacts_dir, tmp_path / "null.lrc", force=True)
+    assert res["n_cues"] == 1
+    assert "HELLO WORLD" in (tmp_path / "null.lrc").read_text(encoding="utf-8")
+
+
+def test_build_lrc_tolerates_list_manifest(tmp_path: Path):
+    artifacts_dir = tmp_path / "list_manifest"
+    artifacts_dir.mkdir()
+    (artifacts_dir / "manifest.json").write_text("[]", encoding="utf-8")
+    tracks = {
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "HELLO AGAIN", "mean_centroid": [0.5, 0.8]},
+            }
+        ]
+    }
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    res = build_lrc_from_artifacts(artifacts_dir, tmp_path / "list.lrc", force=True)
+    assert res["n_cues"] == 1
+    assert "HELLO AGAIN" in (tmp_path / "list.lrc").read_text(encoding="utf-8")
+
+
+def test_build_lrc_cache_invalidates_on_gate_config_change(tmp_path: Path):
+    artifacts_dir = tmp_path / "art_gate"
+    artifacts_dir.mkdir()
+    manifest = {"video_id": "v1", "probe": {"duration": 10.0}}
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.90,
+                "features": {"dominant_text": "READABLE LYRIC LINE", "mean_centroid": [0.5, 0.8]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "READABLE LYRIC LINE", "confidence": 0.90}
+                ],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+    out_lrc = tmp_path / "gate.lrc"
+
+    lenient = CorrectionConfig(method="dictionary", min_ocr_confidence=0.55)
+    res1 = build_lrc_from_artifacts(artifacts_dir, out_lrc, correction_config=lenient)
+    assert res1["n_cues"] == 1
+
+    strict = CorrectionConfig(method="dictionary", min_ocr_confidence=0.95)
+    res2 = build_lrc_from_artifacts(artifacts_dir, out_lrc, correction_config=strict)
+    assert res2["n_cues"] == 0
+
+
+def test_build_lrc_provider_priority_and_caption_fallback(tmp_path: Path):
+    from lyra_ocr.lyric.reference import ReferenceLine, ReferenceBundle
+
+    artifacts_dir = tmp_path / "art_prio"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "vid_priority",
+        "source_url": "https://www.youtube.com/watch?v=mock123abc",
+        "metadata": {"title": "Test Song", "channel": "Test Artist"},
+        "probe": {"duration": 60.0},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 10000,
+                "end_ms": 15000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "YOUVE BEEN ROAMIN ROUND", "mean_centroid": [0.5, 0.8]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 10000, "end_ms": 15000, "text": "YOUVE BEEN ROAMIN ROUND", "confidence": 0.95}
+                ],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+    out_lrc = tmp_path / "prio.lrc"
+
+    # 1. Manual reference overrides online
+    with patch("lyra_ocr.lyric.build.fetch_reference_bundle") as mock_fetch_lrclib:
+        res = build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            reference_text="[00:10.00]You've been runnin' round",
+            use_online_reference=True,
+            force=True,
+        )
+        assert mock_fetch_lrclib.call_count == 0
+        assert res["reference_source"] == "manual"
+        assert res["n_reference_matches"] == 1
+
+    # 2. LRCLIB wins over captions
+    lrclib_bundle = ReferenceBundle(
+        lines=[
+            ReferenceLine(text="You've been runnin' round", start_ms=10000, end_ms=15000),
+            ReferenceLine(text="I'm filling a gap line", start_ms=20000, end_ms=25000),
+        ],
+        source="lrclib_synced",
+        provider="lrclib",
+    )
+    with patch("lyra_ocr.lyric.build.fetch_reference_bundle", return_value=lrclib_bundle) as mock_lrclib, \
+         patch("lyra_ocr.lyric.captions.fetch_youtube_caption_bundle") as mock_captions:
+        res2 = build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            use_online_reference=True,
+            force=True,
+        )
+        assert mock_lrclib.call_count == 1
+        assert mock_captions.call_count == 0
+        assert res2["reference_source"] == "lrclib_synced"
+        assert res2["n_reference_matches"] == 1
+        # The extra reference line is after the last matched anchor; conservative
+        # edge filling is disabled by default.
+        assert res2["n_reference_gap_fills"] == 0
+        assert res2["n_cues"] == 1
+
+        # Check provenance written to .cues.json
+        cues_json = json.loads((tmp_path / "prio.cues.json").read_text(encoding="utf-8"))
+        assert cues_json["reference_source"] == "lrclib_synced"
+        assert cues_json["n_reference_matches"] == 1
+        assert cues_json["n_reference_gap_fills"] == 0
+
+    # 3. Caption fallback when LRCLIB returns empty
+    empty_bundle = ReferenceBundle(lines=[], source="", provider="lrclib")
+    caption_bundle = ReferenceBundle(
+        lines=[ReferenceLine(text="You've been runnin' round", start_ms=10000, end_ms=15000)],
+        source="youtube_captions",
+        provider="youtube_caption",
+    )
+    # Give the track a text with >= 0.90 similarity to satisfy the stricter caption threshold
+    tracks_caption = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 10000,
+                "end_ms": 15000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "YOUVE BEEN RUNING ROUND", "mean_centroid": [0.5, 0.8]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 10000, "end_ms": 15000, "text": "YOUVE BEEN RUNING ROUND", "confidence": 0.95}
+                ],
+            }
+        ],
+    }
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks_caption), encoding="utf-8")
+
+    with patch("lyra_ocr.lyric.build.fetch_reference_bundle", return_value=empty_bundle) as mock_lrclib, \
+         patch("lyra_ocr.lyric.captions.fetch_youtube_caption_bundle", return_value=caption_bundle) as mock_captions:
+        res3 = build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            use_online_reference=True,
+            force=True,
+        )
+        assert mock_lrclib.call_count == 1
+        assert mock_captions.call_count == 1
+        assert res3["reference_source"] == "youtube_captions"
+        assert res3["n_reference_matches"] == 1
+
+    # 4. No-caption-fallback prevents caption fallback
+    with patch("lyra_ocr.lyric.build.fetch_reference_bundle", return_value=empty_bundle) as mock_lrclib, \
+         patch("lyra_ocr.lyric.captions.fetch_youtube_caption_bundle") as mock_captions:
+        res4 = build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            use_online_reference=True,
+            no_caption_fallback=True,
+            force=True,
+        )
+        assert mock_lrclib.call_count == 1
+        assert mock_captions.call_count == 0
+        assert res4["reference_source"] == ""
+        assert res4["n_reference_matches"] == 0
+
+
+
+
+
+
+def test_caption_fallback_is_cached_between_builds(tmp_path: Path):
+    from lyra_ocr.lyric.reference import ReferenceBundle, ReferenceLine
+
+    artifacts_dir = tmp_path / "art_caption_cache"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "Attention [6QYcd7RggNU]",
+        "metadata": {"title": "Charlie Puth - Attention", "channel": ""},
+        "probe": {"duration": 30.0},
+    }
+    tracks = {
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 10000,
+                "end_ms": 14000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "YOUVE BEEN RUNNIN ROUND", "mean_centroid": [0.5, 0.8]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 10000, "end_ms": 14000, "text": "YOUVE BEEN RUNNIN ROUND", "confidence": 0.95}
+                ],
+            }
+        ]
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+    out_lrc = tmp_path / "caption_cache.lrc"
+    empty = ReferenceBundle(lines=[], source="", provider="lrclib")
+    caption = ReferenceBundle(
+        lines=[ReferenceLine(text="You've been runnin' round", start_ms=10000, end_ms=14000)],
+        source="youtube_captions",
+        provider="youtube",
+    )
+
+    with patch("lyra_ocr.lyric.build.fetch_reference_bundle", return_value=empty), \
+         patch("lyra_ocr.lyric.captions.fetch_youtube_caption_bundle", return_value=caption) as mock_captions:
+        first = build_lrc_from_artifacts(
+            artifacts_dir, out_lrc, use_online_reference=True, force=True
+        )
+        assert first["reference_source"] == "youtube_captions"
+        assert mock_captions.call_count == 1
+
+        second = build_lrc_from_artifacts(
+            artifacts_dir, out_lrc, use_online_reference=True, force=True
+        )
+        assert second["reference_source"] == "youtube_captions"
+        assert mock_captions.call_count == 1

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from lyra_ocr.labels import load_labels_jsonl
 from lyra_ocr.lyric.correct import build_corpus_vocab, correct_text
-from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo, LyricCue
+from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo, LyricCue, ReferenceConfig
+from lyra_ocr.lyric.reference import best_reference_similarity
+from lyra_ocr.lyric.text_repair import oov_ratio, text_quality
 
 
 def load_artifacts(artifacts_dir: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -18,7 +20,9 @@ def load_artifacts(artifacts_dir: str | Path) -> tuple[dict[str, Any], list[dict
     manifest: dict[str, Any] = {}
     if manifest_path.exists():
         try:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            loaded_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if isinstance(loaded_manifest, dict):
+                manifest = loaded_manifest
         except Exception:
             manifest = {}
 
@@ -29,9 +33,12 @@ def load_artifacts(artifacts_dir: str | Path) -> tuple[dict[str, Any], list[dict
         try:
             raw_tracks = json.loads(tracks_path.read_text(encoding="utf-8"))
             if isinstance(raw_tracks, dict) and "tracks" in raw_tracks:
-                tracks = raw_tracks["tracks"]
+                raw_list = raw_tracks["tracks"]
             elif isinstance(raw_tracks, list):
-                tracks = raw_tracks
+                raw_list = raw_tracks
+            else:
+                raw_list = []
+            tracks = [t for t in raw_list if isinstance(t, dict)] if isinstance(raw_list, list) else []
         except Exception:
             tracks = []
 
@@ -41,11 +48,63 @@ def load_artifacts(artifacts_dir: str | Path) -> tuple[dict[str, Any], list[dict
     if labels_path.exists():
         records = load_labels_jsonl(labels_path)
         for (_, tid), row in records.items():
+            if not isinstance(row, dict):
+                continue
             if row.get("annotator") == "silver_lyrics_alignment":
                 continue
             human_labels[str(tid)] = row
 
     return manifest, tracks, human_labels
+
+
+def _segment_confidence(seg: dict[str, Any], track: dict[str, Any]) -> float | None:
+    """Return the segment OCR confidence, or None when it was never recorded.
+
+    Older artifacts (and hand-written fixtures) omit confidence. Treating a
+    missing value as 0.0 would gate every such cue, so unknown stays unknown and
+    the confidence gate is skipped for that cue.
+    """
+    features = track.get("features") or {}
+    if not isinstance(features, dict):
+        features = {}
+    for container, key in (
+        (seg, "confidence"),
+        (track, "confidence"),
+        (features, "avg_confidence"),
+    ):
+        if key in container and container.get(key) is not None:
+            try:
+                return float(container[key])
+            except (TypeError, ValueError):
+                continue
+    return None
+
+
+def _quality_gate(
+    conf: float | None,
+    quality: float,
+    n_words: int,
+    oov: float,
+    config: CorrectionConfig,
+) -> str:
+    """Return a review reason for unreadable text, or an empty string."""
+    if conf is not None and conf < config.min_ocr_confidence:
+        return "low_ocr_confidence"
+    if (
+        conf is not None
+        and conf < config.review_ocr_confidence
+        and quality < config.min_text_quality
+    ):
+        return "low_text_quality"
+    if quality < config.min_text_quality_hard:
+        return "low_text_quality"
+    # High OCR confidence can still be attached to unreadable text (blurred or
+    # stylized 360p lines). Multi-word lines below this floor are not lyrics.
+    if n_words >= config.min_gate_words and quality < config.min_text_quality_multiword:
+        return "low_text_quality"
+    if n_words >= config.min_gate_words and oov >= config.max_oov_ratio:
+        return "low_text_quality"
+    return ""
 
 
 def select_cues(
@@ -57,18 +116,41 @@ def select_cues(
     correct_method: str = "dictionary",
     frame_width: int = 1280,
     frame_height: int = 720,
+    config: CorrectionConfig | None = None,
+    reference_lines: list[str] | None = None,
+    reference_bundle: Any = None,
+    reference_source: str = "",
+    reference_config: ReferenceConfig | None = None,
 ) -> tuple[list[LyricCue], list[dict[str, Any]]]:
     accepted_cues: list[LyricCue] = []
     skipped_records: list[dict[str, Any]] = []
-    corpus_vocab = build_corpus_vocab(tracks, human_labels=human_labels) if correct_method == "dictionary" else None
+    cfg = config if config is not None else CorrectionConfig(method=correct_method)
+    ref_cfg = reference_config if reference_config is not None else ReferenceConfig()
+    # Quality/OOV scoring and medoid clustering both need corpus frequencies.
+    corpus_vocab: dict[str, int] = build_corpus_vocab(tracks, human_labels=human_labels)
+
+    eff_ref_source = reference_source
+    eff_ref_lines: list[str] = []
+    if reference_bundle is not None:
+        eff_ref_source = eff_ref_source or getattr(reference_bundle, "source", "")
+        eff_ref_lines = [getattr(l, "text", str(l)) for l in getattr(reference_bundle, "lines", [])]
+    elif reference_lines:
+        eff_ref_lines = list(reference_lines)
 
     for track in tracks:
+        if not isinstance(track, dict):
+            continue
         tid = str(track.get("track_id", ""))
         h = human_labels.get(tid) or {}
+        if not isinstance(h, dict):
+            h = {}
+        features = track.get("features") or {}
+        if not isinstance(features, dict):
+            features = {}
 
         # Spatial info
         bbox = track.get("bbox", [])
-        mean_centroid = track.get("features", {}).get("mean_centroid")
+        mean_centroid = features.get("mean_centroid")
         if mean_centroid and len(mean_centroid) >= 2:
             x_center = float(mean_centroid[0])
             y_center = float(mean_centroid[1])
@@ -81,14 +163,20 @@ def select_cues(
 
         # Segment-level evaluation
         segments = track.get("segments") or []
+        if not isinstance(segments, list):
+            segments = []
+        segments = [seg for seg in segments if isinstance(seg, dict)]
         if not segments:
-            segments = [{
+            fallback_seg: dict[str, Any] = {
                 "segment_id": None,
                 "start_ms": track.get("start_ms", 0),
                 "end_ms": track.get("end_ms", 0),
-                "text": track.get("features", {}).get("dominant_text", ""),
-                "confidence": track.get("confidence", 0.0),
-            }]
+                "text": features.get("dominant_text", ""),
+            }
+            fallback_conf = _segment_confidence({}, track)
+            if fallback_conf is not None:
+                fallback_seg["confidence"] = fallback_conf
+            segments = [fallback_seg]
 
         for seg in segments:
             seg_id = seg.get("segment_id")
@@ -112,15 +200,47 @@ def select_cues(
                     "reason": "tracking_error",
                     "label": seg_label,
                     "decision": seg_decision,
-                    "text": seg.get("text", "") or track.get("features", {}).get("dominant_text", ""),
+                    "text": seg.get("text", "") or features.get("dominant_text", ""),
                 })
                 continue
 
             # 3. Acceptance condition per segment
+            is_ref_rescued = False
+            seg_text_raw = seg.get("text", "") or features.get("dominant_text", "")
+            seg_dur = (seg.get("end_ms", 0) - seg.get("start_ms", 0)) or (track.get("end_ms", 0) - track.get("start_ms", 0))
+            qa_flags = list(track.get("qa_flags") or [])
+
+            # Conservative rescue:
+            # Trusted manual or LRCLIB reference can rescue a non_lyric track.
+            # Human labels always win, and known card/credit/overlay subtypes
+            # remain rejected even when their text happens to match a lyric.
+            has_human_label = bool(seg_h.get("human_label") or seg_h.get("human_decision"))
+            blocked_rescue_flags = {
+                "intro_bounded_card",
+                "metadata_title_match",
+                "only_intro_outro",
+                "social_handle_tag",
+                "metadata_channel_match",
+            }
+            if (
+                seg_label != "lyric"
+                and not has_human_label
+                and ref_cfg.rescue_non_lyric
+                and eff_ref_source in ("manual", "lrclib_synced", "lrclib_plain")
+                and seg_dur >= 1000
+                and not any(f in qa_flags for f in blocked_rescue_flags)
+                and (len(seg_text_raw.split()) >= 2 or any("\u4e00" <= ch <= "\u9fff" for ch in seg_text_raw))
+                and eff_ref_lines
+            ):
+                if best_reference_similarity(seg_text_raw, eff_ref_lines) >= ref_cfg.replace_similarity:
+                    seg_label = "lyric"
+                    seg_decision = "accept"
+                    is_ref_rescued = True
+                    qa_flags.append("reference_rescue")
+
             if seg_decision == "reject":
                 is_accepted = False
             else:
-                qa_flags = track.get("qa_flags") or []
                 is_chorus_rescue = (
                     "potential_chorus" in qa_flags
                     or (seg_label == "lyric" and "title_match_outside_intro" in qa_flags)
@@ -139,7 +259,7 @@ def select_cues(
                     "reason": reason,
                     "label": seg_label,
                     "decision": seg_decision,
-                    "text": seg.get("text", "") or track.get("features", {}).get("dominant_text", ""),
+                    "text": seg_text_raw,
                 })
                 continue
 
@@ -155,10 +275,9 @@ def select_cues(
 
             if seg_human_text:
                 final_text = seg_human_text
-                raw_text = seg.get("text") or track.get("features", {}).get("dominant_text") or seg_human_text
+                raw_text = seg.get("text") or features.get("dominant_text") or seg_human_text
                 corr_info = CorrectionInfo(method="human", changed=True, confidence=1.0)
             else:
-                cfg = CorrectionConfig(method=correct_method)
                 final_text, raw_text, corr_info = correct_text(
                     track, tracks, cfg, vocab=corpus_vocab, segment=seg if seg_id is not None else None
                 )
@@ -174,6 +293,36 @@ def select_cues(
                 })
                 continue
 
+            # 5. OCR-confidence / text-quality gate. Human corrections bypass it.
+            seg_conf = _segment_confidence(seg, track)
+            quality = text_quality(final_text, corpus_vocab)
+            n_words = len(final_text.split())
+            oov = oov_ratio(final_text, corpus_vocab)
+            # A trusted reference line proves the OCR text is real lyrics even
+            # when the garbled spelling trips the quality gate.
+            reference_match = best_reference_similarity(final_text, eff_ref_lines)
+            gate_reason = "" if (seg_human_text or reference_match >= 0.55) else _quality_gate(
+                seg_conf, quality, n_words, oov, cfg
+            )
+            if gate_reason and not include_review:
+                skipped_records.append({
+                    "track_id": track.get("track_id"),
+                    "segment_id": seg_id,
+                    "reason": gate_reason,
+                    "label": seg_label,
+                    "decision": "review",
+                    "text": final_text,
+                    "ocr_confidence": seg_conf,
+                    "text_quality": round(float(quality), 4),
+                    "qa_flags": [gate_reason],
+                })
+                continue
+
+            cue_decision = "review" if gate_reason else seg_decision
+            cue_flags = [gate_reason] if gate_reason else []
+            if is_ref_rescued and "reference_rescue" not in cue_flags:
+                cue_flags.append("reference_rescue")
+
             seg_start_ms = int(seg.get("start_ms", track.get("start_ms", 0)))
             seg_end_ms = int(seg.get("end_ms", seg_start_ms))
             if seg_end_ms <= seg_start_ms:
@@ -186,13 +335,16 @@ def select_cues(
                 raw_text=raw_text,
                 source_track_ids=[track.get("track_id")] if track.get("track_id") is not None else [],
                 source_segment_ids=[seg_id] if seg_id is not None else [],
-                confidence=float(seg.get("confidence", track.get("confidence", 0.0))),
-                decision=seg_decision,
-                review_required=(seg_decision == "review"),
+                confidence=float(seg_conf if seg_conf is not None else 0.0),
+                decision=cue_decision,
+                review_required=(cue_decision == "review"),
                 bbox=bbox,
                 x_center=x_center,
                 y_center=y_center,
                 correction=corr_info,
+                qa_flags=cue_flags,
+                ocr_confidence=seg_conf,
+                text_quality=round(float(quality), 4),
             )
             accepted_cues.append(cue)
 

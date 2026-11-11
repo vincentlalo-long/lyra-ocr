@@ -3,9 +3,10 @@ from __future__ import annotations
 from collections import Counter
 import re
 import unicodedata
-from typing import Any
+from typing import Any, Mapping
 
 from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo
+from lyra_ocr.lyric.text_repair import RepairConfig, repair_text, text_quality
 from lyra_ocr.track import string_similarity
 
 
@@ -51,6 +52,16 @@ def _match_casing(candidate: str, original: str) -> str:
     return candidate
 
 
+def _spacing_insensitive(s: str) -> str:
+    """Case- and whitespace-insensitive key used for variant clustering.
+
+    Missing-space variants such as ``nothinginmy`` must land in the same
+    cluster as ``nothing in my`` so the quality-weighted representative can
+    choose the better one.
+    """
+    return re.sub(r"\s+", "", unicodedata.normalize("NFC", s)).casefold()
+
+
 def build_corpus_vocab(
     all_tracks: list[dict[str, Any]],
     *,
@@ -59,6 +70,8 @@ def build_corpus_vocab(
 ) -> Counter[str]:
     vocab: Counter[str] = Counter()
     for tr in all_tracks:
+        if not isinstance(tr, dict):
+            continue
         tid = str(tr.get("track_id", ""))
         if human_labels:
             hl = human_labels.get(tid)
@@ -76,23 +89,70 @@ def build_corpus_vocab(
                 continue
 
         texts: list[str] = []
-        dom = tr.get("features", {}).get("dominant_text")
+        tr_features = tr.get("features") or {}
+        if not isinstance(tr_features, dict):
+            tr_features = {}
+        dom = tr_features.get("dominant_text")
         if dom:
             texts.append(dom)
-        for seg in tr.get("segments", []):
-            if seg.get("text"):
+        for seg in tr.get("segments") or []:
+            if isinstance(seg, dict) and seg.get("text"):
                 texts.append(seg["text"])
-        for occ in tr.get("occurrences", []):
-            if occ.get("text_norm"):
+        for occ in tr.get("occurrences") or []:
+            if isinstance(occ, dict) and occ.get("text_norm"):
                 texts.append(occ["text_norm"])
 
-        for t in texts:
+        # The same line appears as dominant_text and as segment text; count it
+        # once per track so a single noisy line cannot look corpus-frequent.
+        for t in dict.fromkeys(texts):
             cleaned = _normalize_string(t)
             tokens = re.findall(r"\b\w+\b", cleaned)
             for tok in tokens:
                 if not _is_cjk(tok) and not re.search(r"\d", tok):
                     vocab[tok.lower()] += 1
     return vocab
+
+
+def _variant_quality(text: str, vocab: Mapping[str, int] | None, cache: dict[str, float]) -> float:
+    if text not in cache:
+        cache[text] = text_quality(text, vocab)
+    return cache[text]
+
+
+def _cluster_variants(
+    variants: list[tuple[str, float]],
+    vocab: Mapping[str, int] | None,
+    quality_cache: dict[str, float],
+) -> list[list[tuple[str, float]]]:
+    clusters: list[list[tuple[str, float]]] = []
+    keys: list[str] = []
+    for var, conf in variants:
+        key = _spacing_insensitive(var)
+        assigned = False
+        for idx, cluster in enumerate(clusters):
+            if string_similarity(key, keys[idx]) >= 0.85:
+                cluster.append((var, conf))
+                assigned = True
+                break
+        if not assigned:
+            clusters.append([(var, conf)])
+            keys.append(key)
+    return clusters
+
+
+def _representative(
+    cluster: list[tuple[str, float]],
+    vocab: Mapping[str, int] | None,
+    quality_cache: dict[str, float],
+) -> tuple[str, float]:
+    def _score(item: tuple[str, float]) -> tuple[float, int]:
+        text, conf = item
+        quality = _variant_quality(text, vocab, quality_cache)
+        # Confidence dominates, lexical quality breaks OCR ties. Word count is
+        # a final tie-break so a spaced variant wins over a merged one.
+        return (0.55 * conf + 0.45 * quality, len(text.split()))
+
+    return max(cluster, key=_score)
 
 
 def correct_text(
@@ -118,7 +178,9 @@ def correct_text(
                 variants.append((norm_seg, seg_conf))
 
         target_seg_id = segment.get("segment_id")
-        for occ in track.get("occurrences", []):
+        for occ in track.get("occurrences") or []:
+            if not isinstance(occ, dict):
+                continue
             if target_seg_id is not None and occ.get("segment_id") is not None:
                 if occ.get("segment_id") != target_seg_id:
                     continue
@@ -128,14 +190,19 @@ def correct_text(
             if norm_t:
                 variants.append((norm_t, c))
     else:
-        dom = track.get("features", {}).get("dominant_text", "")
-        dom_conf = float(track.get("features", {}).get("avg_confidence", track.get("confidence", 0.0)))
+        features = track.get("features") or {}
+        if not isinstance(features, dict):
+            features = {}
+        dom = features.get("dominant_text", "")
+        dom_conf = float(features.get("avg_confidence", track.get("confidence", 0.0)))
         if dom:
             norm_dom = _normalize_string(dom)
             if norm_dom:
                 variants.append((norm_dom, dom_conf))
 
-        for seg in track.get("segments", []):
+        for seg in track.get("segments") or []:
+            if not isinstance(seg, dict):
+                continue
             t = (
                 seg.get("text")
                 or seg.get("corrected_text")
@@ -146,7 +213,9 @@ def correct_text(
             if norm_t:
                 variants.append((norm_t, c))
 
-        for occ in track.get("occurrences", []):
+        for occ in track.get("occurrences") or []:
+            if not isinstance(occ, dict):
+                continue
             t = occ.get("text_norm") or occ.get("text_raw") or occ.get("text", "")
             c = float(occ.get("confidence", 0.0))
             norm_t = _normalize_string(t)
@@ -167,35 +236,25 @@ def correct_text(
             confidence=best_conf,
         )
 
-    # Consensus clustering
-    # Cluster variants with string_similarity >= 0.85
-    clusters: list[list[tuple[str, float]]] = []
-    for var, conf in variants:
-        assigned = False
-        for cl in clusters:
-            rep = cl[0][0]
-            if string_similarity(var, rep) >= 0.85:
-                cl.append((var, conf))
-                assigned = True
-                break
-        if not assigned:
-            clusters.append([(var, conf)])
+    # Clustering, quality weighting and repair all need lexical frequencies,
+    # regardless of whether the caller selected dictionary or medoid correction.
+    effective_vocab: Mapping[str, int] = (
+        vocab if vocab is not None else build_corpus_vocab(all_tracks)
+    )
 
-    # Select best cluster by sum(confidence)
-    best_cluster = max(clusters, key=lambda cl: sum(c for _, c in cl))
+    quality_cache: dict[str, float] = {}
+    clusters = _cluster_variants(variants, effective_vocab, quality_cache)
 
-    # Medoid of best cluster
-    if len(best_cluster) == 1:
-        medoid, medoid_conf = best_cluster[0]
-    else:
-        candidates = [v[0] for v in best_cluster]
-        scores: list[tuple[float, float, str]] = []
-        for v, c in best_cluster:
-            sim_sum = sum(string_similarity(v, other) for other in candidates)
-            scores.append((sim_sum, c, v))
-        scores.sort(key=lambda s: (s[0], s[1]), reverse=True)
-        medoid = scores[0][2]
-        medoid_conf = scores[0][1]
+    # Weight cluster support by confidence and lexical quality so a repeated
+    # merged/garbled variant cannot outvote a single clean variant.
+    def _cluster_weight(cluster: list[tuple[str, float]]) -> float:
+        return sum(
+            conf * (0.5 + 0.5 * _variant_quality(text, effective_vocab, quality_cache))
+            for text, conf in cluster
+        )
+
+    best_cluster = max(clusters, key=_cluster_weight)
+    medoid, medoid_conf = _representative(best_cluster, effective_vocab, quality_cache)
 
     if config.method == "consensus":
         return medoid, raw_text, CorrectionInfo(
@@ -204,9 +263,7 @@ def correct_text(
             confidence=medoid_conf,
         )
 
-    # Method: dictionary (corpus-derived)
-    effective_vocab = vocab if vocab is not None else build_corpus_vocab(all_tracks)
-
+    # Method: dictionary (corpus-derived) + optional conservative NLP repair
     # Pattern for ordinals, short alphanumeric codes, or decade specs (e.g. 1st, 2nd, 3D, 4K, 2U, V8, 90s)
     # that should be preserved as-is rather than being coerced into dictionary words.
     ordinal_or_code_re = re.compile(
@@ -247,6 +304,20 @@ def correct_text(
     cleaned_final = _normalize_string(corrected)
     if not cleaned_final:
         cleaned_final = medoid
+
+    if config.enable_nlp and not _is_cjk(cleaned_final):
+        repaired = repair_text(
+            cleaned_final,
+            config=RepairConfig(
+                min_token_len=config.nlp_min_token_len,
+                max_edit=config.nlp_max_edit,
+                split_penalty=config.nlp_split_penalty,
+            ),
+            vocab=effective_vocab,
+        )
+        repaired = _normalize_string(repaired)
+        if repaired:
+            cleaned_final = repaired
 
     diff_str = f"'{raw_text}' -> '{cleaned_final}'" if cleaned_final != raw_text else ""
 

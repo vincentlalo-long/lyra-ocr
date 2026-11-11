@@ -283,6 +283,7 @@ def process_video(
     device: str = "auto",
     rec_batch_size: int = 8,
     dedup: bool = True,
+    fps: float = 2.0,
     engines: Optional[PipelineEngines] = None,
     write_gt: bool = True,
     force_gt: bool = False,
@@ -303,7 +304,7 @@ def process_video(
     pipe_res = run_phase1_pipeline(
         video_path,
         out_dir,
-        fps=1.0,
+        fps=fps,
         tracker=tracker,
         video_id=video_id,
         title=title,
@@ -416,6 +417,7 @@ def main() -> None:
     parser.add_argument("--tracker", default="greedy", help="Tracker (greedy or bytetrack)")
     parser.add_argument("--device", default="auto", help="Device (auto, cpu, cuda)")
     parser.add_argument("--rec-batch", type=int, default=8, help="Recognition batch size")
+    parser.add_argument("--fps", type=float, default=2.0, help="Frame sampling FPS (default: 2.0)")
     parser.add_argument("--no-dedup", action="store_true", help="Disable frame dedup")
     args = parser.parse_args()
 
@@ -452,7 +454,7 @@ def main() -> None:
         workspace_root,
         args.dataset,
         tracker=args.tracker,
-        fps=1.0,
+        fps=args.fps,
         options={
             "device": args.device,
             "rec_batch_size": args.rec_batch,
@@ -479,6 +481,7 @@ def main() -> None:
             device=args.device,
             rec_batch_size=args.rec_batch,
             dedup=not args.no_dedup,
+            fps=args.fps,
             engines=engines,
         )
         # Register in run
