@@ -84,7 +84,7 @@ def discover_layers(
         track_info.append({"track": tr, "cx": cx, "cy": cy, "text": dom_text, "line_lang": line_lang})
 
     # 2. Cluster tracks into 2D spatial groups (primarily by Y band, secondarily by horizontal span)
-    # Band tolerance: cy delta <= 0.045, cx delta <= 0.25
+    # Band tolerance: cy delta <= 0.030, cx delta <= 0.25
     clusters: list[list[dict]] = []
     for info in track_info:
         best_cluster = None
@@ -94,7 +94,7 @@ def discover_layers(
             avg_cx = sum(item["cx"] for item in cl) / len(cl)
             cy_diff = abs(info["cy"] - avg_cy)
             cx_diff = abs(info["cx"] - avg_cx)
-            if cy_diff <= 0.045 and cx_diff <= 0.28:
+            if cy_diff <= 0.030 and cx_diff <= 0.25:
                 dist = cy_diff * 4.0 + cx_diff
                 if dist < best_dist:
                     best_dist = dist
@@ -112,21 +112,39 @@ def discover_layers(
 
     for layer_id, cl in enumerate(clusters, start=1):
         cys = [item["cy"] for item in cl]
+        cxs = [item["cx"] for item in cl]
         cy_min, cy_max = min(cys), max(cys)
+        avg_cx = sum(cxs) / len(cxs)
+        avg_cy = sum(cys) / len(cys)
+
+        durs = [item["track"].end_ms - item["track"].start_ms for item in cl]
+        import statistics
+
+        med_dur = statistics.median(durs) if durs else 0
+
         texts = [item["text"] for item in cl if item["text"]]
         n_distinct = _count_distinct_texts(texts)
         total_tracks = len(cl)
 
+        is_corner = (avg_cx < 0.22 or avg_cx > 0.78) and (avg_cy < 0.12 or avg_cy > 0.88)
+
         # Distinguish dynamic lyric stream vs static watermark overlay
-        # Dynamic lyric: multiple distinct lines appearing over time
-        if n_distinct >= 4 and (n_distinct / max(1, total_tracks)) >= 0.30:
+        # Dynamic lyric: multiple distinct lines appearing over time, centered, reasonable duration
+        if (
+            total_tracks >= 4
+            and not is_corner
+            and (n_distinct >= 4 or total_tracks >= 8)
+            and (n_distinct / max(1, total_tracks)) >= 0.30
+            and med_dur >= 500
+        ):
             kind = "lyric"
-        elif total_tracks >= 3 and n_distinct <= 2:
+        elif total_tracks >= 3 and (n_distinct <= 2 or is_corner or med_dur < 500):
             kind = "overlay"
         else:
             kind = "sparse"
 
         layer_lang = vote_layer_lang([item["line_lang"] for item in cl])
+
 
         layer = TextLayer(
             layer_id=layer_id,
