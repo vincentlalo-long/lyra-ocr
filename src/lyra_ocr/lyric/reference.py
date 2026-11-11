@@ -68,6 +68,7 @@ class ReferenceLine:
     end_ms: int | None = None
     source: str = ""
     confidence: float = 0.0
+    language: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -992,6 +993,57 @@ def fetch_reference_bundle(
         save_cached_reference_bundle(cache_dir, key, bundle, query)
 
     return bundle
+
+
+def romanize_bundle(bundle: ReferenceBundle) -> ReferenceBundle | None:
+    """Convert Japanese reference lines (Kanji/Kana) to Romanized (Hepburn) lyrics using pykakasi."""
+    if not bundle or not bundle.lines:
+        return None
+
+    try:
+        import pykakasi
+    except ImportError:
+        logger.info("pykakasi not installed; skipping reference romanization")
+        return None
+
+    try:
+        import jaconv
+    except ImportError:
+        jaconv = None
+
+    kks = pykakasi.kakasi()
+    romanized_lines: list[ReferenceLine] = []
+
+    for l in bundle.lines:
+        if not l.text.strip():
+            continue
+        # Convert Katakana okurigana to Hiragana for proper compound verb romanization
+        text_norm = jaconv.kata2hira(l.text) if jaconv else l.text
+        res = kks.convert(text_norm)
+        hepburn_tokens = [item["hepburn"].strip() for item in res if item.get("hepburn") and item["hepburn"].strip()]
+        romaji_text = " ".join(hepburn_tokens).strip()
+        if not romaji_text:
+            romaji_text = l.text
+        romanized_lines.append(
+            ReferenceLine(
+                text=romaji_text,
+                start_ms=l.start_ms,
+                end_ms=l.end_ms,
+                source="lrclib_romanized",
+                language="ja-Latn",
+            )
+        )
+
+    if not romanized_lines:
+        return None
+
+    return ReferenceBundle(
+        lines=romanized_lines,
+        source="lrclib_romanized",
+        provider=bundle.provider,
+        language="ja-Latn",
+        warnings=list(bundle.warnings),
+    )
 
 
 def fetch_reference_lines(

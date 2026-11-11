@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
 from lyra_ocr.labels import load_labels_jsonl
 from lyra_ocr.lyric.correct import build_corpus_vocab, correct_text
 from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo, LyricCue, ReferenceConfig
-from lyra_ocr.lyric.reference import best_reference_similarity
+from lyra_ocr.lyric.reference import best_reference_similarity, line_similarity
 from lyra_ocr.lyric.text_repair import oov_ratio, text_quality
 
 
@@ -226,17 +227,35 @@ def select_cues(
                 "social_handle_tag",
                 "metadata_channel_match",
             }
+            valid_rescue_source = eff_ref_source in (
+                "manual",
+                "lrclib_synced",
+                "lrclib_plain",
+                "lrclib_romanized",
+            )
             if (
                 seg_label != "lyric"
                 and not has_human_label
                 and ref_cfg.rescue_non_lyric
-                and eff_ref_source in ("manual", "lrclib_synced", "lrclib_plain")
+                and valid_rescue_source
                 and eff_seg_dur >= 1000
                 and not any(f in qa_flags for f in blocked_rescue_flags)
                 and (len(seg_text_raw.split()) >= 2 or any("\u4e00" <= ch <= "\u9fff" for ch in seg_text_raw))
                 and eff_ref_lines
             ):
-                if best_reference_similarity(seg_text_raw, eff_ref_lines) >= ref_cfg.replace_similarity:
+                # For Romaji or Romanized references, compare space-stripped strings to tolerate word boundary variations
+                if track_lang == "ja-Latn" or eff_ref_source == "lrclib_romanized":
+                    raw_no_space = re.sub(r"\s+", "", seg_text_raw.lower())
+                    best_sim = max(
+                        (line_similarity(raw_no_space, re.sub(r"\s+", "", rl.lower())) for rl in eff_ref_lines),
+                        default=0.0,
+                    )
+                    threshold = min(0.75, ref_cfg.replace_similarity)
+                else:
+                    best_sim = best_reference_similarity(seg_text_raw, eff_ref_lines)
+                    threshold = ref_cfg.replace_similarity
+
+                if best_sim >= threshold:
                     seg_label = "lyric"
                     seg_decision = "accept"
                     is_ref_rescued = True

@@ -140,6 +140,25 @@ def test_fetch_reference_bundle_rejects_wrong_song_by_ocr_overlap(monkeypatch):
     assert "reference_low_ocr_overlap" in bundle.warnings
 
 
+def test_romanize_bundle_with_pykakasi():
+    from lyra_ocr.lyric.reference import romanize_bundle, ReferenceBundle, ReferenceLine
+
+    lines = [
+        ReferenceLine(text="千本桜 夜ニ紛レ", start_ms=1000),
+        ReferenceLine(text="嘆ク唄モ 聞コエナイヨ", start_ms=5000),
+    ]
+    bundle = ReferenceBundle(lines=lines, source="lrclib_synced", provider="lrclib", language="ja")
+    rom_bundle = romanize_bundle(bundle)
+
+    assert rom_bundle is not None
+    assert rom_bundle.source == "lrclib_romanized"
+    assert rom_bundle.language == "ja-Latn"
+    assert len(rom_bundle.lines) == 2
+    assert "senbonzakura" in rom_bundle.lines[0].text.lower()
+    assert "nageku" in rom_bundle.lines[1].text.lower()
+
+
+
 
 def test_align_reference_repairs_text_and_keeps_ocr_timing():
     cues = [

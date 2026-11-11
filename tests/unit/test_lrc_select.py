@@ -547,5 +547,44 @@ def test_select_cues_rescues_1frame_track():
     assert "reference_rescue" in cues[0].qa_flags
 
 
+def test_select_cues_romaji_rescue_preserves_ocr_text():
+    track = {
+        "track_id": 83,
+        "start_ms": 72000,
+        "end_ms": 74000,
+        "label": "non_lyric",
+        "decision": "review",
+        "bbox": [200, 330, 450, 355],
+        "features": {
+            "dominant_text": "nagekuluta mo kikoe nalyo",
+            "lang": "ja-Latn",
+            "layer_id": 2,
+        },
+        "segments": [
+            {
+                "segment_id": 0,
+                "start_ms": 72000,
+                "end_ms": 74000,
+                "text": "nagekuluta mo kikoe nalyo",
+            }
+        ],
+    }
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    ref_lines = ["nageku uta mo kikoe nai yo"]
+    cues, skipped = select_cues(
+        [track],
+        human_labels={},
+        reference_lines=ref_lines,
+        reference_source="lrclib_romanized",
+        reference_config=ReferenceConfig(rescue_non_lyric=True),
+    )
+    assert len(cues) == 1
+    assert cues[0].decision == "accept"
+    assert "reference_rescue" in cues[0].qa_flags
+    assert cues[0].text == "nagekuluta mo kikoe nalyo"
+
+
+
 
 
