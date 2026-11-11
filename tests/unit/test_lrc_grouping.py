@@ -129,3 +129,54 @@ def test_grouping_mixed_int_and_str_track_ids():
     # Should not raise TypeError: '<' not supported between instances of 'int' and 'str'
     result = dedupe_and_group([cue1, cue2, cue3])
     assert len(result) == 2
+
+
+def test_dedupe_does_not_merge_different_layers():
+    cue1 = LyricCue(
+        start_ms=1000,
+        end_ms=3000,
+        text="SAME TEXT",
+        layer_id=0,
+        confidence=0.95,
+        y_center=0.2,
+    )
+    cue2 = LyricCue(
+        start_ms=1000,
+        end_ms=3000,
+        text="SAME TEXT",
+        layer_id=1,
+        confidence=0.95,
+        y_center=0.8,
+    )
+    result = dedupe_and_group([cue1, cue2])
+    assert len(result) == 2
+    assert {r.layer_id for r in result} == {0, 1}
+
+
+def test_dedupe_clamps_end_ms_to_next_cue_start_within_same_layer():
+    cue1 = LyricCue(
+        start_ms=1000,
+        end_ms=4000,  # overshoots cue2
+        text="LINE ONE",
+        layer_id=0,
+    )
+    cue2 = LyricCue(
+        start_ms=2500,
+        end_ms=5000,
+        text="LINE TWO",
+        layer_id=0,
+    )
+    # Different layer cue starting at 2000ms should NOT clamp cue1
+    cue_diff_layer = LyricCue(
+        start_ms=2000,
+        end_ms=6000,
+        text="DIFF LAYER LINE",
+        layer_id=1,
+    )
+    result = dedupe_and_group([cue1, cue2, cue_diff_layer])
+    cues_layer0 = [c for c in result if c.layer_id == 0]
+    assert cues_layer0[0].end_ms == 2500  # clamped to next start_ms in same layer
+    assert cues_layer0[1].end_ms == 5000
+    cues_layer1 = [c for c in result if c.layer_id == 1]
+    assert cues_layer1[0].end_ms == 6000
+

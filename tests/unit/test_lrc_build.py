@@ -625,3 +625,128 @@ def test_caption_fallback_is_cached_between_builds(tmp_path: Path):
         )
         assert second["reference_source"] == "youtube_captions"
         assert mock_captions.call_count == 1
+
+
+def test_build_lrc_per_layer_reference_alignment_protects_romaji(tmp_path: Path):
+    from lyra_ocr.lyric.reference import ReferenceBundle, ReferenceLine
+
+    artifacts_dir = tmp_path / "art_multilang"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "v_multi",
+        "probe": {"duration": 30.0},
+    }
+    tracks = {
+        "total_tracks": 2,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {
+                    "dominant_text": "senbonzakura yoru ni magire",
+                    "layer_id": 0,
+                    "lang": "ja-Latn",
+                    "mean_centroid": [0.5, 0.5],
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "text": "senbonzakura yoru ni magire",
+                        "confidence": 0.95,
+                    }
+                ],
+            },
+            {
+                "track_id": 2,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {
+                    "dominant_text": "千本桜 夜ニ紛レ",
+                    "layer_id": 1,
+                    "lang": "ja",
+                    "mean_centroid": [0.5, 0.8],
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "text": "千本桜 夜ニ紛レ",
+                        "confidence": 0.95,
+                    }
+                ],
+            },
+            {
+                "track_id": 3,
+                "start_ms": 8000,
+                "end_ms": 10000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {
+                    "dominant_text": "此処ハ宴 鋼ノ檻",
+                    "layer_id": 1,
+                    "lang": "ja",
+                    "mean_centroid": [0.5, 0.8],
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 8000,
+                        "end_ms": 10000,
+                        "text": "此処ハ宴 鋼ノ檻",
+                        "confidence": 0.95,
+                    }
+                ],
+            },
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    kanji_bundle = ReferenceBundle(
+        lines=[
+            ReferenceLine(text="千本桜 夜ニ紛レ", start_ms=1000, end_ms=3000, language="ja"),
+            ReferenceLine(text="君ノ声モ届カナイヨ", start_ms=4000, end_ms=6000, language="ja"),
+            ReferenceLine(text="此処ハ宴 鋼ノ檻", start_ms=8000, end_ms=10000, language="ja"),
+        ],
+        source="lrclib_synced",
+        provider="lrclib",
+        language="ja",
+    )
+
+    out_lrc = tmp_path / "multi.lrc"
+    with patch("lyra_ocr.lyric.build.fetch_reference_bundle", return_value=kanji_bundle):
+        res = build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            use_online_reference=True,
+            force=True,
+        )
+
+    cues_json = json.loads((tmp_path / "multi.cues.json").read_text(encoding="utf-8"))
+    cues = cues_json["cues"]
+
+    # Layer 0 (ja-Latn) must NEVER be replaced by Kanji reference
+    romaji_cues = [c for c in cues if c.get("layer_id") == 0 or c.get("lang") == "ja-Latn"]
+    assert len(romaji_cues) == 1
+    assert romaji_cues[0]["text"] == "senbonzakura yoru ni magire"
+
+    # Layer 1 (ja) was matched and gap filled
+    ja_cues = [c for c in cues if c.get("layer_id") == 1]
+    assert len(ja_cues) == 3
+    # Gap fill line belongs to layer 1 and lang ja
+    gap_cue = [c for c in ja_cues if "君ノ声モ届カナイヨ" in c["text"]][0]
+    assert gap_cue["layer_id"] == 1
+    assert gap_cue["lang"] == "ja"
+
+

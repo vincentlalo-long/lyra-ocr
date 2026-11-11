@@ -1046,6 +1046,47 @@ def romanize_bundle(bundle: ReferenceBundle) -> ReferenceBundle | None:
     )
 
 
+def select_reference_lines(
+    bundle: ReferenceBundle | None,
+    target_lang: str,
+) -> ReferenceBundle | None:
+    """Select reference lines matching a target layer language.
+
+    Romaji layers ('ja-Latn') are protected: never replaced or gap-filled by reference lyrics.
+    """
+    if not bundle or not bundle.lines or target_lang == "ja-Latn":
+        return None
+
+    from lyra_ocr.lang import detect_line_lang, vote_layer_lang
+
+    bundle_lang = bundle.language or vote_layer_lang(
+        [l.language or detect_line_lang(l.text) for l in bundle.lines]
+    )
+
+    # If the bundle as a whole matches the target layer
+    if bundle_lang == target_lang or (bundle_lang in ("en", "und") and target_lang in ("en", "und")):
+        return bundle
+
+    # Otherwise, check if individual lines match the target language
+    matching_lines: list[ReferenceLine] = []
+    for line in bundle.lines:
+        line_lang = line.language or detect_line_lang(line.text)
+        if line_lang == target_lang:
+            matching_lines.append(line)
+
+    if not matching_lines:
+        return None
+
+    return ReferenceBundle(
+        lines=matching_lines,
+        source=bundle.source,
+        provider=bundle.provider,
+        language=target_lang,
+        warnings=list(bundle.warnings),
+    )
+
+
+
 def fetch_reference_lines(
     title: str,
     artist: str = "",

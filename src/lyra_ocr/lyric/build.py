@@ -7,11 +7,13 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from lyra_ocr.lang import vote_layer_lang
 from lyra_ocr.lyric.export import write_cues_json, write_lrc
 from lyra_ocr.lyric.grouping import dedupe_and_group
 from lyra_ocr.lyric.models import CorrectionConfig, LrcMetadata, ReferenceConfig
 from lyra_ocr.lyric.reference import (
     ReferenceBundle,
+    ReferenceLine,
     ReferenceQuery,
     align_reference,
     fetch_reference_bundle,
@@ -25,7 +27,9 @@ from lyra_ocr.lyric.reference import (
     reference_cache_dir,
     reference_cache_key,
     save_cached_reference_bundle,
+    select_reference_lines,
 )
+
 from lyra_ocr.lyric.select import load_artifacts, select_cues
 
 logger = logging.getLogger(__name__)
@@ -276,39 +280,61 @@ def build_lrc_from_artifacts(
     # Optional reference lyrics: repair cue text and fill reference gaps without touching OCR timing.
     n_reference_matches = 0
     n_reference_gap_fills = 0
+
+    if cues and not ref_bundle and reference_lines:
+        ref_bundle = ReferenceBundle(
+            lines=[ReferenceLine(text=t) for t in reference_lines],
+            source=reference_source,
+            provider="manual" if reference_source == "manual" else "",
+        )
+
     if cues and ref_bundle and ref_bundle.lines:
-        align_res = align_reference(
-            cues,
-            ref_bundle,
-            source=reference_source,
-            config=reference_cfg,
-        )
-        n_reference_matches = int(align_res.replaced_count)
-        cues, overlap_warnings = reconcile_reference_overlaps(
-            cues,
-            ref_bundle,
-            matched_pairs=align_res.matched_pairs,
-            config=reference_cfg,
-        )
-        cues, gap_res = fill_reference_gaps(
-            cues,
-            ref_bundle,
-            config=reference_cfg,
-            source=reference_source,
-            duration_ms=duration_ms,
-            matched_pairs=align_res.matched_pairs,
-        )
-        n_reference_gap_fills = int(gap_res.n_filled)
-        reference_warnings.extend(overlap_warnings)
-        reference_warnings.extend(gap_res.warnings)
-    elif cues and reference_lines:
-        align_res = align_reference(
-            cues,
-            reference_lines,
-            source=reference_source,
-            config=reference_cfg,
-        )
-        n_reference_matches = int(align_res.replaced_count)
+        from collections import defaultdict
+
+        layer_groups: dict[Any, list[LyricCue]] = defaultdict(list)
+        for c in cues:
+            layer_groups[c.layer_id].append(c)
+
+        processed_cues: list[LyricCue] = []
+        for layer_id, layer_cues in layer_groups.items():
+            layer_lang = vote_layer_lang([c.lang for c in layer_cues if c.lang])
+            ref_for_layer = select_reference_lines(ref_bundle, layer_lang)
+
+            if ref_for_layer and ref_for_layer.lines and layer_lang != "ja-Latn":
+                align_res = align_reference(
+                    layer_cues,
+                    ref_for_layer,
+                    source=reference_source,
+                    config=reference_cfg,
+                )
+                n_reference_matches += int(align_res.replaced_count)
+                layer_cues, overlap_warnings = reconcile_reference_overlaps(
+                    layer_cues,
+                    ref_for_layer,
+                    matched_pairs=align_res.matched_pairs,
+                    config=reference_cfg,
+                )
+                layer_cues, gap_res = fill_reference_gaps(
+                    layer_cues,
+                    ref_for_layer,
+                    config=reference_cfg,
+                    source=reference_source,
+                    duration_ms=duration_ms,
+                    matched_pairs=align_res.matched_pairs,
+                )
+                for gc in layer_cues:
+                    if gc.layer_id is None and layer_id is not None:
+                        gc.layer_id = layer_id
+                    if not gc.lang or gc.lang == "und":
+                        gc.lang = layer_lang
+
+                n_reference_gap_fills += int(gap_res.n_filled)
+                reference_warnings.extend(overlap_warnings)
+                reference_warnings.extend(gap_res.warnings)
+
+            processed_cues.extend(layer_cues)
+
+        cues = processed_cues
 
     cues = dedupe_and_group(cues)
 

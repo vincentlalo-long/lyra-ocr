@@ -54,6 +54,14 @@ def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
     for cue in sorted_cues:
         matched_idx = -1
         for i, existing in enumerate(merged):
+            # Cues from different layers must NEVER be merged
+            if (
+                existing.layer_id is not None
+                and cue.layer_id is not None
+                and existing.layer_id != cue.layer_id
+            ):
+                continue
+
             # Check dedupe criteria. A line sampled at 2 fps can appear as two
             # tracks starting ~1s apart; allow a wider window only for
             # near-identical text so genuine short consecutive lines survive.
@@ -93,8 +101,27 @@ def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
             target.source_segment_ids = sorted(all_sids, key=_track_sort_key)
             target.review_required = target.review_required or cue.review_required
             target.end_ms = max(target.end_ms, cue.end_ms)
+            if target.layer_id is None and cue.layer_id is not None:
+                target.layer_id = cue.layer_id
+            if (not target.lang or target.lang == "und") and cue.lang and cue.lang != "und":
+                target.lang = cue.lang
         else:
             merged.append(cue)
+
+    # 3. Cap end_ms at the next cue's start_ms within the same layer
+    from collections import defaultdict
+
+    by_layer: dict[Any, list[LyricCue]] = defaultdict(list)
+    for c in merged:
+        by_layer[c.layer_id].append(c)
+
+    for layer_id, lcues in by_layer.items():
+        lcues_sorted = sorted(lcues, key=lambda c: (c.start_ms, c.end_ms))
+        for idx in range(len(lcues_sorted) - 1):
+            curr = lcues_sorted[idx]
+            next_cue = lcues_sorted[idx + 1]
+            if next_cue.start_ms > curr.start_ms and curr.end_ms > next_cue.start_ms:
+                curr.end_ms = next_cue.start_ms
 
     # Re-sort final list
     return sorted(
