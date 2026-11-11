@@ -64,7 +64,8 @@ def test_manifest_runtime_block_schema():
 
     assert runtime_block["device"] in ("cpu", "cuda")
     assert runtime_block["rec_batch_size"] >= 1
-    assert runtime_block["pipeline_version"] == "2"
+    from lyra_ocr.pipeline import PIPELINE_VERSION
+    assert runtime_block["pipeline_version"] in ("2", PIPELINE_VERSION)
 
 
 def test_manifest_schema_keys():

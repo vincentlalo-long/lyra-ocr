@@ -116,7 +116,8 @@ def test_dedup_reuses_previous_ocr_and_frame_file(tmp_path, monkeypatch):
 
     manifest = json.loads((out / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["runtime"]["dedup"] is True
-    assert manifest["runtime"]["pipeline_version"] == "2"
+    from lyra_ocr.pipeline import PIPELINE_VERSION
+    assert manifest["runtime"]["pipeline_version"] == PIPELINE_VERSION
     assert manifest["runtime"]["frame_source"] == "pipe"
 
 

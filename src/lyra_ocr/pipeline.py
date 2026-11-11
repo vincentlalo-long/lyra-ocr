@@ -45,7 +45,7 @@ from lyra_ocr.track import merge_fragmented_tracks, track_ocr_results
 ProgressCb = Callable[[str, float, str], None]  # (stage, percent 0-100, message)
 FrameCb = Callable[[int, int, list, float], None]  # (frame_id, ts_ms, text_lines, elapsed_ms)
 
-PIPELINE_VERSION = "2"
+PIPELINE_VERSION = "3"
 FRAME_SOURCES = ("pipe", "disk")
 
 
@@ -533,6 +533,7 @@ def run_phase1_pipeline(
     # 7. Classification
     check_cancel()
     report("classifying", 90.0, "rule-based classification")
+    sample_interval_ms = int(1000 / meta["fps"]) if meta.get("fps") and meta["fps"] > 0 else int(1000 / fps)
     classify_all_tracks(
         tracks=tracks,
         metadata={
@@ -543,6 +544,7 @@ def run_phase1_pipeline(
         video_duration_ms=v_dur_ms,
         frame_width=meta["width"],
         frame_height=meta["height"],
+        sample_interval_ms=sample_interval_ms,
     )
 
     # 8. Exports

@@ -81,7 +81,8 @@ def test_pipeline_full_run_writes_artifacts(tmp_path, engines):
     assert manifest["video_id"] == "vid_override1"
     assert manifest["config_hash"] == result["config_hash"]
     assert manifest["models"]["det"] == "PP-OCRv6_det_small"
-    assert manifest["runtime"]["pipeline_version"] == "2"
+    from lyra_ocr.pipeline import PIPELINE_VERSION
+    assert manifest["runtime"]["pipeline_version"] == PIPELINE_VERSION
     assert manifest["runtime"]["device"] in ("cpu", "cuda")
     assert manifest["runtime"]["frame_source"] in ("pipe", "disk")
     assert manifest["runtime"]["rec_batch_size"] == 8

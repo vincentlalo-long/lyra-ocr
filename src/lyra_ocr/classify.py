@@ -113,7 +113,11 @@ def classify_track(
     lifetime_ratio = feat.get("lifetime_ratio", 0.0)
     if sample_interval_ms > 0 and video_duration_ms > 0:
         lifetime_ratio = duration_ms / max(1, video_duration_ms)
-    start_time_ratio = feat.get("start_time_ratio", 0.0)
+    start_time_ratio = (
+        track.start_ms / max(1, video_duration_ms)
+        if video_duration_ms > 0
+        else feat.get("start_time_ratio", 0.0)
+    )
     n_text_changes = feat.get("n_text_changes", 0)
     spatial_variance = feat.get("spatial_variance", 0.0)
     aspect_ratio = feat.get("aspect_ratio", 1.0)
@@ -137,8 +141,10 @@ def classify_track(
         mean_cx, mean_cy = 0.5, 0.5
     distinct_changes = feat.get("distinct_text_changes", n_text_changes)
     word_count = len(dominant_text.split())
+    layer_kind = feat.get("layer_kind", "sparse")
+    in_lyric_layer = (layer_kind == "lyric")
     # Spatial prior: active reading zone (center or lower-third), not in extreme corners
-    in_reading_zone = (
+    in_reading_zone = in_lyric_layer or (
         not is_corner
         and 0.10 <= mean_cx <= 0.90
         and 0.20 <= mean_cy <= 0.95
@@ -153,7 +159,7 @@ def classify_track(
         or (area_ratio >= 0.03 and aspect_ratio <= 3.5)
     )
     end_time_ratio = start_time_ratio + lifetime_ratio
-    only_intro_outro = (
+    only_intro_outro = (not in_lyric_layer) and (
         (end_time_ratio <= 0.08 and looks_like_card)
         or (start_time_ratio >= 0.95 and looks_like_card)
     ) and (video_duration_ms > 0 or lifetime_ratio > 0)
@@ -341,8 +347,44 @@ def classify_track(
             track.classification = res
             return res
 
+    # Rule L2: Static Overlay / Watermark Layer
+    if layer_kind == "overlay":
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.92,
+            reason=f"Static overlay/watermark layer (id={feat.get('layer_id')})",
+            decision="reject",
+            qa_flags=["static_overlay_layer"],
+        )
+        track.classification = res
+        return res
+
+    # Check natural language characters
+    has_text = any(
+        ch.isalpha() or "\u4e00" <= ch <= "\u9fff" or "\u3040" <= ch <= "\u30ff" or "\uac00" <= ch <= "\ud7af"
+        for ch in dominant_text
+    )
+
+    # Rule L1: Confirmed Lyric Layer Member
+    if (
+        in_lyric_layer
+        and has_text
+        and len(dominant_text.strip()) >= 2
+        and not only_intro_outro
+        and duration_ms >= 400
+    ):
+        res = ClassificationResult(
+            label="lyric",
+            confidence=0.95,
+            reason=f"Member of dynamic lyric layer (id={feat.get('layer_id')})",
+            decision="accept",
+            qa_flags=["lyric_layer_member"],
+        )
+        track.classification = res
+        return res
+
     # Static text strictly in intro (< 10% of duration or <= 12 seconds)
-    if start_time_ratio <= 0.05 and track.end_ms <= 15000 and n_text_changes <= 1 and duration_ms <= 10000:
+    if not in_lyric_layer and start_time_ratio <= 0.05 and track.end_ms <= 15000 and n_text_changes <= 1 and duration_ms <= 10000:
         if 2000 <= duration_ms <= 9000 and not is_corner and looks_like_card:
             res = ClassificationResult(
                 label="non_lyric",
@@ -355,7 +397,7 @@ def classify_track(
             return res
 
     # Rule 5: Lyric Stream (Recurring Distinct Text Changes in Stable Region)
-    if distinct_changes >= 2 and spatial_variance <= 0.02:
+    if distinct_changes >= 2 and spatial_variance <= 0.02 and layer_kind != "overlay":
         if only_intro_outro:
             # Intro/credit carousels also change text; never auto-accept them.
             res = ClassificationResult(
@@ -503,6 +545,18 @@ def classify_all_tracks(
     sample_interval_ms: int = 0,
 ) -> list[ClassificationResult]:
     """Run rule-based classification across all tracks in a pipeline."""
+    # Discover spatial text layers across the video timeline if not already assigned
+    from lyra_ocr.layers import discover_layers
+
+    has_layers = any("layer_id" in (tr.features or {}) for tr in tracks)
+    if not has_layers and tracks:
+        discover_layers(
+            tracks,
+            frame_w=frame_width,
+            frame_h=frame_height,
+            video_duration_ms=video_duration_ms,
+        )
+
     results = []
     for tr in tracks:
         res = classify_track(
