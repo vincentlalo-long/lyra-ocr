@@ -65,11 +65,12 @@ def download_video(
 
     if max_height:
         fmt = (
-            f"bestvideo[ext=mp4][height<={max_height}]+bestaudio[ext=m4a]"
-            f"/best[ext=mp4][height<={max_height}]/best[height<={max_height}]/best"
+            f"bestvideo[height<={max_height}]+bestaudio"
+            f"/best[height<={max_height}]/best"
         )
     else:
-        fmt = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        fmt = "bestvideo+bestaudio/best"
+
 
     options: dict[str, Any] = {
         # Prefer separate MP4/M4A streams, then fall back to a ready MP4.
@@ -115,7 +116,10 @@ def download_video(
         "id": info.get("id", ""),
         "duration": info.get("duration"),
         "webpage_url": info.get("webpage_url", url),
+        "height": info.get("height"),
+        "format_id": info.get("format_id"),
     }
+
     emit({"stage": "complete", **result})
     return result
 
