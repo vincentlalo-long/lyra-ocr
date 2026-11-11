@@ -724,6 +724,115 @@ def test_web_server_lrc_endpoints(make_web_server, tmp_path: Path, monkeypatch):
     assert "Em ơi có biết" in yt_resp["lrc_text"]
 
 
+def test_web_server_lrc_multi_layer_and_save(make_web_server, tmp_path: Path):
+    """Test multi-layer /api/lrc/generate and saving cues regenerates layer files."""
+    server_info = make_web_server(tmp_path)
+    url = server_info["url"]
+
+    art_dir = tmp_path / "outputs" / "multi_sample"
+    art_dir.mkdir(parents=True)
+    manifest = {
+        "video_id": "vid_multi",
+        "video_path": "multi.mp4",
+        "config_hash": "cfg1",
+        "fps": 1.0,
+        "tracker": "bytetrack",
+        "metadata": {"title": "Multi Song", "channel": "Artist"},
+    }
+    (art_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+    tracks_data = {
+        "video_id": "vid_multi",
+        "tracks": [
+            {
+                "track_id": 1,
+                "label": "lyric",
+                "confidence": 0.95,
+                "decision": "accept",
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "features": {
+                    "dominant_text": "senbonzakura yoru ni magire",
+                    "layer_id": 0,
+                    "lang": "ja-Latn",
+                    "mean_centroid": [0.5, 0.4],
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "text": "senbonzakura yoru ni magire",
+                        "confidence": 0.95,
+                    }
+                ],
+            },
+            {
+                "track_id": 2,
+                "label": "lyric",
+                "confidence": 0.95,
+                "decision": "accept",
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "features": {
+                    "dominant_text": "千本桜 夜ニ紛レ",
+                    "layer_id": 1,
+                    "lang": "ja",
+                    "mean_centroid": [0.5, 0.8],
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "text": "千本桜 夜ニ紛レ",
+                        "confidence": 0.95,
+                    }
+                ],
+            },
+        ],
+    }
+    (art_dir / "tracks.json").write_text(json.dumps(tracks_data), encoding="utf-8")
+
+    gen_payload = {
+        "artifact_dir": "outputs/multi_sample",
+        "title": "Multi Song",
+        "force": True,
+    }
+    status, gen_resp = http_request(f"{url}/api/lrc/generate", data=gen_payload, method="POST")
+    assert status == 200
+    assert gen_resp["ok"] is True
+    assert gen_resp["primary_lang"] == "ja-Latn"
+    assert len(gen_resp["layers"]) == 2
+    for layer in gen_resp["layers"]:
+        assert "layer_id" in layer
+        assert "lang" in layer
+        assert "path" in layer
+        assert "n_cues" in layer
+        assert "lrc_text" in layer
+        assert len(layer["lrc_text"]) > 0
+
+    # Save edited cues: modify romaji text
+    cues = gen_resp["cues"]
+    cues[0]["text"] = "senbonzakura EDITED"
+    save_payload = {
+        "out_lrc": gen_resp["out_lrc"],
+        "cues": cues,
+        "metadata": gen_resp["metadata"],
+        "video_id": "vid_multi",
+    }
+    status, save_resp = http_request(f"{url}/api/lrc/save", data=save_payload, method="POST")
+    assert status == 200
+    assert save_resp["ok"] is True
+
+    # Layer files regenerated on disk
+    out_lrc_path = Path(gen_resp["out_lrc"])
+    assert (out_lrc_path.parent / f"{out_lrc_path.stem}.ja-Latn.lrc").exists()
+    assert (out_lrc_path.parent / f"{out_lrc_path.stem}.ja.lrc").exists()
+    assert "senbonzakura EDITED" in (out_lrc_path.parent / f"{out_lrc_path.stem}.ja-Latn.lrc").read_text(encoding="utf-8")
+
+
+
 def test_web_server_clear_finished_jobs(make_web_server, tmp_path: Path):
     """Verify POST /api/jobs/clear removes completed jobs without touching files."""
     from lyra_ocr.dataset.models import JobRecord

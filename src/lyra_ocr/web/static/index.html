@@ -181,9 +181,10 @@
         <!-- Right: Interactive Cue Inspector & Raw LRC Editor -->
         <div class="studio-right-panel">
           <div class="panel-header" style="justify-content:space-between">
-            <div style="display:flex; gap:6px;">
+            <div style="display:flex; gap:6px; align-items:center;">
               <button id="studioTabCues" class="mini-btn active">Cue Inspector</button>
               <button id="studioTabRaw" class="mini-btn">Raw .LRC</button>
+              <select id="studioLayerSelect" style="display:none; font-size:12px; padding:2px 6px; background:#1e293b; color:#e2e8f0; border:1px solid #475569; border-radius:4px;"></select>
             </div>
             <div style="display:flex; gap:6px;">
               <button id="lrcAddCueBtn" class="mini-btn">+ Add Line</button>
@@ -192,6 +193,7 @@
               <button id="lrcDownloadBtn" class="mini-btn primary">⬇ Download .lrc</button>
             </div>
           </div>
+
 
           <!-- Cue List Editor -->
           <div id="studioCuesView" class="studio-tab-content">

@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from lyra_ocr.lyric.build import build_lrc_from_artifacts, build_lrc_from_video
-from lyra_ocr.lyric.export import format_lrc_timestamp, write_cues_json, write_lrc
+from lyra_ocr.lyric.export import format_lrc_timestamp, write_cues_json, write_lrc, write_lrc_layers
+
 from lyra_ocr.lyric.models import LrcMetadata, LyricCue
 from lyra_ocr.web.base import _safe_resolve
 
@@ -148,6 +149,25 @@ class LrcAPIMixin:
             cues_json_path = Path(result["out_cues_json"])
             cues_data = json.loads(cues_json_path.read_text(encoding="utf-8")) if cues_json_path.is_file() else {}
 
+            raw_layers = cues_data.get("layers") or result.get("layers", [])
+            primary_lang = cues_data.get("primary_lang") or result.get("primary_lang", "")
+            layers_with_text: list[dict[str, Any]] = []
+            for l in raw_layers:
+                l_path = Path(l.get("path", ""))
+                l_text = ""
+                if l_path.is_file():
+                    try:
+                        l_text = l_path.read_text(encoding="utf-8")
+                    except Exception:
+                        l_text = ""
+                layers_with_text.append({
+                    "layer_id": l.get("layer_id"),
+                    "lang": l.get("lang", "und"),
+                    "path": str(l_path),
+                    "n_cues": l.get("n_cues", 0),
+                    "lrc_text": l_text,
+                })
+
             self._send_json({
                 "ok": True,
                 "video_id": result.get("video_id", ""),
@@ -164,9 +184,12 @@ class LrcAPIMixin:
                 "n_reference_matches": result.get("n_reference_matches", 0),
                 "n_reference_gap_fills": result.get("n_reference_gap_fills", 0),
                 "reference_warnings": result.get("reference_warnings", []),
+                "layers": layers_with_text,
+                "primary_lang": primary_lang,
                 "cached": bool(result.get("cached", False)),
                 "skipped": result.get("skipped", []),
             })
+
         except Exception as exc:
             logger.exception("Error generating LRC")
             self._send_error(f"LRC generation failed: {exc}", 500)
@@ -182,24 +205,65 @@ class LrcAPIMixin:
             text = target.read_text(encoding="utf-8")
             cues_json = target.with_suffix(".cues.json")
             cues_data = json.loads(cues_json.read_text(encoding="utf-8")) if cues_json.is_file() else {}
+            raw_layers = cues_data.get("layers", [])
+            primary_lang = cues_data.get("primary_lang", "")
+            layers_with_text = []
+            for l in raw_layers:
+                l_path = Path(l.get("path", ""))
+                l_text = ""
+                if l_path.is_file():
+                    try:
+                        l_text = l_path.read_text(encoding="utf-8")
+                    except Exception:
+                        l_text = ""
+                layers_with_text.append({
+                    "layer_id": l.get("layer_id"),
+                    "lang": l.get("lang", "und"),
+                    "path": str(l_path),
+                    "n_cues": l.get("n_cues", 0),
+                    "lrc_text": l_text,
+                })
             self._send_json({
                 "path": str(target),
                 "lrc_text": text,
                 "cues": cues_data.get("cues", []),
                 "metadata": cues_data.get("metadata", {}),
                 "video_path": cues_data.get("video_path", ""),
+                "layers": layers_with_text,
+                "primary_lang": primary_lang,
             })
         elif target.name.endswith(".cues.json"):
             cues_data = json.loads(target.read_text(encoding="utf-8"))
             lrc_file = target.with_suffix("").with_suffix(".lrc")
             lrc_text = lrc_file.read_text(encoding="utf-8") if lrc_file.is_file() else ""
+            raw_layers = cues_data.get("layers", [])
+            primary_lang = cues_data.get("primary_lang", "")
+            layers_with_text = []
+            for l in raw_layers:
+                l_path = Path(l.get("path", ""))
+                l_text = ""
+                if l_path.is_file():
+                    try:
+                        l_text = l_path.read_text(encoding="utf-8")
+                    except Exception:
+                        l_text = ""
+                layers_with_text.append({
+                    "layer_id": l.get("layer_id"),
+                    "lang": l.get("lang", "und"),
+                    "path": str(l_path),
+                    "n_cues": l.get("n_cues", 0),
+                    "lrc_text": l_text,
+                })
             self._send_json({
                 "path": str(target),
                 "lrc_text": lrc_text,
                 "cues": cues_data.get("cues", []),
                 "metadata": cues_data.get("metadata", {}),
                 "video_path": cues_data.get("video_path", ""),
+                "layers": layers_with_text,
+                "primary_lang": primary_lang,
             })
+
         else:
             self._send_error("Expected .lrc or .cues.json file", 400)
 
@@ -305,6 +369,8 @@ class LrcAPIMixin:
                             review_required=bool(c.get("review_required", False)),
                             source_track_ids=list(c.get("source_track_ids") or []),
                             source_segment_ids=list(c.get("source_segment_ids") or []),
+                            layer_id=c.get("layer_id"),
+                            lang=str(c.get("lang", "und")),
                         )
                     )
                 meta_dict = payload.get("metadata") or {}
@@ -315,7 +381,9 @@ class LrcAPIMixin:
                     by=str(meta_dict.get("by", "Lyra OCR")),
                     offset_ms=int(meta_dict.get("offset_ms", 0)),
                 )
-                write_lrc(out_lrc, cues, meta)
+                export_res = write_lrc_layers(out_lrc, cues, meta)
+                layers_meta = export_res.get("layers", [])
+                primary_lang = export_res.get("primary", {}).get("lang", "")
                 cues_json_path = out_lrc.with_suffix(".cues.json")
                 write_cues_json(
                     cues_json_path,
@@ -327,7 +395,10 @@ class LrcAPIMixin:
                     tracker=str(payload.get("tracker", "")),
                     skipped=[s for s in (payload.get("skipped") or []) if isinstance(s, dict)],
                     options=dict(payload.get("options") or {}),
+                    layers=layers_meta,
+                    primary_lang=primary_lang,
                 )
+
 
             self._send_json({"ok": True, "saved_to": str(out_lrc)})
         except Exception as exc:
