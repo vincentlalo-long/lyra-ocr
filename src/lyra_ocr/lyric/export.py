@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from lyra_ocr.lang import vote_layer_lang
 from lyra_ocr.lyric.models import LyricCue, LrcMetadata
+
 
 
 def format_lrc_timestamp(ms: int) -> str:
@@ -67,6 +70,127 @@ def write_lrc(
     out.write_text(content, encoding="utf-8")
 
 
+def _layer_priority_key(lang: str, n_cues: int) -> tuple[int, int, str]:
+    """Sort key for choosing primary layer. Lower tuple is higher priority:
+    1. 'ja-Latn' (priority 0)
+    2. Non-English original language with the most cues (priority 1, -n_cues)
+    3. 'en' (priority 2, -n_cues)
+    4. Other / 'und' (priority 3, -n_cues)
+    """
+    if lang == "ja-Latn":
+        return (0, -n_cues, lang)
+    if lang not in ("en", "und"):
+        return (1, -n_cues, lang)
+    if lang == "en":
+        return (2, -n_cues, lang)
+    return (3, -n_cues, lang)
+
+
+def write_lrc_layers(
+    out_path: str | Path,
+    cues: list[LyricCue],
+    metadata: LrcMetadata,
+) -> dict[str, Any]:
+    """Write name.lrc (primary) + name.<lang>.lrc per lyric layer.
+
+    Returns:
+    {
+        "primary": {"lang": ..., "path": ...},
+        "layers": [{"layer_id": ..., "lang": ..., "path": ..., "n_cues": ...}]
+    }
+    """
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+
+    if not cues:
+        write_lrc(out, [], metadata)
+        return {
+            "primary": {"lang": "und", "path": str(out)},
+            "layers": [
+                {
+                    "layer_id": 0,
+                    "lang": "und",
+                    "path": str(out),
+                    "n_cues": 0,
+                }
+            ],
+        }
+
+    # Group cues by layer_id
+    by_layer: dict[Any, list[LyricCue]] = defaultdict(list)
+    for c in cues:
+        by_layer[c.layer_id].append(c)
+
+    # If only 1 layer, write single name.lrc without .<lang>.lrc
+    if len(by_layer) <= 1:
+        single_layer_id = next(iter(by_layer))
+        single_cues = by_layer[single_layer_id]
+        single_lang = vote_layer_lang([c.lang for c in single_cues if c.lang]) or "und"
+        write_lrc(out, single_cues, metadata)
+        return {
+            "primary": {"lang": single_lang, "path": str(out)},
+            "layers": [
+                {
+                    "layer_id": single_layer_id if single_layer_id is not None else 0,
+                    "lang": single_lang,
+                    "path": str(out),
+                    "n_cues": len(single_cues),
+                }
+            ],
+        }
+
+    # Multi-layer:
+    # 1. Determine lang and layer info for each layer
+    layer_items: list[dict[str, Any]] = []
+    sorted_layer_ids = sorted(
+        by_layer.keys(),
+        key=lambda lid: (0, lid) if isinstance(lid, int) else (1, str(lid)),
+    )
+
+    seen_langs: dict[str, int] = defaultdict(int)
+    for lid in sorted_layer_ids:
+        lcues = by_layer[lid]
+        llang = vote_layer_lang([c.lang for c in lcues if c.lang]) or "und"
+        seen_langs[llang] += 1
+        count = seen_langs[llang]
+        suffix = f".{llang}.lrc" if count == 1 else f".{llang}-{count}.lrc"
+        layer_file = out.parent / f"{out.stem}{suffix}"
+
+        # Write layer LRC
+        write_lrc(layer_file, lcues, metadata)
+
+        layer_items.append({
+            "layer_id": lid,
+            "lang": llang,
+            "path": str(layer_file),
+            "n_cues": len(lcues),
+            "cues": lcues,
+        })
+
+    # 2. Select primary layer according to priority
+    sorted_by_priority = sorted(
+        layer_items,
+        key=lambda it: _layer_priority_key(it["lang"], it["n_cues"]),
+    )
+    primary_layer = sorted_by_priority[0]
+
+    # 3. Write primary name.lrc
+    write_lrc(out, primary_layer["cues"], metadata)
+
+    return {
+        "primary": {"lang": primary_layer["lang"], "path": str(out)},
+        "layers": [
+            {
+                "layer_id": it["layer_id"],
+                "lang": it["lang"],
+                "path": it["path"],
+                "n_cues": it["n_cues"],
+            }
+            for it in layer_items
+        ],
+    }
+
+
 def write_cues_json(
     out_path: str | Path,
     cues: list[LyricCue],
@@ -83,6 +207,8 @@ def write_cues_json(
     n_reference_matches: int = 0,
     n_reference_gap_fills: int = 0,
     reference_warnings: list[str] | None = None,
+    layers: list[dict[str, Any]] | None = None,
+    primary_lang: str = "",
 ) -> None:
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -98,6 +224,8 @@ def write_cues_json(
         "n_reference_matches": n_reference_matches,
         "n_reference_gap_fills": n_reference_gap_fills,
         "reference_warnings": reference_warnings or [],
+        "primary_lang": primary_lang,
+        "layers": layers or [],
         "metadata": {
             "title": metadata.title,
             "artist": metadata.artist,
@@ -113,3 +241,4 @@ def write_cues_json(
     }
 
     out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+

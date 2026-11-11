@@ -8,8 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from lyra_ocr.lang import vote_layer_lang
-from lyra_ocr.lyric.export import write_cues_json, write_lrc
+from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
 from lyra_ocr.lyric.grouping import dedupe_and_group
+
 from lyra_ocr.lyric.models import CorrectionConfig, LrcMetadata, ReferenceConfig
 from lyra_ocr.lyric.reference import (
     ReferenceBundle,
@@ -149,6 +150,8 @@ def build_lrc_from_artifacts(
                     "n_reference_gap_fills": cached_cues.get("n_reference_gap_fills", 0),
                     "reference_source": cached_cues.get("reference_source", ""),
                     "reference_warnings": cached_cues.get("reference_warnings", []),
+                    "layers": cached_cues.get("layers", []),
+                    "primary_lang": cached_cues.get("primary_lang", ""),
                     "cached": True,
                 }
         except Exception:
@@ -341,7 +344,9 @@ def build_lrc_from_artifacts(
     if not n_reference_matches and not n_reference_gap_fills:
         reference_source = ""
 
-    write_lrc(out_path, cues, metadata)
+    export_res = write_lrc_layers(out_path, cues, metadata)
+    layers_meta = export_res.get("layers", [])
+    primary_lang = export_res.get("primary", {}).get("lang", "")
 
     ref_warnings = list(reference_warnings)
     if ref_bundle is not None:
@@ -362,6 +367,8 @@ def build_lrc_from_artifacts(
         n_reference_matches=n_reference_matches,
         n_reference_gap_fills=n_reference_gap_fills,
         reference_warnings=ref_warnings,
+        layers=layers_meta,
+        primary_lang=primary_lang,
     )
 
     return {
@@ -377,6 +384,8 @@ def build_lrc_from_artifacts(
         "n_reference_matches": n_reference_matches,
         "n_reference_gap_fills": n_reference_gap_fills,
         "reference_warnings": ref_warnings,
+        "layers": layers_meta,
+        "primary_lang": primary_lang,
         "cached": False,
     }
 

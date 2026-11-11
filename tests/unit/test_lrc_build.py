@@ -736,7 +736,14 @@ def test_build_lrc_per_layer_reference_alignment_protects_romaji(tmp_path: Path)
     cues_json = json.loads((tmp_path / "multi.cues.json").read_text(encoding="utf-8"))
     cues = cues_json["cues"]
 
+    # Layer files generated
+    assert (tmp_path / "multi.ja-Latn.lrc").exists()
+    assert (tmp_path / "multi.ja.lrc").exists()
+    assert res["primary_lang"] == "ja-Latn"
+    assert len(res["layers"]) == 2
+
     # Layer 0 (ja-Latn) must NEVER be replaced by Kanji reference
+
     romaji_cues = [c for c in cues if c.get("layer_id") == 0 or c.get("lang") == "ja-Latn"]
     assert len(romaji_cues) == 1
     assert romaji_cues[0]["text"] == "senbonzakura yoru ni magire"
