@@ -121,7 +121,19 @@ def write_lrc_layers(
     for c in cues:
         by_layer[c.layer_id].append(c)
 
+    # Filter out trivial/ghost layers (e.g. single isolated noise cues) when major lyric layers exist
+    max_cues_in_layer = max(len(c) for c in by_layer.values()) if by_layer else 0
+    if max_cues_in_layer >= 8:
+        significant_layers = {
+            lid: lcues
+            for lid, lcues in by_layer.items()
+            if len(lcues) >= 4 or len(lcues) >= 0.10 * max_cues_in_layer
+        }
+        if significant_layers:
+            by_layer = significant_layers
+
     # If only 1 layer, write single name.lrc without .<lang>.lrc
+
     if len(by_layer) <= 1:
         single_layer_id = next(iter(by_layer))
         single_cues = by_layer[single_layer_id]
