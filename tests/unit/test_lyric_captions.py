@@ -159,3 +159,62 @@ def test_parse_caption_json3_merges_rolling_substitutions():
     assert len(lines) == 1
     assert lines[0].text == "You've been running round"
     assert lines[0].start_ms == 5000
+
+
+def test_fetch_youtube_caption_bundle_rejects_foreign_spam_by_ocr_overlap(monkeypatch):
+    # Mock yt-dlp returning Polish subtitle data
+    class FakeYoutubeDL:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def extract_info(self, url, download=False):
+            return {
+                "id": "test_id",
+                "title": "Nightcore - Castle",
+                "subtitles": {
+                    "pl": [{"url": "https://fake.url/pl.json3", "ext": "json3"}]
+                },
+                "automatic_captions": {},
+            }
+
+    import yt_dlp
+    monkeypatch.setattr(yt_dlp, "YoutubeDL", FakeYoutubeDL)
+
+    # Mock urllib urlopen returning Polish text
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            data = {
+                "events": [
+                    {"tStartMs": 1000, "dDurationMs": 2000, "segs": [{"utf8": "cześć"}]},
+                    {"tStartMs": 5000, "dDurationMs": 2000, "segs": [{"utf8": "www.pro-chem.pl"}]},
+                ]
+            }
+            return json.dumps(data).encode("utf-8")
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=6.0: FakeResponse())
+
+    ocr_lines = [
+        "Won't you take me home",
+        "Give me wings to fly",
+        "Castle in the sky",
+        "Higher than the sun",
+        "Where the eagles cry",
+    ]
+    bundle = fetch_youtube_caption_bundle("test_id", ocr_lines=ocr_lines)
+    assert bundle is not None
+    assert not bundle.lines
+    assert "caption_low_ocr_overlap" in bundle.warnings
+

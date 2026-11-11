@@ -34,8 +34,111 @@ def test_parse_lyrics_text_strips_timestamps_and_metadata():
     assert parse_lyrics_text(text) == ["Hello world", "Second line"]
 
 
-def test_parse_plain_text_reference():
-    assert parse_lyrics_text("Just a line\nAnother one") == ["Just a line", "Another one"]
+def test_parse_reference_query_castle_cleaning():
+    q = parse_reference_query("Nightcore - Castle - (Lyrics)")
+    assert q.track == "Castle"
+    assert q.artist in ("Nightcore", "")
+
+    q2 = parse_reference_query(
+        "1080P Full Senbonzakura (One Thousand Cherry Trees) - Hatsune Miku DIVA English Romaji",
+        channel="Hatsune Miku",
+    )
+    assert "Senbonzakura" in q2.track
+    assert q2.artist == "Hatsune Miku"
+
+
+def test_fetch_reference_bundle_multi_query_and_ocr_overlap(monkeypatch):
+    queries_made = []
+
+    class FakeUrlopen:
+        def __init__(self, req, timeout=6.0):
+            url = req.full_url if hasattr(req, "full_url") else str(req)
+            queries_made.append(url)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            # Candidate 1: same title but wrong song
+            # Candidate 2: right song matching OCR
+            items = [
+                {
+                    "id": 101,
+                    "trackName": "Castle",
+                    "artistName": "Wrong Artist",
+                    "duration": 180.0,
+                    "syncedLyrics": "[00:01.00]Completely unrelated line\n[00:05.00]No matching lyrics",
+                },
+                {
+                    "id": 102,
+                    "trackName": "Castle",
+                    "artistName": "Clarx & Harddope",
+                    "duration": 180.0,
+                    "syncedLyrics": "[00:01.00]Won't you take me home\n[00:05.00]Give me wings to fly\n[00:09.00]Castle in the sky",
+                },
+            ]
+            return json.dumps(items).encode("utf-8")
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", FakeUrlopen)
+
+    ocr_lines = [
+        "Won't you take me home",
+        "Give me wings to fly",
+        "Castle in the sky",
+        "Higher than the sun",
+        "Where the eagles cry",
+    ]
+    query = ReferenceQuery(track="Castle", artist="Nightcore", duration_ms=180000)
+    bundle = fetch_reference_bundle(query, ocr_lines=ocr_lines)
+
+    assert bundle.lines
+    # Must have selected candidate 102
+    assert any("Give me wings to fly" in l.text for l in bundle.lines)
+
+
+def test_fetch_reference_bundle_rejects_wrong_song_by_ocr_overlap(monkeypatch):
+    class FakeUrlopen:
+        def __init__(self, req, timeout=6.0):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self):
+            items = [
+                {
+                    "id": 201,
+                    "trackName": "Castle",
+                    "artistName": "Wrong Artist",
+                    "duration": 180.0,
+                    "syncedLyrics": "[00:01.00]Nothing matches here\n[00:05.00]Totally different text",
+                }
+            ]
+            return json.dumps(items).encode("utf-8")
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", FakeUrlopen)
+
+    ocr_lines = [
+        "Won't you take me home",
+        "Give me wings to fly",
+        "Castle in the sky",
+        "Higher than the sun",
+        "Where the eagles cry",
+    ]
+    query = ReferenceQuery(track="Castle", artist="Nightcore", duration_ms=180000)
+    bundle = fetch_reference_bundle(query, ocr_lines=ocr_lines)
+
+    assert not bundle.lines
+    assert "reference_low_ocr_overlap" in bundle.warnings
+
 
 
 def test_align_reference_repairs_text_and_keeps_ocr_timing():

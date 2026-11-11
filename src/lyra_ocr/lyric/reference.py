@@ -51,7 +51,9 @@ _NOISE_PATTERNS = [
     re.compile(r"\bmv\b", re.IGNORECASE),
     re.compile(r"\b(?:full\s+)?audio\b", re.IGNORECASE),
     re.compile(r"\b(?:op|ed)\s*\d*\s*full\b", re.IGNORECASE),
-    re.compile(r"\b\d+k\b|\bhd\b", re.IGNORECASE),
+    re.compile(r"\b(?:nightcore|daycore|sped\s+up|slowed(?:\s*\+\s*reverb)?)\b", re.IGNORECASE),
+    re.compile(r"\b(?:english\s+romaji|romaji|english\s+sub(?:title)?s?)\b", re.IGNORECASE),
+    re.compile(r"\b(?:1080p|720p|4k|hd|diva|full)\b", re.IGNORECASE),
 ]
 _FEAT_RE = re.compile(r"\s*[\(\[]?\b(?:feat|ft|prod)\.?\s+[^\)\]]+[\)\]]?", re.IGNORECASE)
 _HYPHEN_SPLIT_RE = re.compile(r"\s+[-–—]\s+")
@@ -227,9 +229,10 @@ def parse_reference_query(
             return content
 
         cleaned_title = _BRACKET_CONTENT_RE.sub(_clean_bracket, cleaned_title).strip()
+        cleaned_title = re.sub(r"^\s*[-–—/|]+\s*|\s*[-–—/|]+\s*$", "", cleaned_title).strip()
         cleaned_title = re.sub(r"\s+", " ", cleaned_title).strip()
 
-        parts = _HYPHEN_SPLIT_RE.split(cleaned_title)
+        parts = [p.strip() for p in _HYPHEN_SPLIT_RE.split(cleaned_title) if p.strip()]
         if len(parts) == 2:
             p0, p1 = parts[0].strip(), parts[1].strip()
             c_lower = clean_chan.lower()
@@ -242,7 +245,7 @@ def parse_reference_query(
         elif len(parts) == 1:
             track = parts[0].strip()
             artist = clean_chan
-        else:
+        elif len(parts) > 2:
             track = parts[-1].strip()
             artist = " - ".join(parts[:-1]).strip()
 
@@ -251,7 +254,12 @@ def parse_reference_query(
         for pattern in _NOISE_PATTERNS:
             track = pattern.sub("", track).strip()
         track = re.sub(r"[『「【\[\(].*?[』」】\]\)]", "", track).strip()
+        track = re.sub(r"^\s*[-–—/|]+\s*|\s*[-–—/|]+\s*$", "", track).strip()
         track = re.sub(r"\s+", " ", track).strip()
+
+    if artist:
+        artist = re.sub(r"^\s*[-–—/|]+\s*|\s*[-–—/|]+\s*$", "", artist).strip()
+        artist = re.sub(r"\s+", " ", artist).strip()
 
     if not artist and clean_chan:
         artist = clean_chan
@@ -838,6 +846,7 @@ def fetch_reference_bundle(
     timeout: float = DEFAULT_TIMEOUT,
     cache_dir: Path | str | None = None,
     force: bool = False,
+    ocr_lines: list[str] | None = None,
 ) -> ReferenceBundle:
     """Fetch reference lyrics bundle from LRCLIB. Never raises on failure."""
     if not (query.track or "").strip():
@@ -851,29 +860,54 @@ def fetch_reference_bundle(
             if cached is not None:
                 return cached
 
-    params: dict[str, str] = {"track_name": query.track.strip()}
+    # Multi-query strategy: try specific track+artist first, then track-only, then full-text q=
+    search_strategies: list[dict[str, str]] = []
     if query.artist.strip():
-        params["artist_name"] = query.artist.strip()
-    url = f"{LRCLIB_API}/search?{urllib.parse.urlencode(params)}"
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "LyraOCR/1.0 (local lyric alignment)"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("LRCLIB lookup failed for %r/%r: %s", query.track, query.artist, exc)
-        return ReferenceBundle(warnings=[f"LRCLIB lookup failed: {exc}"])
+        search_strategies.append({"track_name": query.track.strip(), "artist_name": query.artist.strip()})
+    search_strategies.append({"track_name": query.track.strip()})
+    if query.artist.strip():
+        search_strategies.append({"q": f"{query.track.strip()} {query.artist.strip()}"})
+    search_strategies.append({"q": query.track.strip()})
 
-    if isinstance(data, dict):
-        data = [data]
-    if not isinstance(data, list) or not data:
-        return ReferenceBundle()
+    all_items: list[dict[str, Any]] = []
+    seen_ids: set[Any] = set()
+
+    for params in search_strategies:
+        url = f"{LRCLIB_API}/search?{urllib.parse.urlencode(params)}"
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "LyraOCR/1.0 (local lyric alignment)"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw_bytes = response.read()
+                data = json.loads(raw_bytes.decode("utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("LRCLIB lookup failed for %s: %s", params, exc)
+            continue
+
+        if isinstance(data, dict):
+            data = [data]
+        if isinstance(data, list):
+            for item in data:
+                if isinstance(item, dict):
+                    iid = item.get("id")
+                    if iid is not None:
+                        if iid in seen_ids:
+                            continue
+                        seen_ids.add(iid)
+                    all_items.append(item)
+        if all_items:
+            break
+
+    if not all_items:
+        return ReferenceBundle(warnings=["no_lrclib_results"])
 
     best_item = None
     best_score = float("-inf")
-    for item in data:
+    best_overlap = 0.0
+
+    for item in all_items:
         if not isinstance(item, dict):
             continue
         synced = str(item.get("syncedLyrics") or "").strip()
@@ -883,9 +917,7 @@ def fetch_reference_bundle(
 
         track_sim = line_similarity(query.track, str(item.get("trackName") or ""))
         artist_sim = line_similarity(query.artist, str(item.get("artistName") or ""))
-        if track_sim < 0.40:
-            continue
-        if query.artist and artist_sim < 0.30 and track_sim < 0.85:
+        if track_sim < 0.25 and "q" not in search_strategies[0]:
             continue
 
         diff: float | None = None
@@ -894,7 +926,7 @@ def fetch_reference_bundle(
                 diff = abs(float(item.get("duration") or 0.0) - query.duration_ms / 1000.0)
             except (TypeError, ValueError):
                 diff = None
-        if diff is not None and diff > 45.0 and not (track_sim >= 0.90 and artist_sim >= 0.75):
+        if diff is not None and diff > 60.0 and not (track_sim >= 0.85 and artist_sim >= 0.70):
             continue
 
         score = 2.0 * track_sim + 1.5 * artist_sim
@@ -909,12 +941,31 @@ def fetch_reference_bundle(
         if synced:
             score += 0.5  # Prefer synced over plain
 
+        # Lexical OCR overlap calculation
+        cand_overlap = 0.0
+        if ocr_lines:
+            cand_raw = synced if synced else plain
+            cand_parsed = parse_reference_text(cand_raw)
+            cand_texts = [l.text for l in cand_parsed]
+            if cand_texts:
+                matches = sum(
+                    1 for ol in ocr_lines
+                    if any(line_similarity(ol, ct) >= 0.70 for ct in cand_texts)
+                )
+                cand_overlap = matches / max(1, len(ocr_lines))
+                score += 4.0 * cand_overlap
+
         if score > best_score:
             best_score = score
             best_item = item
+            best_overlap = cand_overlap
 
     if not best_item:
         return ReferenceBundle(warnings=["no_suitable_lrclib_match"])
+
+    # Overlap gate: if we have >= 5 OCR lines, candidate lyrics must share at least 15% vocabulary
+    if ocr_lines and len(ocr_lines) >= 5 and best_overlap < 0.15:
+        return ReferenceBundle(warnings=["reference_low_ocr_overlap"])
 
     synced_lyrics = str(best_item.get("syncedLyrics") or "").strip()
     plain_lyrics = str(best_item.get("plainLyrics") or "").strip()

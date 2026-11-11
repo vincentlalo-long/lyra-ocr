@@ -14,7 +14,7 @@ import urllib.request
 from difflib import SequenceMatcher
 from typing import Any
 
-from lyra_ocr.lyric.reference import ReferenceBundle, ReferenceLine
+from lyra_ocr.lyric.reference import ReferenceBundle, ReferenceLine, line_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +210,7 @@ def fetch_youtube_caption_bundle(
     video_url_or_id: str,
     *,
     timeout: float = DEFAULT_CAPTION_TIMEOUT,
+    ocr_lines: list[str] | None = None,
 ) -> ReferenceBundle | None:
     """Extract and parse official or automatic YouTube captions."""
     if not (video_url_or_id or "").strip():
@@ -319,6 +320,19 @@ def fetch_youtube_caption_bundle(
 
     if not lines:
         return None
+
+    if ocr_lines and len(ocr_lines) >= 5:
+        matches = sum(
+            1 for ol in ocr_lines
+            if any(line_similarity(ol, cl.text) >= 0.60 for cl in lines)
+        )
+        overlap = matches / max(1, len(ocr_lines))
+        if overlap < 0.20:
+            return ReferenceBundle(
+                provider="youtube",
+                language=chosen_lang,
+                warnings=["caption_low_ocr_overlap"],
+            )
 
     return ReferenceBundle(
         lines=lines,
