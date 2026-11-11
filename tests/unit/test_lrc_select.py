@@ -480,4 +480,72 @@ def test_select_cues_reference_rescue_respects_human_and_card_rejects():
     assert cues_disabled == []
 
 
+def test_select_cues_carries_layer_id_and_lang():
+    track = {
+        "track_id": 42,
+        "start_ms": 1000,
+        "end_ms": 3000,
+        "label": "lyric",
+        "decision": "accept",
+        "bbox": [100, 200, 300, 240],
+        "features": {
+            "dominant_text": "nageku uta mo kikoe nai yo",
+            "layer_id": 3,
+            "lang": "ja-Latn",
+        },
+        "segments": [
+            {
+                "segment_id": 0,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "text": "nageku uta mo kikoe nai yo",
+            }
+        ],
+    }
+    cues, skipped = select_cues([track], human_labels={})
+    assert len(cues) == 1
+    assert cues[0].layer_id == 3
+    assert cues[0].lang == "ja-Latn"
+    assert cues[0].to_dict()["layer_id"] == 3
+    assert cues[0].to_dict()["lang"] == "ja-Latn"
+
+
+def test_select_cues_rescues_1frame_track():
+    # 1-frame track at 1.0 FPS: start_ms == 5000, end_ms == 5000
+    track = {
+        "track_id": 77,
+        "start_ms": 5000,
+        "end_ms": 5000,
+        "label": "non_lyric",
+        "decision": "review",
+        "bbox": [100, 200, 300, 240],
+        "features": {
+            "dominant_text": "Castle in the sky",
+        },
+        "segments": [
+            {
+                "segment_id": 0,
+                "start_ms": 5000,
+                "end_ms": 5000,
+                "text": "Castle in the sky",
+            }
+        ],
+    }
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    ref_lines = ["Castle in the sky"]
+    cues, skipped = select_cues(
+        [track],
+        human_labels={},
+        reference_lines=ref_lines,
+        reference_source="lrclib_synced",
+        reference_config=ReferenceConfig(rescue_non_lyric=True),
+        sample_interval_ms=1000,
+    )
+    assert len(cues) == 1
+    assert cues[0].text == "Castle in the sky"
+    assert "reference_rescue" in cues[0].qa_flags
+
+
+
 

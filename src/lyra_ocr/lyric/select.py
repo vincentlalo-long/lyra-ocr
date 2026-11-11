@@ -121,6 +121,7 @@ def select_cues(
     reference_bundle: Any = None,
     reference_source: str = "",
     reference_config: ReferenceConfig | None = None,
+    sample_interval_ms: int = 1000,
 ) -> tuple[list[LyricCue], list[dict[str, Any]]]:
     accepted_cues: list[LyricCue] = []
     skipped_records: list[dict[str, Any]] = []
@@ -147,6 +148,8 @@ def select_cues(
         features = track.get("features") or {}
         if not isinstance(features, dict):
             features = {}
+        layer_id = features.get("layer_id")
+        track_lang = features.get("lang") or features.get("line_lang") or "und"
 
         # Spatial info
         bbox = track.get("bbox", [])
@@ -208,6 +211,7 @@ def select_cues(
             is_ref_rescued = False
             seg_text_raw = seg.get("text", "") or features.get("dominant_text", "")
             seg_dur = (seg.get("end_ms", 0) - seg.get("start_ms", 0)) or (track.get("end_ms", 0) - track.get("start_ms", 0))
+            eff_seg_dur = seg_dur if seg_dur > 0 else sample_interval_ms
             qa_flags = list(track.get("qa_flags") or [])
 
             # Conservative rescue:
@@ -227,7 +231,7 @@ def select_cues(
                 and not has_human_label
                 and ref_cfg.rescue_non_lyric
                 and eff_ref_source in ("manual", "lrclib_synced", "lrclib_plain")
-                and seg_dur >= 1000
+                and eff_seg_dur >= 1000
                 and not any(f in qa_flags for f in blocked_rescue_flags)
                 and (len(seg_text_raw.split()) >= 2 or any("\u4e00" <= ch <= "\u9fff" for ch in seg_text_raw))
                 and eff_ref_lines
@@ -301,7 +305,8 @@ def select_cues(
             # A trusted reference line proves the OCR text is real lyrics even
             # when the garbled spelling trips the quality gate.
             reference_match = best_reference_similarity(final_text, eff_ref_lines)
-            gate_reason = "" if (seg_human_text or reference_match >= 0.55) else _quality_gate(
+            is_non_en = bool(track_lang and track_lang not in ("en", "und"))
+            gate_reason = "" if (seg_human_text or reference_match >= 0.55 or is_non_en) else _quality_gate(
                 seg_conf, quality, n_words, oov, cfg
             )
             if gate_reason and not include_review:
@@ -345,6 +350,8 @@ def select_cues(
                 qa_flags=cue_flags,
                 ocr_confidence=seg_conf,
                 text_quality=round(float(quality), 4),
+                layer_id=layer_id,
+                lang=track_lang,
             )
             accepted_cues.append(cue)
 

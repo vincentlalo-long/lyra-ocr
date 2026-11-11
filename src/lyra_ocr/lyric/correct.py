@@ -305,7 +305,12 @@ def correct_text(
     if not cleaned_final:
         cleaned_final = medoid
 
-    if config.enable_nlp and not _is_cjk(cleaned_final):
+    t_feat = track.get("features") if isinstance(track, dict) else getattr(track, "features", {})
+    if not isinstance(t_feat, dict):
+        t_feat = {}
+    track_lang = t_feat.get("lang") or t_feat.get("line_lang") or "en"
+
+    if config.enable_nlp and track_lang == "en" and not _is_cjk(cleaned_final):
         repaired = repair_text(
             cleaned_final,
             config=RepairConfig(

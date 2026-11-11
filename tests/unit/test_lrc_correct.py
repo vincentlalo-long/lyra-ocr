@@ -239,3 +239,17 @@ def test_consensus_method_does_not_apply_nlp_repair():
     assert info.method == "consensus"
 
 
+def test_correct_text_protects_romaji_from_english_nlp_repair():
+    track = {
+        "features": {
+            "dominant_text": "nageku uta mo kikoe nai yo",
+            "lang": "ja-Latn",
+        },
+        "occurrences": [{"text_norm": "nageku uta mo kikoe nai yo", "confidence": 0.95}],
+    }
+    cfg = CorrectionConfig(method="dictionary", enable_nlp=True)
+    final, raw, info = correct_text(track, [], cfg)
+    assert final == "nageku uta mo kikoe nai yo"
+
+
+

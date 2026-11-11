@@ -30,6 +30,8 @@ class LyricCue:
     qa_flags: list[str] = field(default_factory=list)
     ocr_confidence: float | None = None
     text_quality: float | None = None
+    layer_id: int | None = None
+    lang: str = "und"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
