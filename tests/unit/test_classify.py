@@ -442,3 +442,28 @@ def test_classify_isolated_presents_and_sound_only():
     res_sound = classify_track(track_sound)
     assert res_sound.label == "non_lyric"
 
+
+def test_effective_duration_ms():
+    from lyra_ocr.track import effective_duration_ms
+
+    assert effective_duration_ms(1000, 1000, 1000) == 1000
+    assert effective_duration_ms(1000, 3000, 1000) == 3000
+    assert effective_duration_ms(1000, 1000, 0) == 0
+
+
+def test_classify_one_frame_lyric_with_sample_interval():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=60,
+        start_ms=15000,
+        end_ms=15000,
+        texts=["Castle in the sky"],
+        bbox=[400, 300, 800, 340],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, sample_interval_ms=1000)
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+
+

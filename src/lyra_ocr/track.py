@@ -105,6 +105,16 @@ class TextSegment:
         }
 
 
+def effective_duration_ms(start_ms: int, end_ms: int, sample_interval_ms: int = 0) -> int:
+    """Compute effective duration taking sampling interval into account (fencepost fix).
+
+    When text is sampled at discrete frame intervals, an occurrence in k frames
+    persists across approximately k intervals. For a single frame observation
+    (start_ms == end_ms), effective duration is at least sample_interval_ms.
+    """
+    return max(0, end_ms - start_ms) + max(0, sample_interval_ms)
+
+
 @dataclass
 class TextTrack:
     track_id: int

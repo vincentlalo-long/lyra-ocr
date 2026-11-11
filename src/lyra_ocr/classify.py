@@ -15,7 +15,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from lyra_ocr.track import TextTrack, compute_track_features, string_similarity
+from lyra_ocr.track import (
+    TextTrack,
+    compute_track_features,
+    effective_duration_ms,
+    string_similarity,
+)
 
 
 @dataclass
@@ -87,6 +92,7 @@ def classify_track(
     video_duration_ms: int = 0,
     frame_width: int = 1280,
     frame_height: int = 720,
+    sample_interval_ms: int = 0,
 ) -> ClassificationResult:
     """Classify a single TextTrack into lyric vs non-lyric using rule heuristics."""
     meta = metadata or {}
@@ -103,7 +109,10 @@ def classify_track(
         )
 
     feat = track.features
+    duration_ms = effective_duration_ms(track.start_ms, track.end_ms, sample_interval_ms)
     lifetime_ratio = feat.get("lifetime_ratio", 0.0)
+    if sample_interval_ms > 0 and video_duration_ms > 0:
+        lifetime_ratio = duration_ms / max(1, video_duration_ms)
     start_time_ratio = feat.get("start_time_ratio", 0.0)
     n_text_changes = feat.get("n_text_changes", 0)
     spatial_variance = feat.get("spatial_variance", 0.0)
@@ -127,7 +136,6 @@ def classify_track(
     else:
         mean_cx, mean_cy = 0.5, 0.5
     distinct_changes = feat.get("distinct_text_changes", n_text_changes)
-    duration_ms = track.end_ms - track.start_ms
     word_count = len(dominant_text.split())
     # Spatial prior: active reading zone (center or lower-third), not in extreme corners
     in_reading_zone = (
@@ -492,6 +500,7 @@ def classify_all_tracks(
     video_duration_ms: int = 0,
     frame_width: int = 1280,
     frame_height: int = 720,
+    sample_interval_ms: int = 0,
 ) -> list[ClassificationResult]:
     """Run rule-based classification across all tracks in a pipeline."""
     results = []
@@ -502,6 +511,7 @@ def classify_all_tracks(
             video_duration_ms=video_duration_ms,
             frame_width=frame_width,
             frame_height=frame_height,
+            sample_interval_ms=sample_interval_ms,
         )
         results.append(res)
     return results
