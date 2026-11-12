@@ -20,6 +20,10 @@ def format_lrc_timestamp(ms: int) -> str:
     return f"[{minutes:02d}:{seconds:02d}.{centi:02d}]"
 
 
+def format_enhanced_tag(ms: int) -> str:
+    return format_lrc_timestamp(ms).replace("[", "<").replace("]", ">")
+
+
 def _sanitize_tag_value(val: str) -> str:
     return val.replace("[", " ").replace("]", " ")
 
@@ -28,6 +32,8 @@ def write_lrc(
     out_path: str | Path,
     cues: list[LyricCue],
     metadata: LrcMetadata,
+    *,
+    enhanced: bool = False,
 ) -> None:
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -65,7 +71,18 @@ def write_lrc(
             continue
         seen.add(key)
 
-        cue_lines.append(f"{format_lrc_timestamp(current_start_ms)}{cleaned_text}")
+        if enhanced and cue.words:
+            tagged_words = []
+            for w in cue.words:
+                w_tag = format_enhanced_tag(w.get("start_ms", current_start_ms))
+                w_text = str(w.get("word", "")).strip()
+                if w_text:
+                    tagged_words.append(f"{w_tag}{w_text}")
+            line_content = " ".join(tagged_words) if tagged_words else cleaned_text
+        else:
+            line_content = cleaned_text
+
+        cue_lines.append(f"{format_lrc_timestamp(current_start_ms)}{line_content}")
 
     content = "\n".join(header_lines + cue_lines) + "\n"
     out.write_text(content, encoding="utf-8")
@@ -91,6 +108,8 @@ def write_lrc_layers(
     out_path: str | Path,
     cues: list[LyricCue],
     metadata: LrcMetadata,
+    *,
+    enhanced: bool = False,
 ) -> dict[str, Any]:
     """Write name.lrc (primary) + name.<lang>.lrc per lyric layer.
 
@@ -104,7 +123,7 @@ def write_lrc_layers(
     out.parent.mkdir(parents=True, exist_ok=True)
 
     if not cues:
-        write_lrc(out, [], metadata)
+        write_lrc(out, [], metadata, enhanced=enhanced)
         return {
             "primary": {"lang": "und", "path": str(out)},
             "layers": [
@@ -140,7 +159,7 @@ def write_lrc_layers(
         single_layer_id = next(iter(by_layer)) if by_layer else 0
         single_cues = by_layer[single_layer_id] if by_layer else []
         single_lang = vote_layer_lang([c.lang for c in single_cues if c.lang]) or "und"
-        write_lrc(out, single_cues, metadata)
+        write_lrc(out, single_cues, metadata, enhanced=enhanced)
         return {
             "primary": {"lang": single_lang, "path": str(out)},
             "layers": [
@@ -167,7 +186,7 @@ def write_lrc_layers(
     for llang, lcues in by_lang_cues.items():
         lcues.sort(key=lambda c: (c.start_ms, c.end_ms))
         layer_file = out.parent / f"{out.stem}.{llang}.lrc"
-        write_lrc(layer_file, lcues, metadata)
+        write_lrc(layer_file, lcues, metadata, enhanced=enhanced)
         layer_items.append({
             "layer_id": lang_to_layer_id[llang],
             "lang": llang,
@@ -184,7 +203,7 @@ def write_lrc_layers(
     primary_layer = sorted_by_priority[0]
 
     # 3. Write primary name.lrc
-    write_lrc(out, primary_layer["cues"], metadata)
+    write_lrc(out, primary_layer["cues"], metadata, enhanced=enhanced)
 
     return {
         "primary": {"lang": primary_layer["lang"], "path": str(out)},

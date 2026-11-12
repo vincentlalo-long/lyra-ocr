@@ -260,3 +260,25 @@ def test_write_cues_json_with_layers_metadata(tmp_path: Path):
     assert len(data["layers"]) == 1
     assert data["layers"][0]["lang"] == "en"
 
+
+def test_write_lrc_enhanced_karaoke_tags(tmp_path: Path):
+    out_file = tmp_path / "enhanced.lrc"
+    metadata = LrcMetadata(title="Song", artist="Artist")
+    cues = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=3000,
+            text="Hello beautiful world",
+            words=[
+                {"word": "Hello", "start_ms": 1000, "end_ms": 1500},
+                {"word": "beautiful", "start_ms": 1500, "end_ms": 2300},
+                {"word": "world", "start_ms": 2300, "end_ms": 3000},
+            ],
+        )
+    ]
+
+    write_lrc(out_file, cues, metadata, enhanced=True)
+    content = out_file.read_text(encoding="utf-8")
+    assert "[00:01.00]<00:01.00>Hello <00:01.50>beautiful <00:02.30>world" in content
+
+
