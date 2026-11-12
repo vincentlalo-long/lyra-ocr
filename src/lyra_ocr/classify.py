@@ -93,6 +93,7 @@ def classify_track(
     frame_width: int = 1280,
     frame_height: int = 720,
     sample_interval_ms: int = 0,
+    vocal_profile: Optional[Any] = None,
 ) -> ClassificationResult:
     """Classify a single TextTrack into lyric vs non-lyric using rule heuristics."""
     meta = metadata or {}
@@ -288,6 +289,21 @@ def classify_track(
         )
         track.classification = res
         return res
+
+    # Vocal Activity Prior: in silent intro/outro sections without lyric layer, reject static overlay
+    if vocal_profile is not None and not in_lyric_layer:
+        from lyra_ocr.audio.vad import vocal_active_ratio
+        vocal_ratio = vocal_active_ratio(vocal_profile, track.start_ms, track.end_ms)
+        if vocal_ratio < 0.05 and (start_time_ratio < 0.20 or start_time_ratio > 0.80):
+            res = ClassificationResult(
+                label="non_lyric",
+                confidence=0.88,
+                reason=f"Silent section overlay (vocal active ratio {vocal_ratio:.2f})",
+                decision="reject",
+                qa_flags=["vad_silent_overlay"],
+            )
+            track.classification = res
+            return res
 
     # Rule 4: Intro Title Card / Song Title
     if v_title:
@@ -543,6 +559,7 @@ def classify_all_tracks(
     frame_width: int = 1280,
     frame_height: int = 720,
     sample_interval_ms: int = 0,
+    vocal_profile: Optional[Any] = None,
 ) -> list[ClassificationResult]:
     """Run rule-based classification across all tracks in a pipeline."""
     # Discover spatial text layers across the video timeline if not already assigned
@@ -566,6 +583,7 @@ def classify_all_tracks(
             frame_width=frame_width,
             frame_height=frame_height,
             sample_interval_ms=sample_interval_ms,
+            vocal_profile=vocal_profile,
         )
         results.append(res)
     return results

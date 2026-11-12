@@ -862,6 +862,7 @@ def fill_reference_gaps(
     duration_ms: int = 0,
     matched_pairs: list[tuple[int, int]] | None = None,
     allow_edge_gap_fill: bool | None = None,
+    vocal_profile: Any = None,
 ) -> tuple[list[LyricCue], GapFillResult]:
     """Insert synchronized reference lines into anchored gaps between cues."""
     from lyra_ocr.lyric.models import ReferenceConfig
@@ -969,6 +970,16 @@ def fill_reference_gaps(
                 f"reference_overlap_skipped at {cand_start}ms: {ref_clean[:60]}"
             )
             continue
+
+        # Vocal Activity Gate: protect silent sections from gap filling
+        if vocal_profile is not None:
+            from lyra_ocr.audio.vad import vocal_active_ratio
+            ratio = vocal_active_ratio(vocal_profile, cand_start, cand_end)
+            if ratio < 0.08:
+                warnings.append(
+                    f"reference_gap_fill_skipped_silent at {cand_start}ms: {ref_clean[:60]}"
+                )
+                continue
 
         confidence = 0.75 if is_caption else 0.90
         qa_flags = ["caption_gap_fill"] if is_caption else []
