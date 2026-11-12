@@ -184,7 +184,7 @@ def test_write_lrc_layers_multi_layer_romaji_priority(tmp_path: Path):
     assert out_file.read_text(encoding="utf-8") == (tmp_path / "song.ja-Latn.lrc").read_text(encoding="utf-8")
 
 
-def test_write_lrc_layers_duplicate_language_suffix(tmp_path: Path):
+def test_write_lrc_layers_strict_one_file_per_language(tmp_path: Path):
     out_file = tmp_path / "song.lrc"
     metadata = LrcMetadata(title="Song", artist="Artist")
     cues = [
@@ -196,19 +196,30 @@ def test_write_lrc_layers_duplicate_language_suffix(tmp_path: Path):
             lang="en",
         ),
         LyricCue(
-            start_ms=1000,
-            end_ms=3000,
+            start_ms=4000,
+            end_ms=6000,
             text="Second English Layer",
             layer_id=1,
             lang="en",
+        ),
+        LyricCue(
+            start_ms=1000,
+            end_ms=3000,
+            text="千本桜 夜ニ紛レ",
+            layer_id=2,
+            lang="ja",
         ),
     ]
     res = write_lrc_layers(out_file, cues, metadata)
 
     assert out_file.exists()
     assert (tmp_path / "song.en.lrc").exists()
-    assert (tmp_path / "song.en-2.lrc").exists()
+    assert (tmp_path / "song.ja.lrc").exists()
+    assert not (tmp_path / "song.en-2.lrc").exists()
     assert len(res["layers"]) == 2
+    en_content = (tmp_path / "song.en.lrc").read_text(encoding="utf-8")
+    assert "First English Layer" in en_content
+    assert "Second English Layer" in en_content
 
 
 def test_write_cues_json_with_layers_metadata(tmp_path: Path):

@@ -9,7 +9,7 @@ from typing import Any
 
 from lyra_ocr.lang import vote_layer_lang
 from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
-from lyra_ocr.lyric.grouping import dedupe_and_group
+from lyra_ocr.lyric.grouping import consolidate_language_layers, dedupe_and_group, merge_duplicate_layers
 
 from lyra_ocr.lyric.models import CorrectionConfig, LrcMetadata, ReferenceConfig
 from lyra_ocr.lyric.reference import (
@@ -35,7 +35,7 @@ from lyra_ocr.lyric.select import load_artifacts, select_cues
 
 logger = logging.getLogger(__name__)
 CAPTION_CACHE_TTL_SECONDS = 3600.0
-BUILD_CACHE_VERSION = 2
+BUILD_CACHE_VERSION = 3
 
 
 def _reference_signature(
@@ -339,6 +339,7 @@ def build_lrc_from_artifacts(
 
         cues = processed_cues
 
+    cues = consolidate_language_layers(cues)
     cues = dedupe_and_group(cues)
 
     if not n_reference_matches and not n_reference_gap_fills:

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from lyra_ocr.lang import vote_layer_lang
+from lyra_ocr.lyric.grouping import consolidate_language_layers
 from lyra_ocr.lyric.models import LyricCue, LrcMetadata
 
 
@@ -116,27 +117,28 @@ def write_lrc_layers(
             ],
         }
 
+    cues = consolidate_language_layers(cues)
+
     # Group cues by layer_id
     by_layer: dict[Any, list[LyricCue]] = defaultdict(list)
     for c in cues:
         by_layer[c.layer_id].append(c)
 
-    # Filter out trivial/ghost layers (e.g. single isolated noise cues) when major lyric layers exist
+    # Filter out trivial/ghost layers when major lyric layers exist
     max_cues_in_layer = max(len(c) for c in by_layer.values()) if by_layer else 0
     if max_cues_in_layer >= 8:
         significant_layers = {
             lid: lcues
             for lid, lcues in by_layer.items()
-            if len(lcues) >= 4 or len(lcues) >= 0.10 * max_cues_in_layer
+            if len(lcues) >= 4 or len(lcues) >= 0.15 * max_cues_in_layer
         }
         if significant_layers:
             by_layer = significant_layers
 
     # If only 1 layer, write single name.lrc without .<lang>.lrc
-
     if len(by_layer) <= 1:
-        single_layer_id = next(iter(by_layer))
-        single_cues = by_layer[single_layer_id]
+        single_layer_id = next(iter(by_layer)) if by_layer else 0
+        single_cues = by_layer[single_layer_id] if by_layer else []
         single_lang = vote_layer_lang([c.lang for c in single_cues if c.lang]) or "und"
         write_lrc(out, single_cues, metadata)
         return {
@@ -151,28 +153,23 @@ def write_lrc_layers(
             ],
         }
 
-    # Multi-layer:
-    # 1. Determine lang and layer info for each layer
-    layer_items: list[dict[str, Any]] = []
-    sorted_layer_ids = sorted(
-        by_layer.keys(),
-        key=lambda lid: (0, lid) if isinstance(lid, int) else (1, str(lid)),
-    )
-
-    seen_langs: dict[str, int] = defaultdict(int)
-    for lid in sorted_layer_ids:
+    # Consolidate by language so each language produces exactly 1 .<lang>.lrc file (no -2, -3 suffixes)
+    by_lang_cues: dict[str, list[LyricCue]] = defaultdict(list)
+    lang_to_layer_id: dict[str, Any] = {}
+    for lid in sorted(by_layer.keys(), key=lambda x: (0, x) if isinstance(x, int) else (1, str(x))):
         lcues = by_layer[lid]
         llang = vote_layer_lang([c.lang for c in lcues if c.lang]) or "und"
-        seen_langs[llang] += 1
-        count = seen_langs[llang]
-        suffix = f".{llang}.lrc" if count == 1 else f".{llang}-{count}.lrc"
-        layer_file = out.parent / f"{out.stem}{suffix}"
+        if llang not in lang_to_layer_id:
+            lang_to_layer_id[llang] = lid
+        by_lang_cues[llang].extend(lcues)
 
-        # Write layer LRC
+    layer_items: list[dict[str, Any]] = []
+    for llang, lcues in by_lang_cues.items():
+        lcues.sort(key=lambda c: (c.start_ms, c.end_ms))
+        layer_file = out.parent / f"{out.stem}.{llang}.lrc"
         write_lrc(layer_file, lcues, metadata)
-
         layer_items.append({
-            "layer_id": lid,
+            "layer_id": lang_to_layer_id[llang],
             "lang": llang,
             "path": str(layer_file),
             "n_cues": len(lcues),

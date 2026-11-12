@@ -1,6 +1,6 @@
 import pytest
 from lyra_ocr.lyric.models import LyricCue
-from lyra_ocr.lyric.grouping import dedupe_and_group, _bbox_iou
+from lyra_ocr.lyric.grouping import dedupe_and_group, merge_duplicate_layers, consolidate_language_layers, _bbox_iou
 
 
 def test_bbox_iou():
@@ -153,6 +153,51 @@ def test_dedupe_does_not_merge_different_layers():
     assert {r.layer_id for r in result} == {0, 1}
 
 
+def test_merge_duplicate_layers_collapses_shifted_band():
+    # The same lyric stream captured twice: one band ~0.07 lower and shifted by
+    # one line, as happens with a two-line lyric display split into tracks.
+    top_texts = ["I was born this way", "Can't stop my fire", "I walk in like thunder", "But then I see you standing there", "Quiet smile, bright eyes"]
+    bottom_texts = ["Can't stop my fire", "I walk in like thunder", "But then I see you standing there", "Quiet smile, bright eyes", "A line only the bottom shows"]
+    top = [
+        LyricCue(start_ms=1000 + i * 3000, end_ms=3800 + i * 3000, text=text, layer_id=9, lang="en", y_center=0.73)
+        for i, text in enumerate(top_texts)
+    ]
+    bottom = [
+        LyricCue(start_ms=1500 + i * 3000, end_ms=4300 + i * 3000, text=text, layer_id=10, lang="en", y_center=0.80)
+        for i, text in enumerate(bottom_texts)
+    ]
+
+    result = merge_duplicate_layers(top + bottom)
+
+    assert {c.layer_id for c in result} == {9}
+    # Repeating lines from the duplicate band are dropped, not duplicated.
+    texts = [c.text for c in result]
+    assert texts.count("Can't stop my fire") == 1
+    assert texts.count("I walk in like thunder") == 1
+    # A line that only the duplicate band had is kept on the surviving layer.
+    assert "A line only the bottom shows" in texts
+
+
+def test_merge_duplicate_layers_keeps_distinct_bands():
+    top = [LyricCue(start_ms=i * 2000, end_ms=i * 2000 + 1500, text=f"LINE {i}", layer_id=1, lang="en", y_center=0.3) for i in range(5)]
+    bottom = [LyricCue(start_ms=i * 2000, end_ms=i * 2000 + 1500, text=f"OTHER {i}", layer_id=2, lang="en", y_center=0.75) for i in range(5)]
+
+    result = merge_duplicate_layers(top + bottom)
+
+    assert {c.layer_id for c in result} == {1, 2}
+    assert len(result) == 10
+
+
+def test_merge_duplicate_layers_allows_y_gap_between_rows():
+    top = [LyricCue(start_ms=i * 2000, end_ms=i * 2000 + 1500, text=f"LINE {i}", layer_id=1, lang="en", y_center=0.72) for i in range(5)]
+    stacked = [LyricCue(start_ms=i * 2000, end_ms=i * 2000 + 1500, text=f"LINE {i}", layer_id=2, lang="en", y_center=0.82) for i in range(5)]
+
+    result = merge_duplicate_layers(top + stacked)
+
+    assert len(result) == 5
+    assert {c.layer_id for c in result} == {1}
+
+
 def test_dedupe_clamps_end_ms_to_next_cue_start_within_same_layer():
     cue1 = LyricCue(
         start_ms=1000,
@@ -179,4 +224,41 @@ def test_dedupe_clamps_end_ms_to_next_cue_start_within_same_layer():
     assert cues_layer0[1].end_ms == 5000
     cues_layer1 = [c for c in result if c.layer_id == 1]
     assert cues_layer1[0].end_ms == 6000
+
+
+def test_consolidate_language_layers_complementary():
+    main = [
+        LyricCue(start_ms=10000, end_ms=14000, text="Main verse line one", layer_id=1, lang="en"),
+        LyricCue(start_ms=20000, end_ms=24000, text="Main verse line two", layer_id=1, lang="en"),
+        LyricCue(start_ms=30000, end_ms=34000, text="Main verse line three", layer_id=1, lang="en"),
+    ]
+    adlib = [
+        LyricCue(start_ms=15000, end_ms=17000, text="(let's go)", layer_id=2, lang="en"),
+        LyricCue(start_ms=25000, end_ms=27000, text="(yeah yeah)", layer_id=2, lang="en"),
+    ]
+    result = consolidate_language_layers(main + adlib)
+    assert len(result) == 5
+    assert {c.layer_id for c in result} == {1}
+    assert [c.text for c in result] == [
+        "Main verse line one",
+        "(let's go)",
+        "Main verse line two",
+        "(yeah yeah)",
+        "Main verse line three",
+    ]
+
+
+def test_consolidate_language_layers_overlapping_noise_filtered():
+    dom = [
+        LyricCue(start_ms=i * 3000, end_ms=i * 3000 + 2500, text=f"Dominant line {i}", layer_id=1, lang="en")
+        for i in range(12)
+    ]
+    noise = [
+        LyricCue(start_ms=1000, end_ms=2500, text="Noise overlay", layer_id=2, lang="en"),
+        LyricCue(start_ms=4000, end_ms=5500, text="Noise overlay", layer_id=2, lang="en"),
+    ]
+    result = consolidate_language_layers(dom + noise)
+    assert len(result) == 12
+    assert {c.layer_id for c in result} == {1}
+
 
