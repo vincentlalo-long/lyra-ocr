@@ -620,3 +620,51 @@ def test_line_match_stats_tokenizes_spaced_and_unspaced_cjk_consistently():
     assert stats.similarity > 0.85
     assert stats.token_coverage > 0.85
     assert 0.9 <= stats.length_ratio <= 1.1
+
+
+def test_line_similarity_phonetic_fallback():
+    from lyra_ocr.lyric.reference import _phonetic_skeleton, line_similarity
+    # Ph vs F, double letters
+    assert _phonetic_skeleton("elephant") == _phonetic_skeleton("elefant")
+    # Minor OCR homophone typo gets a boost
+    sim = line_similarity("phoner call", "foner call")
+    assert sim > 0.85
+
+
+def test_align_reference_one_to_two_lines_consumes_both():
+    # 1 OCR cue combining 2 lyric lines (like Railgun OP)
+    cues = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=4500,
+            text="その鼓動は時を超えて壊れない絆信じた",
+        )
+    ]
+    ref_lines = [
+        ReferenceLine(text="その鼓動は時を超えて", start_ms=1000, end_ms=2500),
+        ReferenceLine(text="壊れない絆信じた", start_ms=2500, end_ms=4500),
+    ]
+    res = align_reference(cues, ref_lines, source="lrclib_synced")
+    assert res.matched_count == 1
+    # Both ref line indices (0 and 1) must be in matched_pairs so gap fill won't duplicate them!
+    matched_refs = {pair[1] for pair in res.matched_pairs}
+    assert matched_refs == {0, 1}
+
+
+def test_align_reference_two_to_one_projects_tokens():
+    # 2 OCR cues splitting 1 long reference line
+    cues = [
+        LyricCue(start_ms=1000, end_ms=2500, text="I was born this way"),
+        LyricCue(start_ms=2600, end_ms=4500, text="can't stop my fire"),
+    ]
+    ref_lines = [
+        ReferenceLine(text="I was born this way, cannot stop my fire.", start_ms=1000, end_ms=4500),
+    ]
+    res = align_reference(cues, ref_lines, source="lrclib_synced")
+    assert res.matched_count == 2
+    assert "I was born this way" in cues[0].text
+    assert "cannot stop my fire" in cues[1].text
+    # Timings must be preserved
+    assert cues[0].start_ms == 1000
+    assert cues[1].start_ms == 2600
+

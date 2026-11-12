@@ -359,11 +359,33 @@ def _squash(text: str) -> str:
 
 
 
+def _phonetic_skeleton(text: str) -> str:
+    """Fast deterministic phonetic skeleton for Latin strings."""
+    s = _squash(text).lower()
+    if not s:
+        return ""
+    s = re.sub(r"ph", "f", s)
+    s = re.sub(r"ck", "k", s)
+    s = re.sub(r"gh", "g", s)
+    s = re.sub(r"kn", "n", s)
+    s = re.sub(r"wr", "r", s)
+    s = re.sub(r"[aeiouy]+", "a", s)
+    s = re.sub(r"(.)\1+", r"\1", s)
+    return s
+
+
 def line_similarity(a: str, b: str) -> float:
     sa, sb = _squash(a), _squash(b)
     if not sa or not sb:
         return 0.0
-    return SequenceMatcher(None, sa, sb).ratio()
+    base_ratio = SequenceMatcher(None, sa, sb).ratio()
+    # If Latin characters present, blend phonetic similarity
+    if re.search(r"[a-z]", sa) and re.search(r"[a-z]", sb):
+        psa, psb = _phonetic_skeleton(sa), _phonetic_skeleton(sb)
+        if psa and psb:
+            p_ratio = SequenceMatcher(None, psa, psb).ratio()
+            return 0.85 * base_ratio + 0.15 * p_ratio
+    return base_ratio
 
 
 @dataclass
@@ -447,6 +469,59 @@ def best_reference_similarity(text: str, reference_lines: list[str] | None) -> f
     return max((line_similarity(text, ref) for ref in reference_lines), default=0.0)
 
 
+def _project_ref_onto_cues(cue_texts: list[str], ref_text: str) -> list[str]:
+    """Partition ref_text onto k consecutive OCR cue_texts."""
+    if len(cue_texts) <= 1:
+        return [ref_text]
+    if not ref_text.strip():
+        return list(cue_texts)
+
+    boundaries: list[int] = []
+    curr_len = 0
+    for ct in cue_texts[:-1]:
+        curr_len += len(ct)
+        boundaries.append(curr_len)
+        curr_len += 1  # for the space in join
+
+    joined_cues = " ".join(cue_texts)
+    sm = SequenceMatcher(None, joined_cues, ref_text)
+    matching_blocks = sm.get_matching_blocks()
+
+    ref_splits: list[int] = []
+    for b in boundaries:
+        best_ref_pos = None
+        for a_start, b_start, size in matching_blocks:
+            if a_start <= b <= a_start + size:
+                best_ref_pos = b_start + (b - a_start)
+                break
+        if best_ref_pos is None:
+            best_ref_pos = int(round((b / max(1, len(joined_cues))) * len(ref_text)))
+        ref_splits.append(best_ref_pos)
+
+    # Snap split points to closest whitespace in ref_text
+    adjusted_splits: list[int] = []
+    for sp in ref_splits:
+        best_sp = sp
+        min_dist = 999
+        for offset in range(-8, 9):
+            pos = sp + offset
+            if 0 <= pos < len(ref_text) and ref_text[pos].isspace():
+                if abs(offset) < min_dist:
+                    min_dist = abs(offset)
+                    best_sp = pos
+        adjusted_splits.append(best_sp)
+
+    parts: list[str] = []
+    prev_idx = 0
+    for sp in adjusted_splits:
+        part = ref_text[prev_idx:sp].strip()
+        parts.append(part)
+        prev_idx = sp
+    parts.append(ref_text[prev_idx:].strip())
+
+    return parts
+
+
 def align_reference(
     cues: list[LyricCue],
     reference: list[str] | list[ReferenceLine] | ReferenceBundle,
@@ -457,7 +532,8 @@ def align_reference(
 ) -> AlignmentResult:
     """Replace cue text with the best monotonic reference match.
 
-    Returns an AlignmentResult (compatible with int for replaced cue count).
+    Supports N:M alignment transitions ({1:1, 1:2, 1:3, 2:1, 3:1}) to handle
+    multi-line visual lyric cards and split subtitle phrases.
     """
     from lyra_ocr.lyric.models import ReferenceConfig
 
@@ -491,79 +567,162 @@ def align_reference(
     n, m = len(cues), len(ref_lines)
     stats_matrix = [[line_match_stats(cues[i].text, ref_lines[j].text) for j in range(m)] for i in range(n)]
 
-    # DP alignment: score based on similarity
+    # DP alignment with N:M transitions
     dp = [[0.0] * (m + 1) for _ in range(n + 1)]
-    choice = [[0] * m for _ in range(n)]
+    choice: list[list[tuple[int, int]]] = [[(1, 0)] * (m + 1) for _ in range(n + 1)]
 
     for i in range(1, n + 1):
-        row, prev = dp[i], dp[i - 1]
         for j in range(1, m + 1):
-            best, pick = prev[j], 0
-            if row[j - 1] > best:
-                best, pick = row[j - 1], 1
-            st = stats_matrix[i - 1][j - 1]
-            if st.similarity >= review_thresh:
-                score = prev[j - 1] + st.similarity
-                if score > best + 1e-12:
-                    best, pick = score, 2
-            row[j] = best
-            choice[i - 1][j - 1] = pick
+            # Skip cue (i-1)
+            best_score = dp[i - 1][j]
+            best_trans = (1, 0)
+
+            # Skip ref (j-1)
+            if dp[i][j - 1] > best_score:
+                best_score = dp[i][j - 1]
+                best_trans = (0, 1)
+
+            # N:M Transitions
+            for kc, kr in ((1, 1), (1, 2), (1, 3), (2, 1), (3, 1)):
+                if i < kc or j < kr:
+                    continue
+                cand_cue_text = " ".join(cues[idx].text for idx in range(i - kc, i))
+                cand_ref_text = " ".join(ref_lines[jdx].text for jdx in range(j - kr, j))
+                st = line_match_stats(cand_cue_text, cand_ref_text)
+                if st.similarity >= review_thresh:
+                    weight = 1.02 if (kc > 1 or kr > 1) else 1.0
+                    match_score = dp[i - kc][j - kr] + st.similarity * weight
+                    if match_score > best_score + 1e-9:
+                        best_score = match_score
+                        best_trans = (kc, kr)
+
+            dp[i][j] = best_score
+            choice[i][j] = best_trans
 
     # Traceback
-    pairs: list[tuple[int, int]] = []
+    actions: list[tuple[tuple[int, int], list[int], list[int]]] = []
     i, j = n, m
     while i > 0 and j > 0:
-        pick = choice[i - 1][j - 1]
-        if pick == 2:
-            pairs.append((i - 1, j - 1))
+        trans = choice[i][j]
+        kc, kr = trans
+        if kc == 0 and kr == 1:
+            j -= 1
+        elif kc == 1 and kr == 0:
             i -= 1
-            j -= 1
-        elif pick == 1:
-            j -= 1
         else:
-            i -= 1
+            cue_indices = list(range(i - kc, i))
+            ref_indices = list(range(j - kr, j))
+            actions.append((trans, cue_indices, ref_indices))
+            i -= kc
+            j -= kr
 
-    pairs.reverse()
+    actions.reverse()
 
-    matched_count = len(pairs)
+    pairs: list[tuple[int, int]] = []
     replaced_count = 0
     review_count = 0
 
-    for cue_idx, ref_idx in pairs:
-        cue = cues[cue_idx]
-        if cue.correction.method == "human":
-            continue
-        ref = ref_lines[ref_idx]
-        st = stats_matrix[cue_idx][ref_idx]
+    for (kc, kr), cue_idxs, ref_idxs in actions:
+        for ci in cue_idxs:
+            for ri in ref_idxs:
+                pairs.append((ci, ri))
 
-        ref_clean = ref.text.strip()
-        if not ref_clean:
-            continue
+        if kc == 1 and kr == 1:
+            cue_idx, ref_idx = cue_idxs[0], ref_idxs[0]
+            cue = cues[cue_idx]
+            if cue.correction.method == "human":
+                continue
+            ref = ref_lines[ref_idx]
+            st = stats_matrix[cue_idx][ref_idx]
+            ref_clean = ref.text.strip()
+            if not ref_clean:
+                continue
 
-        # Check replacement guards
-        guards_passed = (
-            st.similarity >= replace_thresh
-            and st.token_coverage >= cfg.min_token_coverage
-            and cfg.min_length_ratio <= st.length_ratio <= cfg.max_length_ratio
-            and bool(_WORD_RE.search(ref_clean))
-        )
+            guards_passed = (
+                st.similarity >= replace_thresh
+                and st.token_coverage >= cfg.min_token_coverage
+                and cfg.min_length_ratio <= st.length_ratio <= cfg.max_length_ratio
+                and bool(_WORD_RE.search(ref_clean))
+            )
+            if guards_passed:
+                if ref_clean != cue.text:
+                    corr_method = "reference_caption" if is_caption else "reference"
+                    cue.correction = CorrectionInfo(
+                        method=corr_method,
+                        changed=True,
+                        confidence=cue.confidence,
+                        diff=f"'{cue.text}' -> '{ref_clean}'",
+                    )
+                    cue.text = ref_clean
+                    replaced_count += 1
+            else:
+                cue.review_required = True
+                if "reference_uncertain" not in cue.qa_flags:
+                    cue.qa_flags.append("reference_uncertain")
+                review_count += 1
 
-        if guards_passed:
-            if ref_clean != cue.text:
-                corr_method = "reference_caption" if is_caption else "reference"
-                cue.correction = CorrectionInfo(
-                    method=corr_method,
-                    changed=True,
-                    confidence=cue.confidence,
-                    diff=f"'{cue.text}' -> '{ref_clean}'",
-                )
-                cue.text = ref_clean
-                replaced_count += 1
-        else:
-            cue.review_required = True
-            if "reference_uncertain" not in cue.qa_flags:
-                cue.qa_flags.append("reference_uncertain")
-            review_count += 1
+        elif kc == 1 and kr > 1:
+            cue = cues[cue_idxs[0]]
+            if cue.correction.method == "human":
+                continue
+            combined_ref = " ".join(ref_lines[ri].text.strip() for ri in ref_idxs)
+            st = line_match_stats(cue.text, combined_ref)
+            guards_passed = (
+                st.similarity >= replace_thresh
+                and st.token_coverage >= cfg.min_token_coverage
+                and bool(_WORD_RE.search(combined_ref))
+            )
+            if guards_passed:
+                if combined_ref != cue.text:
+                    corr_method = "reference_caption" if is_caption else "reference"
+                    cue.correction = CorrectionInfo(
+                        method=corr_method,
+                        changed=True,
+                        confidence=cue.confidence,
+                        diff=f"'{cue.text}' -> '{combined_ref}'",
+                    )
+                    cue.text = combined_ref
+                    replaced_count += 1
+            else:
+                cue.review_required = True
+                if "reference_uncertain" not in cue.qa_flags:
+                    cue.qa_flags.append("reference_uncertain")
+                review_count += 1
+
+        elif kc > 1 and kr == 1:
+            ref_clean = ref_lines[ref_idxs[0]].text.strip()
+            ocr_cues = [cues[ci] for ci in cue_idxs]
+            if any(c.correction.method == "human" for c in ocr_cues):
+                continue
+            cand_cue_text = " ".join(c.text for c in ocr_cues)
+            st = line_match_stats(cand_cue_text, ref_clean)
+            guards_passed = (
+                st.similarity >= replace_thresh
+                and st.token_coverage >= cfg.min_token_coverage
+                and bool(_WORD_RE.search(ref_clean))
+            )
+            if guards_passed:
+                projected = _project_ref_onto_cues([c.text for c in ocr_cues], ref_clean)
+                for ci, part in zip(cue_idxs, projected):
+                    c = cues[ci]
+                    if part and part != c.text:
+                        corr_method = "reference_caption" if is_caption else "reference"
+                        c.correction = CorrectionInfo(
+                            method=corr_method,
+                            changed=True,
+                            confidence=c.confidence,
+                            diff=f"'{c.text}' -> '{part}'",
+                        )
+                        c.text = part
+                        replaced_count += 1
+            else:
+                for c in ocr_cues:
+                    c.review_required = True
+                    if "reference_uncertain" not in c.qa_flags:
+                        c.qa_flags.append("reference_uncertain")
+                review_count += 1
+
+    matched_count = len({pair[0] for pair in pairs})
 
     return AlignmentResult(
         matched_count=matched_count,
