@@ -7,6 +7,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from lyra_ocr.audio import align_cues_with_audio, compute_vocal_activity_profile, extract_audio_16k
 from lyra_ocr.lang import vote_layer_lang
 from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
 from lyra_ocr.lyric.grouping import consolidate_language_layers, dedupe_and_group, merge_duplicate_layers
@@ -35,7 +36,7 @@ from lyra_ocr.lyric.select import load_artifacts, select_cues
 
 logger = logging.getLogger(__name__)
 CAPTION_CACHE_TTL_SECONDS = 3600.0
-BUILD_CACHE_VERSION = 3
+BUILD_CACHE_VERSION = 5
 
 
 def _reference_signature(
@@ -280,6 +281,17 @@ def build_lrc_from_artifacts(
         except Exception as e:
             logger.warning("Refine timings failed, falling back to coarse: %s", e)
 
+    # Multimodal audio analysis (VAD & Forced Alignment)
+    audio_16k = None
+    vocal_profile = None
+    if eff_video_path and Path(eff_video_path).is_file():
+        try:
+            audio_16k = extract_audio_16k(eff_video_path, cache_dir=art_path)
+            if audio_16k is not None:
+                vocal_profile = compute_vocal_activity_profile(audio_16k)
+        except Exception as exc:
+            logger.warning("Audio processing failed for %s: %s", eff_video_path, exc)
+
     # Optional reference lyrics: repair cue text and fill reference gaps without touching OCR timing.
     n_reference_matches = 0
     n_reference_gap_fills = 0
@@ -324,6 +336,7 @@ def build_lrc_from_artifacts(
                     source=reference_source,
                     duration_ms=duration_ms,
                     matched_pairs=align_res.matched_pairs,
+                    vocal_profile=vocal_profile,
                 )
                 for gc in layer_cues:
                     if gc.layer_id is None and layer_id is not None:
@@ -341,6 +354,12 @@ def build_lrc_from_artifacts(
 
     cues = consolidate_language_layers(cues)
     cues = dedupe_and_group(cues)
+
+    if audio_16k is not None and getattr(reference_cfg, "enable_audio_align", True):
+        try:
+            cues = align_cues_with_audio(cues, audio_16k)
+        except Exception as exc:
+            logger.warning("Forced alignment failed: %s", exc)
 
     if not n_reference_matches and not n_reference_gap_fills:
         reference_source = ""

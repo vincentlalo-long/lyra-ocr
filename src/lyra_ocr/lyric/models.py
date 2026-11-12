@@ -32,6 +32,7 @@ class LyricCue:
     text_quality: float | None = None
     layer_id: int | None = None
     lang: str = "und"
+    words: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -80,4 +81,6 @@ class ReferenceConfig:
     rescue_non_lyric: bool = True
     allow_edge_gap_fill: bool = False
     split_overlapping_reference_cues: bool = True
+    enable_audio_align: bool = True
+    enhanced_lrc: bool = False
 
