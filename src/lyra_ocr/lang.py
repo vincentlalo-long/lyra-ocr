@@ -19,7 +19,20 @@ _AMBIGUOUS_ENGLISH_SHORT_WORDS = {
     "at", "in", "on", "as", "is", "it", "or", "an", "am", "us", "by", "my",
 }
 
+# Spanish stopwords and distinct characters
+_SPANISH_STOPWORDS = {
+    "el", "la", "los", "las", "del", "una", "uno", "con", "por", "para", "como",
+    "más", "mas", "está", "esta", "son", "ese", "esa", "todo", "toda",
+    "día", "dias", "días", "siempre", "nunca", "corazón", "tiempo", "vida",
+    "sueño", "mundo", "cielo", "luz", "sin", "mi", "tu", "su", "nos", "qué", "que", "y",
+}
+_SPANISH_CHARS_RE = re.compile(r"[ñ¿¡]", re.IGNORECASE)
+
 # Vietnamese-specific vowels with diacritics / consonants
+_VIETNAMESE_UNIQUE_RE = re.compile(
+    r"[ăằắẳẵặâầấẩẫậđêềếểễệơờớởỡợưừứửữựảãạẻẽẹỉĩịỏõọổỗộủũụỷỹỵ]",
+    re.IGNORECASE,
+)
 _VIETNAMESE_RE = re.compile(
     r"[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]",
     re.IGNORECASE,
@@ -102,12 +115,26 @@ def detect_line_lang(text: str) -> str:
     if has_cjk and not has_latin:
         return "zh"
 
-    # 2. Vietnamese Diacritics
+    # 2. Romance / Spanish Stopwords & Distinct Characters
+    lower_norm = norm.lower()
+    words = re.findall(r"[\w]+", lower_norm)
+    n_es_stops = sum(1 for w in words if w in _SPANISH_STOPWORDS)
+    has_es_char = bool(_SPANISH_CHARS_RE.search(norm))
+    has_vi_unique = bool(_VIETNAMESE_UNIQUE_RE.search(norm))
+
+    if has_es_char or (n_es_stops >= 2 and not has_vi_unique):
+        return "es"
+
+    # 3. Vietnamese Diacritics
     if _VIETNAMESE_RE.search(norm):
+        if n_es_stops >= 1 and not has_vi_unique:
+            return "es"
         return "vi"
 
-    # 3. Latin Script (Romaji vs English/Latin)
+    # 4. Latin Script (Romaji vs English/Spanish/Latin)
     if has_latin:
+        if n_es_stops >= 2:
+            return "es"
         score = romaji_score(norm)
         # Require score >= 0.6 and at least 2 tokens, or single high-confidence token
         tokens = re.findall(r"[A-Za-zāīūēōâîûêô]+", norm)

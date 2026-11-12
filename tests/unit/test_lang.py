@@ -69,3 +69,12 @@ def test_vote_layer_lang():
     assert vote_layer_lang(["zh", "zh", "ja"]) == "ja"
     # Pure Chinese layer remains zh
     assert vote_layer_lang(["zh", "zh", "zh"]) == "zh"
+
+
+def test_detect_line_lang_spanish():
+    assert detect_line_lang("Ese latido que va más allá del tiempo") == "es"
+    assert detect_line_lang("por siempre con mi corazón y vida") == "es"
+    assert detect_line_lang("todo el mundo bajo la luz") == "es"
+    # Regular English with one stopword must not be mistaken for Spanish
+    assert detect_line_lang("this is the day we wait for") == "en"
+

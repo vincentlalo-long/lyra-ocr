@@ -168,3 +168,36 @@ def test_classify_all_tracks_with_layer_discovery():
     for r in results[5:]:
         assert r.label == "non_lyric"
         assert "static_overlay_layer" in r.qa_flags
+
+
+def test_discover_layers_rejects_left_aligned_staff_credits():
+    # 6 staff credit tracks aligned on the left (cx ≈ 0.18, cy ≈ 0.45)
+    credit_texts = [
+        "DIRECTOR: NAGAI TATSUYUKI",
+        "SERIES COMPOSITION: MINAKAMI SEISHI",
+        "CHARACTER DESIGN: TANAKA MASAYOSHI",
+        "MUSIC: I'VE SOUND / MAIKO",
+        "ANIMATION PRODUCTION: J.C.STAFF",
+        "PRODUCED BY: PROJECT-RAILGUN",
+    ]
+    tracks = []
+    for i, txt in enumerate(credit_texts):
+        tracks.append(_make_track(track_id=200 + i, start_ms=i * 2000, end_ms=i * 2000 + 1800, text=txt, cx=0.18, cy=0.45))
+
+    layers = discover_layers(tracks)
+    assert len(layers) == 1
+    # Left-aligned cluster must be classified as overlay, NEVER lyric
+    assert layers[0].kind == "overlay"
+
+
+def test_discover_layers_rejects_hud_code_tracks():
+    # 5 HUD animation codes centered vertically and horizontally
+    hud_texts = ["00A01", "00A02", "00A03", "00A04", "00A05"]
+    tracks = []
+    for i, txt in enumerate(hud_texts):
+        tracks.append(_make_track(track_id=300 + i, start_ms=i * 1000, end_ms=i * 1000 + 800, text=txt, cx=0.50, cy=0.50))
+
+    layers = discover_layers(tracks)
+    assert len(layers) == 1
+    assert layers[0].kind == "overlay"
+

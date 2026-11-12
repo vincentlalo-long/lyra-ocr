@@ -121,24 +121,35 @@ def discover_layers(
         import statistics
 
         med_dur = statistics.median(durs) if durs else 0
+        std_cx = statistics.pstdev(cxs) if len(cxs) > 1 else 0.0
 
         texts = [item["text"] for item in cl if item["text"]]
         n_distinct = _count_distinct_texts(texts)
         total_tracks = len(cl)
 
-        is_corner = (avg_cx < 0.22 or avg_cx > 0.78) and (avg_cy < 0.12 or avg_cy > 0.88)
+        # Off-center check: lyrics are horizontally centered (0.30 <= avg_cx <= 0.70)
+        # Left-aligned anime staff credits have avg_cx < 0.30; right credits have avg_cx > 0.70.
+        # Scattered HUD overlays have wide spread (std_cx > 0.14).
+        is_off_center = avg_cx < 0.30 or avg_cx > 0.70 or std_cx > 0.14
+
+        # Reject clusters dominated by short uppercase/digit HUD codes (e.g. '00A01', 'CODE-3')
+        n_code_noise = sum(
+            1 for t in texts if len(t) <= 6 and bool(re.match(r"^[A-Z0-9_\-\.:# ]+$", t))
+        )
+        is_code_dominated = len(texts) > 0 and (n_code_noise / len(texts)) >= 0.60
 
         # Distinguish dynamic lyric stream vs static watermark overlay
         # Dynamic lyric: multiple distinct lines appearing over time, centered, reasonable duration
         if (
             total_tracks >= 4
-            and not is_corner
+            and not is_off_center
+            and not is_code_dominated
             and (n_distinct >= 4 or total_tracks >= 8)
             and (n_distinct / max(1, total_tracks)) >= 0.30
             and med_dur >= 500
         ):
             kind = "lyric"
-        elif total_tracks >= 3 and (n_distinct <= 2 or is_corner or med_dur < 500):
+        elif total_tracks >= 3 and (n_distinct <= 2 or is_off_center or is_code_dominated or med_dur < 500):
             kind = "overlay"
         else:
             kind = "sparse"
