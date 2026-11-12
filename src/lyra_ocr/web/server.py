@@ -168,7 +168,12 @@ class LyraReviewHandler(ReviewAPIMixin, DatasetAPIMixin, EvalAPIMixin, LrcAPIMix
     def do_DELETE(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
         try:
+            if path == "/api/artifacts":
+                self._handle_delete_artifact(query)
+                return
+
             if path.startswith("/api/datasets/"):
                 rest = path[len("/api/datasets/"):].strip("/")
                 parts = [p for p in rest.split("/") if p]

@@ -102,6 +102,41 @@ def test_artifacts_scan_uses_workspace_root_and_skips_other_trees(make_web_serve
     assert [a["path"] for a in data["artifacts"]] == ["outputs/clip"]
 
 
+def test_delete_artifact_endpoint(make_web_server, tmp_path: Path):
+    """DELETE /api/artifacts removes an artifact dir but protects golden trees."""
+    root = tmp_path
+    art = root / "outputs" / "old_clip"
+    art.mkdir(parents=True)
+    (art / "tracks.json").write_text(json.dumps({"tracks": []}), encoding="utf-8")
+    (art / "manifest.json").write_text(json.dumps({}), encoding="utf-8")
+
+    golden = root / "golden" / "v1" / "artifacts" / "keep"
+    golden.mkdir(parents=True)
+    (golden / "tracks.json").write_text(json.dumps({"tracks": []}), encoding="utf-8")
+    (golden / "manifest.json").write_text(json.dumps({}), encoding="utf-8")
+
+    url = make_web_server(root)["url"]
+
+    status, data = http_request(f"{url}/api/artifacts?dir=outputs/old_clip", method="DELETE")
+    assert status == 200
+    assert data["deleted"] == "outputs/old_clip"
+    assert not art.exists()
+
+    # Curated ground truth must never be deletable through the review UI.
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        http_request(f"{url}/api/artifacts?dir=golden/v1/artifacts/keep", method="DELETE")
+    assert exc.value.code == 403
+    assert golden.exists()
+
+    # Only real artifact directories (tracks.json + manifest.json) are removable.
+    plain = root / "outputs" / "plain"
+    plain.mkdir(parents=True)
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        http_request(f"{url}/api/artifacts?dir=outputs/plain", method="DELETE")
+    assert exc.value.code == 400
+    assert plain.exists()
+
+
 @requires_golden
 def test_web_server_get_artifacts(make_web_server):
     """Verify that GET /api/artifacts lists available artifact runs."""

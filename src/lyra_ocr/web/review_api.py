@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import time
 from pathlib import Path
 
@@ -110,6 +111,46 @@ class ReviewAPIMixin:
             (time.perf_counter() - started) * 1000.0,
         )
         self._send_json({"artifacts": artifacts_list})
+
+    def _handle_delete_artifact(self, query: dict[str, list[str]] | None = None) -> None:
+        """Delete an artifact directory (tracks.json + manifest.json) from disk."""
+        dir_str = ((query or {}).get("dir", [""])[0] or "").strip()
+        if not dir_str:
+            self._send_error("Missing query parameter: dir", 400)
+            return
+
+        root = self._workspace_root()
+        target = _safe_resolve(dir_str, root)
+        if not target or not target.is_dir():
+            self._send_error(f"Artifact directory not found: {dir_str}", 404)
+            return
+
+        if not (target / "tracks.json").is_file() or not (target / "manifest.json").is_file():
+            self._send_error("Not an artifact directory (missing tracks.json / manifest.json)", 400)
+            return
+
+        try:
+            rel = target.relative_to(root)
+        except ValueError:
+            self._send_error("Artifact directory is outside the workspace", 403)
+            return
+
+        # Refuse the scanning roots themselves and curated ground-truth trees.
+        if len(rel.parts) < 2:
+            self._send_error("Refusing to delete a top-level directory", 400)
+            return
+        if rel.parts[0] == "golden":
+            self._send_error("Refusing to delete golden ground-truth artifacts", 403)
+            return
+
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            _logger.exception("Failed to delete artifact directory %s", target)
+            self._send_error(f"Failed to delete artifact directory: {exc}", 500)
+            return
+
+        self._send_json({"ok": True, "deleted": str(rel)})
 
     def _handle_get_data(self, art_dir_str: str) -> None:
         """Load manifest, tracks, frame_index, and latest labels for an artifact directory."""

@@ -17,6 +17,7 @@
       <label for="artifactSelect" style="color:var(--text-muted);font-size:12px">Artifact:</label>
       <select id="artifactSelect"></select>
       <button id="reviewHideArtifactBtn" class="mini-btn" title="Hide this artifact from web dropdown (keeps files on disk)">✕ Hide</button>
+      <button id="reviewDeleteArtifactBtn" class="mini-btn danger" title="Delete this artifact directory and all its files from disk">🗑 Delete</button>
       <div id="coveragePill" class="badge badge-lyric">100% Labeled</div>
       <button id="refreshBtn" title="Reload state">↻ Refresh</button>
     </div>
@@ -49,6 +50,7 @@
               <label for="lrcArtifactSelect">Existing Run Artifacts (Cached):</label>
               <div style="display:flex; gap:6px;">
                 <button type="button" id="lrcHideArtifactBtn" class="link-btn" style="font-size:11px" title="Hide selected artifact from web dropdown (keeps files on disk)">✕ Hide</button>
+                <button type="button" id="lrcDeleteArtifactBtn" class="link-btn" style="font-size:11px;color:var(--channel)" title="Delete selected artifact directory and all its files from disk">🗑 Delete</button>
                 <button type="button" id="lrcRestoreHiddenBtn" class="link-btn" style="font-size:11px; display:none;">↺ Restore</button>
                 <button type="button" id="lrcToggleDatasetsBtn" class="link-btn" style="font-size:11px;">Show Dataset Runs</button>
               </div>

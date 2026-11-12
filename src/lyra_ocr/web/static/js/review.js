@@ -128,6 +128,29 @@ if (reviewHideBtn && !reviewHideBtn.dataset.bound) {
   });
 }
 
+// Wire header delete button
+const reviewDeleteBtn = document.getElementById("reviewDeleteArtifactBtn");
+if (reviewDeleteBtn && !reviewDeleteBtn.dataset.bound) {
+  reviewDeleteBtn.dataset.bound = "true";
+  reviewDeleteBtn.addEventListener("click", async () => {
+    if (!currentArtifact) { showToast("Select an artifact to delete"); return; }
+    const name = currentArtifact.split("/").pop();
+    if (!window.confirm(`Delete artifact "${name}" and all its files from disk?\n\n${currentArtifact}\n\nThis cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/artifacts?dir=${encodeURIComponent(currentArtifact)}`, { method: "DELETE" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      showToast(`Deleted: ${name}`);
+      allRawArtifacts = allRawArtifacts.filter(a => a.path !== currentArtifact);
+      currentArtifact = null;
+      renderReviewArtifactSelect();
+      if (artifacts.length > 0) loadArtifact(artifacts[0].path);
+    } catch (err) {
+      showToast(`Delete failed: ${err.message}`);
+    }
+  });
+}
+
 export async function loadArtifact(path) {
   currentArtifact = path;
   try {
