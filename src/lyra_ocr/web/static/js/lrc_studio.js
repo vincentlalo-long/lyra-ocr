@@ -13,10 +13,13 @@ let currentVideoPath = "";
 let currentOutLrc = "";
 let allLayers = [];
 let selectedLayerId = "all";
+let rawDirty = false;
 let playbackTimeMs = 0;
 
 let isPlaying = false;
 let playTimer = null;
+let videoRafId = null;
+let lastHighlightedIdx = -1;
 let maxDurationMs = 180000;
 let studioVideo = null;
 
@@ -100,6 +103,8 @@ function renderArtifactDropdown() {
 }
 
 export function resetStudioView() {
+  stopVideoSyncLoop();
+  lastHighlightedIdx = -1;
   currentCues = [];
   currentMetadata = { title: "", artist: "", album: "", by: "Lyra OCR", offset_ms: 0 };
   currentLrcText = "";
@@ -108,6 +113,7 @@ export function resetStudioView() {
   currentOutLrc = "";
   allLayers = [];
   selectedLayerId = "all";
+  rawDirty = false;
   playbackTimeMs = 0;
   if (isPlaying) togglePlayback();
 
@@ -188,6 +194,27 @@ function bindStudioEvents() {
     });
   }
 
+  const deleteBtn = document.getElementById("lrcDeleteArtifactBtn");
+  if (deleteBtn && !deleteBtn.dataset.bound) {
+    deleteBtn.dataset.bound = "true";
+    deleteBtn.addEventListener("click", () => {
+      const val = artSelect ? artSelect.value : "";
+      if (!val) { showToast("Select an artifact to delete"); return; }
+      const name = basename(val);
+      if (!window.confirm(`Delete artifact "${name}" and all its files from disk?\n\n${val}\n\nThis cannot be undone.`)) return;
+      fetch(`/api/artifacts?dir=${encodeURIComponent(val)}`, { method: "DELETE" })
+        .then(async (res) => {
+          const body = await res.json().catch(() => ({}));
+          if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+          showToast(`Deleted: ${name}`);
+          allRawArtifacts = allRawArtifacts.filter(a => a.path !== val);
+          if (currentArtifactDir === val) resetStudioView();
+          renderArtifactDropdown();
+        })
+        .catch((err) => showToast(`Delete failed: ${err.message}`));
+    });
+  }
+
   const restoreBtn = document.getElementById("lrcRestoreHiddenBtn");
   if (restoreBtn && !restoreBtn.dataset.bound) {
     restoreBtn.dataset.bound = "true";
@@ -231,6 +258,12 @@ function bindStudioEvents() {
     saveBtn.addEventListener("click", handleSaveLrcChanges);
   }
 
+  const rawArea = document.getElementById("studioRawLrcText");
+  if (rawArea && !rawArea.dataset.bound) {
+    rawArea.dataset.bound = "true";
+    rawArea.addEventListener("input", () => { rawDirty = true; });
+  }
+
   const addCueBtn = document.getElementById("lrcAddCueBtn");
   if (addCueBtn && !addCueBtn.dataset.bound) {
     addCueBtn.dataset.bound = "true";
@@ -243,6 +276,7 @@ function bindStudioEvents() {
     layerSel.addEventListener("change", (e) => {
       selectedLayerId = e.target.value;
       renderCuesList();
+      renderKaraokeView();
       syncCuesToRawLrc();
     });
   }
@@ -282,6 +316,27 @@ function bindStudioEvents() {
   }
 }
 
+function startVideoSyncLoop() {
+  if (videoRafId) cancelAnimationFrame(videoRafId);
+  function loop() {
+    if (studioVideo && !studioVideo.paused && studioVideo.src) {
+      playbackTimeMs = Math.round(studioVideo.currentTime * 1000);
+      updatePlaybackUI();
+      videoRafId = requestAnimationFrame(loop);
+    } else {
+      videoRafId = null;
+    }
+  }
+  videoRafId = requestAnimationFrame(loop);
+}
+
+function stopVideoSyncLoop() {
+  if (videoRafId) {
+    cancelAnimationFrame(videoRafId);
+    videoRafId = null;
+  }
+}
+
 function attachVideoEvents() {
   studioVideo = document.getElementById("studioVideo");
   if (!studioVideo || studioVideo.dataset.bound) return;
@@ -307,16 +362,19 @@ function attachVideoEvents() {
   studioVideo.addEventListener("play", () => {
     isPlaying = true;
     clearInterval(playTimer);
+    startVideoSyncLoop();
     const btn = document.getElementById("studioPlayBtn");
     if (btn) btn.innerHTML = "⏸ Pause";
   });
   studioVideo.addEventListener("pause", () => {
     isPlaying = false;
+    stopVideoSyncLoop();
     const btn = document.getElementById("studioPlayBtn");
     if (btn) btn.innerHTML = "▶ Play";
   });
   studioVideo.addEventListener("ended", () => {
     isPlaying = false;
+    stopVideoSyncLoop();
     const btn = document.getElementById("studioPlayBtn");
     if (btn) btn.innerHTML = "▶ Play";
   });
@@ -393,11 +451,14 @@ async function handleLoadLrc() {
     const scrubber = document.getElementById("studioScrubber");
     if (scrubber) scrubber.max = maxDurationMs;
 
+    allLayers = data.layers || [];
+    if (data.selected_layer_id !== undefined && data.selected_layer_id !== null) {
+      selectedLayerId = String(data.selected_layer_id);
+    }
+    renderLayerSelector(allLayers, data.primary_lang);
     renderCuesList();
     renderKaraokeView();
     syncCuesToRawLrc();
-    allLayers = data.layers || [];
-    renderLayerSelector(allLayers, data.primary_lang);
     document.getElementById("studioMainContainer").style.display = "grid";
     showStatus(
       `Loaded ${currentCues.length} cues${currentVideoPath ? " with video" : " (no video path found)"}.`,
@@ -477,11 +538,14 @@ async function handleGenerateLrc() {
       scrubber.max = maxDurationMs;
     }
 
+    allLayers = data.layers || [];
+    if (data.selected_layer_id !== undefined && data.selected_layer_id !== null) {
+      selectedLayerId = String(data.selected_layer_id);
+    }
+    renderLayerSelector(allLayers, data.primary_lang);
     renderCuesList();
     renderKaraokeView();
     syncCuesToRawLrc();
-    allLayers = data.layers || [];
-    renderLayerSelector(allLayers, data.primary_lang);
     updateStatsSummary(data);
 
     showStatus(`Generated ${data.n_cues} lyric cues successfully! Saved to: ${data.out_lrc}`, "success");
@@ -500,20 +564,22 @@ function renderLayerSelector(layers, primaryLang) {
   const select = document.getElementById("studioLayerSelect");
   if (!select) return;
   allLayers = Array.isArray(layers) ? layers : [];
-  if (allLayers.length <= 1) {
+  if (allLayers.length === 0) {
     select.innerHTML = "";
     select.style.display = "none";
     selectedLayerId = "all";
     return;
   }
 
-  select.innerHTML = "";
-  const allOpt = document.createElement("option");
-  allOpt.value = "all";
-  allOpt.textContent = `All Layers (${currentCues.length} cues)`;
-  select.appendChild(allOpt);
+  // Primary language first so the default view is one clean, single-language table.
+  const ordered = [...allLayers].sort((a, b) => {
+    const ap = primaryLang && a.lang === primaryLang ? 0 : 1;
+    const bp = primaryLang && b.lang === primaryLang ? 0 : 1;
+    return ap - bp || String(a.layer_id).localeCompare(String(b.layer_id));
+  });
 
-  allLayers.forEach((layer) => {
+  select.innerHTML = "";
+  ordered.forEach((layer) => {
     const opt = document.createElement("option");
     opt.value = String(layer.layer_id);
     const isPrimary = primaryLang && layer.lang === primaryLang ? " ★" : "";
@@ -521,8 +587,35 @@ function renderLayerSelector(layers, primaryLang) {
     select.appendChild(opt);
   });
 
-  select.style.display = "inline-block";
-  selectedLayerId = "all";
+  if (ordered.length > 1) {
+    const allOpt = document.createElement("option");
+    allOpt.value = "all";
+    allOpt.textContent = `All Layers (merged, ${currentCues.length} cues)`;
+    select.appendChild(allOpt);
+    select.style.display = "inline-block";
+  } else {
+    select.style.display = "none";
+  }
+
+  // Open on selected layer if present and valid; otherwise open on primary/first layer.
+  if (selectedLayerId && (selectedLayerId === "all" || ordered.some(l => String(l.layer_id) === String(selectedLayerId)))) {
+    select.value = selectedLayerId;
+  } else {
+    selectedLayerId = String(ordered[0].layer_id);
+    select.value = selectedLayerId;
+  }
+}
+
+function currentLayer() {
+  if (selectedLayerId === "all" || selectedLayerId === "" || selectedLayerId === null) return null;
+  return allLayers.find(l => String(l.layer_id) === String(selectedLayerId)) || null;
+}
+
+function cuesForSelectedLayer() {
+  const base = (allLayers.length <= 1 || selectedLayerId === "all" || !selectedLayerId)
+    ? currentCues
+    : currentCues.filter(c => String(c.layer_id) === String(selectedLayerId));
+  return [...base].sort((a, b) => (a.start_ms - b.start_ms) || ((a.y_center || 0) - (b.y_center || 0)));
 }
 
 function updateStatsSummary(data) {
@@ -531,7 +624,7 @@ function updateStatsSummary(data) {
   const hasRef = (data.n_reference_matches || 0) > 0 || (data.n_reference_gap_fills || 0) > 0;
   const isCaption = Boolean(data.reference_source && data.reference_source.includes("caption"));
   const layerBadges = (data.layers && data.layers.length > 1)
-    ? data.layers.map(l => `<span class="stat-badge">🌐 Layer ${l.layer_id} [${l.lang}] (${l.n_cues})</span>`).join(" ")
+    ? data.layers.map(l => `<span class="stat-badge" title="${escapeHtml(l.path || "")}">🌐 ${basename(l.path || "")} <strong>${l.lang}</strong> (${l.n_cues})</span>`).join(" ")
     : "";
   container.innerHTML = `
     <span class="stat-badge"><strong>${data.n_cues || 0}</strong> Accepted Cues</span>
@@ -550,9 +643,7 @@ function renderCuesList() {
   if (!container) return;
   container.innerHTML = "";
 
-  const filteredCues = (selectedLayerId === "all" || !selectedLayerId)
-    ? currentCues
-    : currentCues.filter(c => String(c.layer_id) === String(selectedLayerId));
+  const filteredCues = cuesForSelectedLayer();
 
   if (filteredCues.length === 0) {
     container.innerHTML = '<div class="empty-state">No lyric cues found for this layer.</div>';
@@ -589,6 +680,7 @@ function renderCuesList() {
     row.querySelector(".cue-text-input").addEventListener("input", (e) => {
       currentCues[actualIdx].text = e.target.value;
       renderKaraokeView();
+      syncCuesToRawLrc();
     });
     row.querySelector(".cue-del-btn").addEventListener("click", () => {
       currentCues.splice(actualIdx, 1);
@@ -606,14 +698,40 @@ function renderKaraokeView() {
   const karaokeBox = document.getElementById("studioKaraokeStage");
   if (!karaokeBox) return;
 
-  const currentIdx = currentCues.findIndex((c, i) => {
-    const nextStart = currentCues[i + 1] ? currentCues[i + 1].start_ms : Infinity;
-    return playbackTimeMs >= c.start_ms && playbackTimeMs < nextStart;
-  });
+  const activeCues = cuesForSelectedLayer();
+  const offsetMs = parseInt(
+    (document.getElementById("lrcOffsetMs") && document.getElementById("lrcOffsetMs").value) ||
+    currentMetadata.offset_ms || 0,
+    10
+  ) || 0;
+  const effectiveTimeMs = playbackTimeMs - offsetMs;
 
-  const prevText = currentIdx > 0 ? currentCues[currentIdx - 1].text : "";
-  const currText = currentIdx >= 0 ? currentCues[currentIdx].text : "(Instrumental / Outro)";
-  const nextText = currentIdx >= 0 && currentIdx < currentCues.length - 1 ? currentCues[currentIdx + 1].text : "";
+  let localIdx = -1;
+  for (let i = 0; i < activeCues.length; i++) {
+    const c = activeCues[i];
+    const nextStart = activeCues[i + 1] ? activeCues[i + 1].start_ms : Infinity;
+    const hardEnd = Math.min(nextStart, Math.max(c.end_ms || (c.start_ms + 4000), c.start_ms + 1500) + 1500);
+    if (effectiveTimeMs >= c.start_ms && effectiveTimeMs < hardEnd) {
+      localIdx = i;
+      break;
+    }
+  }
+
+  // Find upcoming cue when in an instrumental gap
+  let nextLocalIdx = -1;
+  if (localIdx < 0) {
+    nextLocalIdx = activeCues.findIndex(c => c.start_ms > effectiveTimeMs);
+  }
+
+  const prevText = localIdx > 0
+    ? activeCues[localIdx - 1].text
+    : (nextLocalIdx > 0 ? activeCues[nextLocalIdx - 1].text : "");
+  const currText = localIdx >= 0
+    ? activeCues[localIdx].text
+    : (activeCues.length > 0 ? "♪ (Instrumental) ♪" : "(No lyrics loaded)");
+  const nextText = localIdx >= 0
+    ? (localIdx < activeCues.length - 1 ? activeCues[localIdx + 1].text : "")
+    : (nextLocalIdx >= 0 ? activeCues[nextLocalIdx].text : "");
 
   karaokeBox.innerHTML = `
     <div class="karaoke-line prev">${escapeHtml(prevText)}</div>
@@ -621,19 +739,30 @@ function renderKaraokeView() {
     <div class="karaoke-line next">${escapeHtml(nextText)}</div>
   `;
 
-  // Highlight corresponding row in list
-  document.querySelectorAll(".cue-row").forEach((row, i) => {
-    row.classList.toggle("playing", i === currentIdx);
+  const activeCueObj = localIdx >= 0 ? activeCues[localIdx] : null;
+  const activeActualIdx = activeCueObj ? currentCues.indexOf(activeCueObj) : -1;
+
+  let activeRowEl = null;
+  document.querySelectorAll(".cue-row").forEach((row) => {
+    const rowActualIdx = parseInt(row.dataset.idx, 10);
+    const isCurrent = activeActualIdx >= 0 && rowActualIdx === activeActualIdx;
+    row.classList.toggle("playing", isCurrent);
+    if (isCurrent) activeRowEl = row;
   });
+
+  if (activeActualIdx !== lastHighlightedIdx) {
+    lastHighlightedIdx = activeActualIdx;
+    if (activeRowEl && typeof activeRowEl.scrollIntoView === "function") {
+      activeRowEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }
 }
 
 function syncCuesToRawLrc() {
   const textarea = document.getElementById("studioRawLrcText");
   if (!textarea) return;
 
-  const targetCues = (selectedLayerId === "all" || !selectedLayerId)
-    ? currentCues
-    : currentCues.filter(c => String(c.layer_id) === String(selectedLayerId));
+  const targetCues = cuesForSelectedLayer();
 
   const lines = [
     `[ti:${currentMetadata.title || ""}]`,
@@ -649,6 +778,7 @@ function syncCuesToRawLrc() {
 
   currentLrcText = lines.join("\n") + "\n";
   textarea.value = currentLrcText;
+  rawDirty = false;
 }
 
 
@@ -679,9 +809,13 @@ async function handleSaveLrcChanges() {
   const rawTextarea = document.getElementById("studioRawLrcText");
   const updatedLrcText = rawTextarea ? rawTextarea.value : currentLrcText;
 
+  // Only send the raw text for a concrete layer: when "All Layers" is merged
+  // the per-language files are regenerated from the cue list instead.
+  const activeLayer = currentLayer();
   const payload = {
     out_lrc: currentOutLrc,
-    lrc_text: updatedLrcText,
+    lrc_text: rawDirty && (activeLayer || allLayers.length === 0) ? updatedLrcText : undefined,
+    layer_id: activeLayer ? activeLayer.layer_id : null,
     cues: currentCues,
     metadata: currentMetadata,
     video_path: currentVideoPath,
@@ -700,9 +834,16 @@ async function handleSaveLrcChanges() {
   }
 }
 
-function copyLrcToClipboard() {
+function activeLrcText() {
+  const rawTextarea = document.getElementById("studioRawLrcText");
+  if (rawDirty && rawTextarea) return rawTextarea.value;
   syncCuesToRawLrc();
-  navigator.clipboard.writeText(currentLrcText).then(() => {
+  return currentLrcText;
+}
+
+function copyLrcToClipboard() {
+  const text = activeLrcText();
+  navigator.clipboard.writeText(text).then(() => {
     showStatus("LRC contents copied to clipboard!", "success");
   }).catch(() => {
     showStatus("Failed to copy to clipboard", "error");
@@ -710,8 +851,8 @@ function copyLrcToClipboard() {
 }
 
 function downloadLrcFile() {
-  syncCuesToRawLrc();
-  const blob = new Blob([currentLrcText], { type: "text/plain;charset=utf-8" });
+  const text = activeLrcText();
+  const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
 

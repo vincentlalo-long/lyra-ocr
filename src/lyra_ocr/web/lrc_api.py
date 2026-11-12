@@ -19,6 +19,21 @@ from lyra_ocr.web.base import _safe_resolve
 logger = logging.getLogger(__name__)
 
 
+def _resolve_cues_json_for_lrc(target: Path) -> Path:
+    direct = target.with_suffix(".cues.json")
+    if direct.is_file():
+        return direct
+    base_stem = re.sub(r"\.[A-Za-z]{2,3}(?:-[A-Za-z0-9]+)?(?:-\d+)?$", "", target.stem)
+    if base_stem and base_stem != target.stem:
+        candidate = target.parent / f"{base_stem}.cues.json"
+        if candidate.is_file():
+            return candidate
+    candidates = list(target.parent.glob("*.cues.json"))
+    if len(candidates) == 1:
+        return candidates[0]
+    return direct
+
+
 class LrcAPIMixin:
     """API endpoints for LRC Studio."""
 
@@ -203,11 +218,12 @@ class LrcAPIMixin:
 
         if target.suffix == ".lrc":
             text = target.read_text(encoding="utf-8")
-            cues_json = target.with_suffix(".cues.json")
+            cues_json = _resolve_cues_json_for_lrc(target)
             cues_data = json.loads(cues_json.read_text(encoding="utf-8")) if cues_json.is_file() else {}
             raw_layers = cues_data.get("layers", [])
             primary_lang = cues_data.get("primary_lang", "")
             layers_with_text = []
+            selected_layer_id = None
             for l in raw_layers:
                 l_path = Path(l.get("path", ""))
                 l_text = ""
@@ -216,6 +232,8 @@ class LrcAPIMixin:
                         l_text = l_path.read_text(encoding="utf-8")
                     except Exception:
                         l_text = ""
+                if target.name == l_path.name or (target.is_file() and l_path.is_file() and target.resolve() == l_path.resolve()):
+                    selected_layer_id = l.get("layer_id")
                 layers_with_text.append({
                     "layer_id": l.get("layer_id"),
                     "lang": l.get("lang", "und"),
@@ -231,6 +249,7 @@ class LrcAPIMixin:
                 "video_path": cues_data.get("video_path", ""),
                 "layers": layers_with_text,
                 "primary_lang": primary_lang,
+                "selected_layer_id": selected_layer_id,
             })
         elif target.name.endswith(".cues.json"):
             cues_data = json.loads(target.read_text(encoding="utf-8"))
@@ -345,10 +364,13 @@ class LrcAPIMixin:
         out_lrc = _safe_resolve(lrc_path_str, root) or (root / lrc_path_str)
         lrc_text = payload.get("lrc_text")
         raw_cues = payload.get("cues")
+        # "all"/None means the edit applies to the merged view, not to a single layer file.
+        raw_layer_id = payload.get("layer_id")
+        layer_id = None if str(raw_layer_id) in ("", "None", "all") else raw_layer_id
 
         try:
-            # If raw lrc_text provided, save directly
-            if lrc_text is not None:
+            # If no cue list was sent, the raw text is the source of truth for out_lrc.
+            if lrc_text is not None and not isinstance(raw_cues, list):
                 out_lrc.parent.mkdir(parents=True, exist_ok=True)
                 out_lrc.write_text(str(lrc_text), encoding="utf-8")
 
@@ -384,21 +406,45 @@ class LrcAPIMixin:
                 export_res = write_lrc_layers(out_lrc, cues, meta)
                 layers_meta = export_res.get("layers", [])
                 primary_lang = export_res.get("primary", {}).get("lang", "")
-                cues_json_path = out_lrc.with_suffix(".cues.json")
+                cues_json_path = _resolve_cues_json_for_lrc(out_lrc)
+                existing_cues_data: dict[str, Any] = {}
+                if cues_json_path.is_file():
+                    try:
+                        existing_cues_data = json.loads(cues_json_path.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+
+                video_path = str(payload.get("video_path") or existing_cues_data.get("video_path", ""))
+                duration_ms = int(payload.get("duration_ms") or existing_cues_data.get("duration_ms", 0))
+                tracker = str(payload.get("tracker") or existing_cues_data.get("tracker", ""))
+                skipped = [s for s in (payload.get("skipped") or existing_cues_data.get("skipped") or []) if isinstance(s, dict)]
+                options = dict(payload.get("options") or existing_cues_data.get("options") or {})
+
                 write_cues_json(
                     cues_json_path,
                     cues,
                     meta,
-                    video_id=str(payload.get("video_id", out_lrc.stem)),
-                    video_path=str(payload.get("video_path", "")),
-                    duration_ms=int(payload.get("duration_ms", 0)),
-                    tracker=str(payload.get("tracker", "")),
-                    skipped=[s for s in (payload.get("skipped") or []) if isinstance(s, dict)],
-                    options=dict(payload.get("options") or {}),
+                    video_id=str(payload.get("video_id", existing_cues_data.get("video_id", out_lrc.stem))),
+                    video_path=video_path,
+                    duration_ms=duration_ms,
+                    tracker=tracker,
+                    skipped=skipped,
+                    options=options,
                     layers=layers_meta,
                     primary_lang=primary_lang,
                 )
 
+                # Re-apply a hand-edited raw layer text after regenerating the
+                # layer files, so the edit is not silently discarded.
+                if lrc_text is not None:
+                    target_lrc = out_lrc
+                    if layer_id is not None:
+                        for layer in layers_meta:
+                            if str(layer.get("layer_id")) == str(layer_id):
+                                target_lrc = Path(str(layer.get("path", out_lrc)))
+                                break
+                    target_lrc.parent.mkdir(parents=True, exist_ok=True)
+                    target_lrc.write_text(str(lrc_text), encoding="utf-8")
 
             self._send_json({"ok": True, "saved_to": str(out_lrc)})
         except Exception as exc:

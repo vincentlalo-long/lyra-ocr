@@ -866,6 +866,17 @@ def test_web_server_lrc_multi_layer_and_save(make_web_server, tmp_path: Path):
     assert (out_lrc_path.parent / f"{out_lrc_path.stem}.ja.lrc").exists()
     assert "senbonzakura EDITED" in (out_lrc_path.parent / f"{out_lrc_path.stem}.ja-Latn.lrc").read_text(encoding="utf-8")
 
+    # Loading a per-language file (e.g. .ja-Latn.lrc) must resolve cues.json and retain video & layer metadata
+    lang_lrc_rel = f"outputs/multi_sample/{out_lrc_path.stem}.ja-Latn.lrc"
+    status_lang, get_lang_resp = http_request(f"{url}/api/lrc?path={lang_lrc_rel}")
+    assert status_lang == 200
+    assert "senbonzakura" in get_lang_resp["lrc_text"]
+    assert len(get_lang_resp["cues"]) >= 1
+    assert get_lang_resp["video_path"] == "multi.mp4"
+    assert len(get_lang_resp["layers"]) == 2
+    assert get_lang_resp.get("selected_layer_id") is not None
+
+
 
 
 def test_web_server_clear_finished_jobs(make_web_server, tmp_path: Path):
