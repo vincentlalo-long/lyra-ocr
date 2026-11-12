@@ -83,36 +83,37 @@ def align_cues_with_audio(
                     threshold = 0.25 * max_energy
                     candidate_frames = np.where(env >= threshold)[0]
                     if len(candidate_frames) > 0:
-                        first_frame = candidate_frames[0]
-                        candidate_onset_ms = search_start_ms + first_frame * hop_ms
+                        first_frame = int(candidate_frames[0])
+                        candidate_onset_ms = int(search_start_ms + first_frame * hop_ms)
                         drift = abs(candidate_onset_ms - cue.start_ms)
                         if drift <= max_drift_ms:
                             onset_refined_ms = candidate_onset_ms
 
         # Drift safety gate
         if abs(onset_refined_ms - cue.start_ms) <= max_drift_ms:
-            cue.start_ms = onset_refined_ms
+            cue.start_ms = int(onset_refined_ms)
 
         if cue.end_ms <= cue.start_ms:
-            cue.end_ms = cue.start_ms + 2500
+            cue.end_ms = int(cue.start_ms + 2500)
 
         # Word-level proportional allocation
         words = _tokenize_words(cue.text)
         if words:
             total_chars = sum(len(w) for w in words)
-            duration = max(500, cue.end_ms - cue.start_ms)
+            duration = max(500, int(cue.end_ms - cue.start_ms))
             word_entries: list[dict[str, Any]] = []
-            curr_ms = cue.start_ms
+            curr_ms = int(cue.start_ms)
             for idx, w in enumerate(words):
                 weight = len(w) / max(1, total_chars)
                 w_dur = max(100, int(round(duration * weight)))
-                w_end = min(cue.end_ms, curr_ms + w_dur) if idx < len(words) - 1 else cue.end_ms
+                w_end = min(int(cue.end_ms), curr_ms + w_dur) if idx < len(words) - 1 else int(cue.end_ms)
                 word_entries.append({
                     "word": w,
-                    "start_ms": curr_ms,
-                    "end_ms": w_end,
+                    "start_ms": int(curr_ms),
+                    "end_ms": int(w_end),
                 })
-                curr_ms = w_end
+                curr_ms = int(w_end)
+            cue.words = word_entries
             cue.words = word_entries
 
     # Maintain monotonicity within each layer

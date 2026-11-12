@@ -378,6 +378,9 @@ def line_similarity(a: str, b: str) -> float:
     sa, sb = _squash(a), _squash(b)
     if not sa or not sb:
         return 0.0
+    la, lb = len(sa), len(sb)
+    if (2.0 * min(la, lb) / (la + lb)) < 0.60:
+        return 0.0
     base_ratio = SequenceMatcher(None, sa, sb).ratio()
     # If Latin characters present, blend phonetic similarity
     if re.search(r"[a-z]", sa) and re.search(r"[a-z]", sb):
@@ -586,9 +589,16 @@ def align_reference(
             for kc, kr in ((1, 1), (1, 2), (1, 3), (2, 1), (3, 1)):
                 if i < kc or j < kr:
                     continue
-                cand_cue_text = " ".join(cues[idx].text for idx in range(i - kc, i))
-                cand_ref_text = " ".join(ref_lines[jdx].text for jdx in range(j - kr, j))
-                st = line_match_stats(cand_cue_text, cand_ref_text)
+                if kc == 1 and kr == 1:
+                    st = stats_matrix[i - 1][j - 1]
+                else:
+                    cand_cue_text = " ".join(cues[idx].text for idx in range(i - kc, i))
+                    cand_ref_text = " ".join(ref_lines[jdx].text for jdx in range(j - kr, j))
+                    la, lb = len(cand_cue_text), len(cand_ref_text)
+                    if (2.0 * min(la, lb) / max(1, la + lb)) < review_thresh * 0.85:
+                        continue
+                    st = line_match_stats(cand_cue_text, cand_ref_text)
+
                 if st.similarity >= review_thresh:
                     weight = 1.02 if (kc > 1 or kr > 1) else 1.0
                     match_score = dp[i - kc][j - kr] + st.similarity * weight

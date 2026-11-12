@@ -268,5 +268,10 @@ def write_cues_json(
         "skipped": skipped,
     }
 
-    out.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    def _json_default(obj: Any) -> Any:
+        if hasattr(obj, "item"):
+            return obj.item()
+        return str(obj)
+
+    out.write_text(json.dumps(data, indent=2, ensure_ascii=False, default=_json_default) + "\n", encoding="utf-8")
 
