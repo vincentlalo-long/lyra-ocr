@@ -101,6 +101,143 @@ def detect_script(text: str) -> str:
     return "latin"
 
 
+def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
+    """Reconstruct missing word spaces in Latin/Romaji text from vertical ink projection valleys."""
+    if crop is None or getattr(crop, "size", 0) == 0:
+        return text
+    if not text or not text.strip():
+        return text
+    if detect_script(text) != "latin":
+        return text
+
+    # Compute grayscale luminance L
+    if crop.ndim == 3:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    elif crop.ndim == 2:
+        gray = crop.copy()
+    else:
+        return text
+
+    h, w = gray.shape[:2]
+    if h < 4 or w < 8:
+        return text
+
+    # Estimate bright-on-dark vs dark-on-bright by comparing border vs center
+    by = max(1, h // 8)
+    bx = max(1, w // 20)
+    border_mask = np.zeros((h, w), dtype=bool)
+    border_mask[:by, :] = True
+    border_mask[-by:, :] = True
+    border_mask[:, :bx] = True
+    border_mask[:, -bx:] = True
+    center_mask = ~border_mask
+
+    border_mean = float(np.mean(gray[border_mask]))
+    center_mean = float(np.mean(gray[center_mask])) if np.any(center_mask) else float(np.mean(gray))
+
+    if border_mean <= center_mean:
+        # Bright text on dark background
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    else:
+        # Dark text on bright background
+        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+
+    ink = (binary == 255).astype(np.float32)
+    y_coords, x_coords = np.where(ink > 0)
+    if len(x_coords) == 0:
+        return text
+
+    x_left = int(np.min(x_coords))
+    x_right = int(np.max(x_coords))
+    y_top = int(np.min(y_coords))
+    y_bottom = int(np.max(y_coords))
+    h_ink = int(y_bottom - y_top + 1)
+    span = x_right - x_left
+    if span <= 0 or h_ink <= 2:
+        return text
+
+    # Compute column-wise vertical ink density D(x) = (1/H) * sum_y I[ink(y, x)]
+    d_x = np.sum(ink, axis=0) / float(h)
+
+    # Smooth D(x) with a 3px box filter
+    kernel = np.ones(3, dtype=np.float32) / 3.0
+    d_smooth = np.convolve(d_x, kernel, mode="same")
+
+    min_gap = max(4, int(0.26 * h_ink))
+    valleys: list[tuple[float, float]] = []
+    in_valley = False
+    start_x = 0
+
+    for x in range(x_left, x_right + 1):
+        if d_smooth[x] <= 0.04:
+            if not in_valley:
+                in_valley = True
+                start_x = x
+        else:
+            if in_valley:
+                in_valley = False
+                end_x = x - 1
+                gap_width = end_x - start_x + 1
+                if gap_width >= min_gap:
+                    x_mid = (start_x + end_x) / 2.0
+                    r_k = (x_mid - x_left) / float(span)
+                    if 0.08 < r_k < 0.92:
+                        valleys.append((r_k, x_mid))
+
+    if in_valley:
+        end_x = x_right
+        gap_width = end_x - start_x + 1
+        if gap_width >= min_gap:
+            x_mid = (start_x + end_x) / 2.0
+            r_k = (x_mid - x_left) / float(span)
+            if 0.08 < r_k < 0.92:
+                valleys.append((r_k, x_mid))
+
+    if not valleys:
+        return text
+
+    # Only reconstruct if text has fewer spaces than detected visual valleys
+    num_spaces = text.count(" ")
+    if num_spaces >= len(valleys):
+        return text
+
+    no_space_text = text.replace(" ", "")
+    total_len = len(no_space_text)
+    if total_len < 3:
+        return text
+
+    existing_splits: list[int] = []
+    char_count = 0
+    for ch in text:
+        if ch == " ":
+            if char_count not in existing_splits and 0 < char_count < total_len:
+                existing_splits.append(char_count)
+        else:
+            char_count += 1
+
+    total_ink_cols = max(1, int(np.count_nonzero(d_smooth[x_left : x_right + 1] > 0.04)))
+
+    new_splits = list(existing_splits)
+    for r_k, x_mid in valleys:
+        # Map valley to character index using cumulative ink columns before valley
+        ink_cols_before = int(np.count_nonzero(d_smooth[x_left : int(round(x_mid)) + 1] > 0.04))
+        r_ink = ink_cols_before / float(total_ink_cols) if total_ink_cols > 0 else r_k
+        cand_i = int(round(r_ink * total_len))
+        if cand_i < 2 or cand_i > total_len - 2:
+            continue
+        if any(abs(cand_i - s) < 2 for s in new_splits):
+            continue
+        new_splits.append(cand_i)
+
+    new_splits.sort()
+    if len(new_splits) == len(existing_splits):
+        return text
+
+    splits = [0] + sorted(set(new_splits)) + [total_len]
+    words = [no_space_text[splits[idx] : splits[idx + 1]] for idx in range(len(splits) - 1)]
+    return " ".join(words)
+
+
 class OCREngine:
     """Text recognition engine supporting multiple REC models and script routing."""
 
@@ -158,9 +295,12 @@ class OCREngine:
                     "Rec.model_type": ModelType.MOBILE,
                 }
             )
-            engine = RapidOCR(params=params)
-            self._models[model_id] = engine
-            return engine
+            try:
+                engine = RapidOCR(params=params)
+                self._models[model_id] = engine
+                return engine
+            except Exception:
+                return self._models[self.DEFAULT_MODEL]
 
         # Fallback to default
         return self._models[self.DEFAULT_MODEL]
@@ -261,9 +401,33 @@ class OCREngine:
         recognized = self.recognize_crops(crops, model_id=model_id)
 
         lines: list[TextLine] = []
-        for det, (text_raw, conf, used_model) in zip(detections, recognized):
+        for det, crop, (text_raw, conf, used_model) in zip(detections, crops, recognized):
             text_norm = normalize_text(text_raw, form="NFC")
             script = detect_script(text_norm)
+
+            if script == "latin":
+                needs_alt = (len(text_norm) >= 8 and " " not in text_norm) or (conf < 0.88)
+                if needs_alt and used_model != "latin_PP-OCRv5_rec_mobile":
+                    try:
+                        alt_raw, alt_conf, alt_model = self.recognize_crop(
+                            crop,
+                            model_id="latin_PP-OCRv5_rec_mobile",
+                        )
+                        if alt_raw and alt_model == "latin_PP-OCRv5_rec_mobile":
+                            alt_norm = normalize_text(alt_raw, form="NFC")
+                            if (" " not in text_norm and " " in alt_norm) or (alt_conf > conf):
+                                text_raw = alt_raw
+                                text_norm = alt_norm
+                                conf = alt_conf
+                                used_model = alt_model
+                                script = detect_script(text_norm)
+                    except Exception:
+                        pass
+
+                spaced = reconstruct_visual_word_spaces(crop, text_norm)
+                if spaced != text_norm:
+                    text_norm = spaced
+                    text_raw = spaced
 
             lines.append(
                 TextLine(

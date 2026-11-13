@@ -670,6 +670,7 @@ def test_align_reference_two_to_one_projects_tokens():
 
 
 def test_cross_script_kanji_to_romaji_alignment_repairs_without_cjk():
+    from lyra_ocr.lyric.models import ReferenceConfig
     from lyra_ocr.lyric.reference import (
         ReferenceBundle,
         ReferenceLine,
@@ -694,15 +695,26 @@ def test_cross_script_kanji_to_romaji_alignment_repairs_without_cjk():
         language="ja",
     )
 
-    ref_for_romaji = select_reference_lines(kanji_bundle, "ja-Latn")
+    # 1. By default (repair_romaji=False), ja-Latn selection returns None to protect screen Romaji
+    assert select_reference_lines(kanji_bundle, "ja-Latn") is None
+    assert select_reference_lines(kanji_bundle, "ja-Latn", repair_romaji=False) is None
+
+    # 2. When opted in (repair_romaji=True), select_reference_lines romanizes Kanji to ja-Latn
+    ref_for_romaji = select_reference_lines(kanji_bundle, "ja-Latn", repair_romaji=True)
     assert ref_for_romaji is not None
     assert ref_for_romaji.language == "ja-Latn"
     assert ref_for_romaji.source == "lrclib_romanized"
     # Zero CJK characters allowed in romanized reference
     assert not any("\u3040" <= ch <= "\u9fff" for line in ref_for_romaji.lines for ch in line.text)
 
-    res = align_reference(cues, ref_for_romaji)
-    assert res.replaced_count == 1
+    # 3. Default align_reference (repair_romaji=False) must NOT mutate screen Romaji text
+    res_default = align_reference(cues, ref_for_romaji, config=ReferenceConfig(repair_romaji=False))
+    assert res_default.replaced_count == 0
+    assert cues[0].text == "sono koclou wa t0ki wo koete"
+
+    # 4. Opted-in align_reference (repair_romaji=True) repairs OCR typos without CJK
+    res_opt_in = align_reference(cues, ref_for_romaji, config=ReferenceConfig(repair_romaji=True))
+    assert res_opt_in.replaced_count == 1
     assert cues[0].text.lower() == "sono kodou wa toki wo koete"
     assert not any("\u3040" <= ch <= "\u9fff" for ch in cues[0].text)
 

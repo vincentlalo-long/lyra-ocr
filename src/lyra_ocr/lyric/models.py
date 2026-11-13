@@ -66,6 +66,7 @@ class CorrectionConfig:
     min_text_quality_multiword: float = 0.50
     min_gate_words: int = 3
     max_oov_ratio: float = 0.40
+    repair_romaji: bool = False
 
 
 @dataclass
@@ -84,4 +85,5 @@ class ReferenceConfig:
     enable_audio_align: bool = True
     enable_asr: bool = True
     enhanced_lrc: bool = False
+    repair_romaji: bool = False
 

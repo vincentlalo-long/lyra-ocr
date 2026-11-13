@@ -263,6 +263,24 @@ def correct_text(
             confidence=medoid_conf,
         )
 
+    t_feat = track.get("features") if isinstance(track, dict) else getattr(track, "features", {})
+    if not isinstance(t_feat, dict):
+        t_feat = {}
+    track_lang = t_feat.get("lang") or t_feat.get("line_lang") or "en"
+
+    # Suspend destructive Romaji mutation unless explicitly enabled
+    if track_lang == "ja-Latn" and not config.repair_romaji:
+        cleaned_final = _normalize_string(medoid)
+        if not cleaned_final:
+            cleaned_final = medoid
+        diff_str = f"'{raw_text}' -> '{cleaned_final}'" if cleaned_final != raw_text else ""
+        return cleaned_final, raw_text, CorrectionInfo(
+            method="consensus",
+            changed=(cleaned_final != raw_text),
+            confidence=medoid_conf,
+            diff=diff_str,
+        )
+
     # Method: dictionary (corpus-derived) + optional conservative NLP repair
     # Pattern for ordinals, short alphanumeric codes, or decade specs (e.g. 1st, 2nd, 3D, 4K, 2U, V8, 90s)
     # that should be preserved as-is rather than being coerced into dictionary words.
@@ -304,11 +322,6 @@ def correct_text(
     cleaned_final = _normalize_string(corrected)
     if not cleaned_final:
         cleaned_final = medoid
-
-    t_feat = track.get("features") if isinstance(track, dict) else getattr(track, "features", {})
-    if not isinstance(t_feat, dict):
-        t_feat = {}
-    track_lang = t_feat.get("lang") or t_feat.get("line_lang") or "en"
 
     if config.enable_nlp and track_lang == "en" and not _is_cjk(cleaned_final):
         repaired = repair_text(

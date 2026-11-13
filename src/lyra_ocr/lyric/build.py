@@ -366,12 +366,17 @@ def build_lrc_from_artifacts(
         for layer_id, layer_cues in layer_groups.items():
             layer_lang = vote_layer_lang([c.lang for c in layer_cues if c.lang])
             ref_for_layer = (
-                select_reference_lines(ref_bundle, layer_lang)
+                select_reference_lines(
+                    ref_bundle,
+                    layer_lang,
+                    repair_romaji=reference_cfg.repair_romaji,
+                )
                 if (ref_bundle and ref_bundle.lines)
                 else None
             )
             if ref_for_layer is None and asr_transcript is not None:
-                ref_for_layer = asr_to_reference_bundle(asr_transcript, target_lang=layer_lang)
+                if layer_lang != "ja-Latn" or reference_cfg.repair_romaji:
+                    ref_for_layer = asr_to_reference_bundle(asr_transcript, target_lang=layer_lang)
 
             if ref_for_layer and ref_for_layer.lines:
                 layer_ref_source = ref_for_layer.source or reference_source

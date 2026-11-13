@@ -777,33 +777,37 @@ def align_reference(
                 and bool(_WORD_RE.search(ref_clean))
             )
             if guards_passed:
-                target_text = (
-                    repair_romaji_cue_text(
-                        cue.text,
-                        ref_clean,
-                        ocr_confidence=cue.ocr_confidence,
-                        is_asr=is_asr_rom,
+                if cue_is_romaji and not cfg.repair_romaji:
+                    pass
+                else:
+                    target_text = (
+                        repair_romaji_cue_text(
+                            cue.text,
+                            ref_clean,
+                            ocr_confidence=cue.ocr_confidence,
+                            is_asr=is_asr_rom,
+                        )
+                        if cue_is_romaji
+                        else ref_clean
                     )
-                    if cue_is_romaji
-                    else ref_clean
-                )
-                if cue_is_romaji:
-                    target_text = _CJK_CHAR_RE.sub("", target_text).strip()
-                if target_text and target_text != cue.text:
-                    corr_method = "reference_caption" if is_caption else "reference"
-                    cue.correction = CorrectionInfo(
-                        method=corr_method,
-                        changed=True,
-                        confidence=cue.confidence,
-                        diff=f"'{cue.text}' -> '{target_text}'",
-                    )
-                    cue.text = target_text
-                    replaced_count += 1
+                    if cue_is_romaji:
+                        target_text = _CJK_CHAR_RE.sub("", target_text).strip()
+                    if target_text and target_text != cue.text:
+                        corr_method = "reference_caption" if is_caption else "reference"
+                        cue.correction = CorrectionInfo(
+                            method=corr_method,
+                            changed=True,
+                            confidence=cue.confidence,
+                            diff=f"'{cue.text}' -> '{target_text}'",
+                        )
+                        cue.text = target_text
+                        replaced_count += 1
             else:
-                cue.review_required = True
-                if "reference_uncertain" not in cue.qa_flags:
-                    cue.qa_flags.append("reference_uncertain")
-                review_count += 1
+                if not (cue_is_romaji and not cfg.repair_romaji):
+                    cue.review_required = True
+                    if "reference_uncertain" not in cue.qa_flags:
+                        cue.qa_flags.append("reference_uncertain")
+                    review_count += 1
 
         elif kc == 1 and kr > 1:
             cue = cues[cue_idxs[0]]
@@ -820,33 +824,37 @@ def align_reference(
                 and bool(_WORD_RE.search(combined_ref))
             )
             if guards_passed:
-                target_text = (
-                    repair_romaji_cue_text(
-                        cue.text,
-                        combined_ref,
-                        ocr_confidence=cue.ocr_confidence,
-                        is_asr=is_asr_rom,
+                if cue_is_romaji and not cfg.repair_romaji:
+                    pass
+                else:
+                    target_text = (
+                        repair_romaji_cue_text(
+                            cue.text,
+                            combined_ref,
+                            ocr_confidence=cue.ocr_confidence,
+                            is_asr=is_asr_rom,
+                        )
+                        if cue_is_romaji
+                        else combined_ref
                     )
-                    if cue_is_romaji
-                    else combined_ref
-                )
-                if cue_is_romaji:
-                    target_text = _CJK_CHAR_RE.sub("", target_text).strip()
-                if target_text and target_text != cue.text:
-                    corr_method = "reference_caption" if is_caption else "reference"
-                    cue.correction = CorrectionInfo(
-                        method=corr_method,
-                        changed=True,
-                        confidence=cue.confidence,
-                        diff=f"'{cue.text}' -> '{target_text}'",
-                    )
-                    cue.text = target_text
-                    replaced_count += 1
+                    if cue_is_romaji:
+                        target_text = _CJK_CHAR_RE.sub("", target_text).strip()
+                    if target_text and target_text != cue.text:
+                        corr_method = "reference_caption" if is_caption else "reference"
+                        cue.correction = CorrectionInfo(
+                            method=corr_method,
+                            changed=True,
+                            confidence=cue.confidence,
+                            diff=f"'{cue.text}' -> '{target_text}'",
+                        )
+                        cue.text = target_text
+                        replaced_count += 1
             else:
-                cue.review_required = True
-                if "reference_uncertain" not in cue.qa_flags:
-                    cue.qa_flags.append("reference_uncertain")
-                review_count += 1
+                if not (cue_is_romaji and not cfg.repair_romaji):
+                    cue.review_required = True
+                    if "reference_uncertain" not in cue.qa_flags:
+                        cue.qa_flags.append("reference_uncertain")
+                    review_count += 1
 
         elif kc > 1 and kr == 1:
             ref_clean = ref_lines[ref_idxs[0]].text.strip()
@@ -864,37 +872,41 @@ def align_reference(
                 and bool(_WORD_RE.search(ref_clean))
             )
             if guards_passed:
-                projected = _project_ref_onto_cues([c.text for c in ocr_cues], ref_clean)
-                for ci, part in zip(cue_idxs, projected):
-                    c = cues[ci]
-                    target_part = (
-                        repair_romaji_cue_text(
-                            c.text,
-                            part,
-                            ocr_confidence=c.ocr_confidence,
-                            is_asr=is_asr_rom,
+                if cue_is_romaji and not cfg.repair_romaji:
+                    pass
+                else:
+                    projected = _project_ref_onto_cues([c.text for c in ocr_cues], ref_clean)
+                    for ci, part in zip(cue_idxs, projected):
+                        c = cues[ci]
+                        target_part = (
+                            repair_romaji_cue_text(
+                                c.text,
+                                part,
+                                ocr_confidence=c.ocr_confidence,
+                                is_asr=is_asr_rom,
+                            )
+                            if (c.lang == "ja-Latn" or is_romaji_ref)
+                            else part
                         )
-                        if (c.lang == "ja-Latn" or is_romaji_ref)
-                        else part
-                    )
-                    if c.lang == "ja-Latn" or is_romaji_ref:
-                        target_part = _CJK_CHAR_RE.sub("", target_part).strip()
-                    if target_part and target_part != c.text:
-                        corr_method = "reference_caption" if is_caption else "reference"
-                        c.correction = CorrectionInfo(
-                            method=corr_method,
-                            changed=True,
-                            confidence=c.confidence,
-                            diff=f"'{c.text}' -> '{target_part}'",
-                        )
-                        c.text = target_part
-                        replaced_count += 1
+                        if c.lang == "ja-Latn" or is_romaji_ref:
+                            target_part = _CJK_CHAR_RE.sub("", target_part).strip()
+                        if target_part and target_part != c.text:
+                            corr_method = "reference_caption" if is_caption else "reference"
+                            c.correction = CorrectionInfo(
+                                method=corr_method,
+                                changed=True,
+                                confidence=c.confidence,
+                                diff=f"'{c.text}' -> '{target_part}'",
+                            )
+                            c.text = target_part
+                            replaced_count += 1
             else:
-                for c in ocr_cues:
-                    c.review_required = True
-                    if "reference_uncertain" not in c.qa_flags:
-                        c.qa_flags.append("reference_uncertain")
-                review_count += 1
+                if not (cue_is_romaji and not cfg.repair_romaji):
+                    for c in ocr_cues:
+                        c.review_required = True
+                        if "reference_uncertain" not in c.qa_flags:
+                            c.qa_flags.append("reference_uncertain")
+                    review_count += 1
 
     matched_count = len({pair[0] for pair in pairs})
 
@@ -1043,6 +1055,12 @@ def fill_reference_gaps(
 
     cfg = config or ReferenceConfig()
     if not cfg.enable_gap_fill:
+        return list(cues), GapFillResult()
+
+    if (
+        any(c.lang == "ja-Latn" for c in cues)
+        or (isinstance(reference, ReferenceBundle) and reference.language == "ja-Latn")
+    ) and not cfg.repair_romaji:
         return list(cues), GapFillResult()
 
     eff_source = source
@@ -1427,9 +1445,14 @@ def romanize_bundle(bundle: ReferenceBundle) -> ReferenceBundle | None:
 def select_reference_lines(
     bundle: ReferenceBundle | None,
     target_lang: str,
+    *,
+    repair_romaji: bool = False,
 ) -> ReferenceBundle | None:
     """Select reference lines matching a target layer language, romanizing ja -> ja-Latn."""
     if not bundle or not bundle.lines:
+        return None
+
+    if target_lang == "ja-Latn" and not repair_romaji:
         return None
 
     from lyra_ocr.lang import detect_line_lang, vote_layer_lang
