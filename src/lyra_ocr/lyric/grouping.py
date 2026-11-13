@@ -497,3 +497,114 @@ def dedupe_and_group(
             _track_sort_key(c.source_track_ids[0]) if c.source_track_ids else (0, -1),
         ),
     )
+
+
+def share_solitary_cross_layer_cues(
+    cues: list[LyricCue],
+    *,
+    min_gap_ms: int = 2500,
+    min_cue_dur_ms: int = 900,
+) -> list[LyricCue]:
+    """Clone solitary cues from one major layer into silence gaps of other major layers."""
+    if not cues:
+        return []
+
+    by_layer: dict[Any, list[LyricCue]] = defaultdict(list)
+    for cue in cues:
+        if cue.layer_id is not None:
+            by_layer[cue.layer_id].append(cue)
+
+    if len(by_layer) < 2:
+        return cues
+
+    max_count = max(len(lc) for lc in by_layer.values())
+    major_lids = [
+        lid
+        for lid, lc in by_layer.items()
+        if len(lc) >= 8 or (len(lc) >= 2 and len(lc) >= 0.25 * max_count)
+    ]
+    if len(major_lids) < 2:
+        return cues
+
+    layer_spans: dict[Any, tuple[int, int]] = {}
+    layer_langs: dict[Any, str] = {}
+    for lid in major_lids:
+        lc = by_layer[lid]
+        layer_spans[lid] = (min(c.start_ms for c in lc), max(c.end_ms for c in lc))
+        layer_langs[lid] = _layer_lang(lc)
+
+    latin_only_langs = {"en", "ja-Latn", "es", "fr", "de", "vi", "pt", "it", "id"}
+    added: list[LyricCue] = []
+
+    for src_lid in major_lids:
+        for cue in by_layer[src_lid]:
+            if (cue.end_ms - cue.start_ms) < min_cue_dur_ms:
+                continue
+            if "cross_layer_inherited" in cue.qa_flags:
+                continue
+
+            cue_is_cjk = _is_cjk_heavy(cue.text)
+
+            for dst_lid in major_lids:
+                if dst_lid == src_lid:
+                    continue
+
+                dst_lang = layer_langs[dst_lid]
+                if cue_is_cjk and dst_lang in latin_only_langs:
+                    continue
+
+                span_min, span_max = layer_spans[dst_lid]
+                if cue.start_ms < span_min - 5000 or cue.end_ms > span_max + 5000:
+                    continue
+
+                dst_cues = by_layer[dst_lid]
+                # Check zero overlapping cues inside [cue.start_ms + 200, cue.end_ms - 200]
+                if any(
+                    dc.start_ms < (cue.end_ms - 200) and dc.end_ms > (cue.start_ms + 200)
+                    for dc in dst_cues
+                ):
+                    continue
+
+                # Also avoid duplicating with already queued additions for this dst_lid
+                if any(
+                    ac.layer_id == dst_lid
+                    and ac.start_ms < (cue.end_ms - 200)
+                    and ac.end_ms > (cue.start_ms + 200)
+                    for ac in added
+                ):
+                    continue
+
+                prev_ends = [dc.end_ms for dc in dst_cues if dc.end_ms <= cue.start_ms + 200]
+                next_starts = [dc.start_ms for dc in dst_cues if dc.start_ms >= cue.end_ms - 200]
+                left_bound = max(prev_ends) if prev_ends else (span_min - 5000)
+                right_bound = min(next_starts) if next_starts else (span_max + 5000)
+                if (right_bound - left_bound) < min_gap_ms:
+                    continue
+
+                from dataclasses import replace
+
+                cloned = replace(
+                    cue,
+                    source_track_ids=list(cue.source_track_ids),
+                    source_segment_ids=list(cue.source_segment_ids),
+                    bbox=list(cue.bbox),
+                    qa_flags=list(cue.qa_flags) + ["cross_layer_inherited"],
+                    words=[dict(w) for w in cue.words],
+                    layer_id=dst_lid,
+                    lang=dst_lang if dst_lang != "und" else cue.lang,
+                )
+                added.append(cloned)
+
+    if not added:
+        return cues
+
+    combined = list(cues) + added
+    combined.sort(
+        key=lambda c: (
+            c.start_ms,
+            c.y_center,
+            _track_sort_key(c.source_track_ids[0]) if c.source_track_ids else (0, -1),
+        )
+    )
+    return combined
+

@@ -17,7 +17,12 @@ from lyra_ocr.audio import (
 )
 from lyra_ocr.lang import vote_layer_lang
 from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
-from lyra_ocr.lyric.grouping import consolidate_language_layers, dedupe_and_group, merge_duplicate_layers
+from lyra_ocr.lyric.grouping import (
+    consolidate_language_layers,
+    dedupe_and_group,
+    merge_duplicate_layers,
+    share_solitary_cross_layer_cues,
+)
 
 from lyra_ocr.lyric.models import CorrectionConfig, LrcMetadata, ReferenceConfig
 from lyra_ocr.lyric.reference import (
@@ -43,7 +48,7 @@ from lyra_ocr.lyric.select import load_artifacts, select_cues
 
 logger = logging.getLogger(__name__)
 CAPTION_CACHE_TTL_SECONDS = 3600.0
-BUILD_CACHE_VERSION = 5
+BUILD_CACHE_VERSION = 6
 
 
 def _reference_signature(
@@ -381,6 +386,7 @@ def build_lrc_from_artifacts(
 
     cues = consolidate_language_layers(cues, asr_transcript=asr_transcript)
     cues = dedupe_and_group(cues, asr_transcript=asr_transcript)
+    cues = share_solitary_cross_layer_cues(cues)
 
     if audio_16k is not None and getattr(reference_cfg, "enable_audio_align", True):
         try:

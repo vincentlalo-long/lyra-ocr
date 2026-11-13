@@ -340,4 +340,44 @@ def test_resolve_simultaneous_multiline_cues_staggers_three_line_stanza():
     assert all("multiline_staggered" in c.qa_flags for c in resolved)
 
 
+def test_share_solitary_cross_layer_cues_inherits_english_bridge():
+    from lyra_ocr.lyric.grouping import share_solitary_cross_layer_cues
+
+    cues: list[LyricCue] = []
+    # Layers 1 (ja) and 2 (ja-Latn) each have 8 cues, with a 5-second gap [30000..35000]
+    timestamps = [
+        (5000, 8000),
+        (10000, 13000),
+        (15000, 18000),
+        (25000, 30000),
+        (35000, 38000),
+        (40000, 43000),
+        (45000, 48000),
+        (50000, 53000),
+    ]
+    for idx, (s, e) in enumerate(timestamps):
+        cues.append(LyricCue(start_ms=s, end_ms=e, text=f"日本語ライン{idx}", layer_id=1, lang="ja"))
+        cues.append(LyricCue(start_ms=s, end_ms=e, text=f"nihongo rain {idx}", layer_id=2, lang="ja-Latn"))
+        cues.append(LyricCue(start_ms=s, end_ms=e, text=f"English line {idx}", layer_id=3, lang="en"))
+
+    # Solitary shared cue only displayed on layer 3 (en) inside the 30000..35000ms gap
+    cues.append(
+        LyricCue(start_ms=31000, end_ms=34000, text="Fly to the sky", layer_id=3, lang="en")
+    )
+
+    result = share_solitary_cross_layer_cues(cues)
+
+    ja_inherited = [c for c in result if c.layer_id == 1 and c.text == "Fly to the sky"]
+    ro_inherited = [c for c in result if c.layer_id == 2 and c.text == "Fly to the sky"]
+    assert len(ja_inherited) == 1
+    assert len(ro_inherited) == 1
+    assert ja_inherited[0].lang == "ja"
+    assert ro_inherited[0].lang == "ja-Latn"
+    assert "cross_layer_inherited" in ja_inherited[0].qa_flags
+    assert "cross_layer_inherited" in ro_inherited[0].qa_flags
+    assert ja_inherited[0].start_ms == 31000
+    assert ja_inherited[0].end_ms == 34000
+
+
+
 
