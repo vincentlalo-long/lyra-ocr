@@ -126,3 +126,31 @@ def test_cli_lrc_use_reference_flags(tmp_path: Path, monkeypatch, capsys: pytest
     out = capsys.readouterr().out
     assert "Reference: source=lrclib_synced, replaced=1, gap_fills=1" in out
 
+
+def test_cli_lrc_enhanced_and_artist_flags(tmp_path: Path, monkeypatch):
+    from unittest.mock import MagicMock
+
+    mock_build = MagicMock(return_value={
+        "out_lrc": str(tmp_path / "out.lrc"),
+        "n_cues": 1,
+        "n_skipped": 0,
+        "review_required": 0,
+    })
+    monkeypatch.setattr("lyra_ocr.lyric.build.build_lrc_from_artifacts", mock_build)
+
+    exit_code = main([
+        "lrc",
+        "--artifacts",
+        str(tmp_path),
+        "-o",
+        str(tmp_path / "out.lrc"),
+        "--artist",
+        "Queen",
+        "--enhanced",
+    ])
+    assert exit_code == 0
+    assert mock_build.call_count == 1
+    call_kwargs = mock_build.call_args.kwargs
+    assert call_kwargs["artist"] == "Queen"
+    assert call_kwargs["enhanced"] is True
+

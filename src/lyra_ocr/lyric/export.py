@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from pathlib import Path
 from typing import Any
@@ -25,7 +26,8 @@ def format_enhanced_tag(ms: int) -> str:
 
 
 def _sanitize_tag_value(val: str) -> str:
-    return val.replace("[", " ").replace("]", " ")
+    cleaned = val.replace("[", " ").replace("]", " ")
+    return re.sub(r"[\x00-\x1f\x7f]", "", cleaned)
 
 
 def write_lrc(

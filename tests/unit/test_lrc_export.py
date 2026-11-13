@@ -4,6 +4,7 @@ import pytest
 
 from lyra_ocr.lyric.models import LyricCue, LrcMetadata, CorrectionInfo
 from lyra_ocr.lyric.export import (
+    _sanitize_tag_value,
     format_lrc_timestamp,
     write_lrc,
     write_lrc_layers,
@@ -332,5 +333,35 @@ def test_write_lrc_layers_coverage_primary_selection(tmp_path: Path):
     assert out_multi.read_text(encoding="utf-8") == (tmp_path / "multi.en.lrc").read_text(encoding="utf-8")
 
 
+def test_sanitize_tag_value_strips_control_characters_and_brackets():
+    raw = "Artist\r\n\t\x00 [Feat. Singer] \x1f\x7f"
+    sanitized = _sanitize_tag_value(raw)
+    assert "[" not in sanitized
+    assert "]" not in sanitized
+    assert "\r" not in sanitized
+    assert "\n" not in sanitized
+    assert "\t" not in sanitized
+    assert "\x00" not in sanitized
+    assert "\x1f" not in sanitized
+    assert "\x7f" not in sanitized
+    assert sanitized == "Artist  Feat. Singer  "
 
+
+def test_write_lrc_enhanced_tags(tmp_path: Path):
+    out_file = tmp_path / "enhanced.lrc"
+    metadata = LrcMetadata(title="Song", artist="Artist")
+    cues = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=3000,
+            text="Hello world",
+            words=[
+                {"word": "Hello", "start_ms": 1000, "end_ms": 1800},
+                {"word": "world", "start_ms": 1900, "end_ms": 3000},
+            ],
+        )
+    ]
+    write_lrc(out_file, cues, metadata, enhanced=True)
+    content = out_file.read_text(encoding="utf-8")
+    assert "<00:01.00>Hello <00:01.90>world" in content
 

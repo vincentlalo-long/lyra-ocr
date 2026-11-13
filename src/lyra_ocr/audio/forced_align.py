@@ -47,7 +47,10 @@ def _compute_onset_envelope(
 
 
 def _tokenize_words(text: str) -> list[str]:
-    return re.findall(r"[\w']+", text)
+    return re.findall(
+        r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]|[^\s\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]+",
+        text,
+    )
 
 
 def align_cues_with_audio(
@@ -113,7 +116,6 @@ def align_cues_with_audio(
                     "end_ms": int(w_end),
                 })
                 curr_ms = int(w_end)
-            cue.words = word_entries
             cue.words = word_entries
 
     # Maintain monotonicity within each layer

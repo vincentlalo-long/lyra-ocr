@@ -354,6 +354,7 @@ def resolve_simultaneous_multiline_cues(
                         text_quality=l1.text_quality,
                         layer_id=l1.layer_id,
                         lang=lang,
+                        words=list(l1.words or []) + list(l2.words or []),
                     )
                 )
                 continue

@@ -318,6 +318,46 @@ def test_resolve_simultaneous_multiline_cues_merges_short_two_line_wrap():
     assert resolved[0].source_track_ids == [1, 2]
 
 
+def test_resolve_simultaneous_multiline_cues_merges_words():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    cues = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=3200,
+            text="In the castle",
+            y_center=0.81,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[1],
+            words=[
+                {"word": "In", "start_ms": 1000, "end_ms": 1400},
+                {"word": "the", "start_ms": 1400, "end_ms": 1800},
+                {"word": "castle", "start_ms": 1800, "end_ms": 3200},
+            ],
+        ),
+        LyricCue(
+            start_ms=1000,
+            end_ms=3200,
+            text="of the sky",
+            y_center=0.88,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[2],
+            words=[
+                {"word": "of", "start_ms": 1000, "end_ms": 1500},
+                {"word": "the", "start_ms": 1500, "end_ms": 2000},
+                {"word": "sky", "start_ms": 2000, "end_ms": 3200},
+            ],
+        ),
+    ]
+    resolved = resolve_simultaneous_multiline_cues(cues)
+    assert len(resolved) == 1
+    assert resolved[0].text == "In the castle of the sky"
+    assert len(resolved[0].words) == 6
+    assert [w["word"] for w in resolved[0].words] == ["In", "the", "castle", "of", "the", "sky"]
+
+
 def test_resolve_simultaneous_multiline_cues_staggers_three_line_stanza():
     from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
 

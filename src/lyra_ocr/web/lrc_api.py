@@ -380,21 +380,7 @@ class LrcAPIMixin:
                 for c in raw_cues:
                     if not isinstance(c, dict):
                         continue
-                    cues.append(
-                        LyricCue(
-                            start_ms=int(c.get("start_ms", 0)),
-                            end_ms=int(c.get("end_ms", 0)),
-                            text=str(c.get("text", "")).strip(),
-                            raw_text=str(c.get("raw_text", c.get("text", ""))),
-                            confidence=float(c.get("confidence", 1.0)),
-                            decision=str(c.get("decision", "accept")),
-                            review_required=bool(c.get("review_required", False)),
-                            source_track_ids=list(c.get("source_track_ids") or []),
-                            source_segment_ids=list(c.get("source_segment_ids") or []),
-                            layer_id=c.get("layer_id"),
-                            lang=str(c.get("lang", "und")),
-                        )
-                    )
+                    cues.append(LyricCue.from_dict(c))
                 meta_dict = payload.get("metadata") or {}
                 meta = LrcMetadata(
                     title=str(meta_dict.get("title", "")),
@@ -403,9 +389,6 @@ class LrcAPIMixin:
                     by=str(meta_dict.get("by", "Lyra OCR")),
                     offset_ms=int(meta_dict.get("offset_ms", 0)),
                 )
-                export_res = write_lrc_layers(out_lrc, cues, meta)
-                layers_meta = export_res.get("layers", [])
-                primary_lang = export_res.get("primary", {}).get("lang", "")
                 cues_json_path = _resolve_cues_json_for_lrc(out_lrc)
                 existing_cues_data: dict[str, Any] = {}
                 if cues_json_path.is_file():
@@ -413,6 +396,15 @@ class LrcAPIMixin:
                         existing_cues_data = json.loads(cues_json_path.read_text(encoding="utf-8"))
                     except Exception:
                         pass
+
+                enhanced = bool(
+                    payload.get("enhanced")
+                    or existing_cues_data.get("enhanced")
+                    or (existing_cues_data.get("options") or {}).get("enhanced")
+                )
+                export_res = write_lrc_layers(out_lrc, cues, meta, enhanced=enhanced)
+                layers_meta = export_res.get("layers", [])
+                primary_lang = export_res.get("primary", {}).get("lang", "")
 
                 video_path = str(payload.get("video_path") or existing_cues_data.get("video_path", ""))
                 duration_ms = int(payload.get("duration_ms") or existing_cues_data.get("duration_ms", 0))

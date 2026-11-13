@@ -369,6 +369,9 @@ def run_lrc(args: argparse.Namespace) -> int:
             logger.error("Either a video positional argument or --artifacts must be provided.")
             return 2
 
+        artist_arg = getattr(args, "artist", None) or None
+        enhanced_arg = bool(getattr(args, "enhanced", False))
+
         if artifacts_dir:
             result = build_lrc_from_artifacts(
                 artifacts_dir=artifacts_dir,
@@ -379,10 +382,11 @@ def run_lrc(args: argparse.Namespace) -> int:
                 refine=bool(getattr(args, "refine", False)),
                 offset_ms=args.offset_ms,
                 title=args.title or None,
-                artist=args.channel or None,
+                artist=artist_arg,
                 force=bool(getattr(args, "force", False)),
                 use_online_reference=bool(getattr(args, "use_reference", False)),
                 no_caption_fallback=bool(getattr(args, "no_caption_fallback", False)),
+                enhanced=enhanced_arg,
             )
         else:
             result = build_lrc_from_video(
@@ -395,6 +399,7 @@ def run_lrc(args: argparse.Namespace) -> int:
                 max_frames=args.max_frames,
                 title=args.title,
                 channel=args.channel,
+                artist=artist_arg,
                 device=args.device,
                 rec_batch_size=args.rec_batch_size,
                 dedup=bool(getattr(args, "dedup", False)),
@@ -406,6 +411,7 @@ def run_lrc(args: argparse.Namespace) -> int:
                 offset_ms=args.offset_ms,
                 use_online_reference=bool(getattr(args, "use_reference", False)),
                 no_caption_fallback=bool(getattr(args, "no_caption_fallback", False)),
+                enhanced=enhanced_arg,
             )
 
         n_cues = result["n_cues"]
@@ -572,6 +578,7 @@ def main(argv: list[str] | None = None) -> int:
     p_lrc.add_argument("--start-sec", type=float, default=0.0, help="Start offset in seconds")
     p_lrc.add_argument("--max-frames", type=int, default=None, help="Max frames to process")
     p_lrc.add_argument("--title", default="", help="Song title metadata")
+    p_lrc.add_argument("--artist", default="", help="Song artist metadata")
     p_lrc.add_argument("--channel", default="", help="Artist/Channel metadata")
     p_lrc.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto", help="OCR device (default: auto)")
     p_lrc.add_argument("--rec-batch-size", type=int, default=8, help="Recognition batch size (default: 8)")
@@ -583,6 +590,7 @@ def main(argv: list[str] | None = None) -> int:
     p_lrc.add_argument("--offset-ms", type=int, default=0, help="LRC offset tag in ms (default: 0)")
     p_lrc.add_argument("--use-reference", action="store_true", default=False, help="Auto reference lyrics (LRCLIB then YouTube captions fallback)")
     p_lrc.add_argument("--no-caption-fallback", action="store_true", default=False, help="Disable YouTube caption fallback if LRCLIB reference is unavailable")
+    p_lrc.add_argument("--enhanced", action="store_true", default=False, help="Export enhanced LRC with word-level timestamps")
     p_lrc.add_argument("--force", action="store_true", help="Force rerun even if artifacts exist")
 
     args = parser.parse_args(argv)

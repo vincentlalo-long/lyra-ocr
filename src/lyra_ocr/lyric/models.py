@@ -11,6 +11,17 @@ class CorrectionInfo:
     confidence: float = 0.0
     diff: str = ""
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any] | None) -> CorrectionInfo:
+        if not isinstance(d, dict):
+            return cls()
+        return cls(
+            method=str(d.get("method", "none")),
+            changed=bool(d.get("changed", False)),
+            confidence=float(d.get("confidence", 0.0)),
+            diff=str(d.get("diff", "")),
+        )
+
 
 @dataclass
 class LyricCue:
@@ -36,6 +47,60 @@ class LyricCue:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> LyricCue:
+        corr_raw = d.get("correction")
+        if isinstance(corr_raw, dict):
+            correction = CorrectionInfo.from_dict(corr_raw)
+        elif isinstance(corr_raw, CorrectionInfo):
+            correction = corr_raw
+        else:
+            correction = CorrectionInfo()
+
+        raw_text = d.get("raw_text")
+        text = str(d.get("text", "")).strip()
+        if raw_text is None:
+            raw_text = str(d.get("text", ""))
+        else:
+            raw_text = str(raw_text)
+
+        tids = d.get("source_track_ids")
+        if tids is None:
+            tids = d.get("track_ids", [])
+        sids = d.get("source_segment_ids")
+        if sids is None:
+            sids = d.get("segment_ids", [])
+
+        ocr_conf = d.get("ocr_confidence")
+        if ocr_conf is not None:
+            ocr_conf = float(ocr_conf)
+
+        t_qual = d.get("text_quality")
+        if t_qual is not None:
+            t_qual = float(t_qual)
+
+        return cls(
+            start_ms=int(d.get("start_ms", 0)),
+            end_ms=int(d.get("end_ms", 0)),
+            text=text,
+            raw_text=raw_text,
+            source_track_ids=list(tids or []),
+            source_segment_ids=list(sids or []),
+            confidence=float(d.get("confidence", 0.0)),
+            decision=str(d.get("decision", "accept")),
+            review_required=bool(d.get("review_required", False)),
+            bbox=list(d.get("bbox") or []),
+            x_center=float(d.get("x_center", 0.0)),
+            y_center=float(d.get("y_center", 0.0)),
+            correction=correction,
+            qa_flags=list(d.get("qa_flags") or []),
+            ocr_confidence=ocr_conf,
+            text_quality=t_qual,
+            layer_id=d.get("layer_id"),
+            lang=str(d.get("lang", "und")),
+            words=list(d.get("words") or []),
+        )
 
 
 @dataclass

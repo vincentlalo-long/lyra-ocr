@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
+import numpy as np
 
 from lyra_ocr.lyric.build import build_lrc_from_artifacts, build_lrc_from_video
 from lyra_ocr.lyric.models import CorrectionConfig
@@ -14,7 +15,7 @@ def test_build_lrc_from_artifacts_success(tmp_path: Path):
     manifest = {
         "video_id": "vid1",
         "video_path": "/tmp/vid1.mp4",
-        "metadata": {"title": "Song", "channel": "Artist"},
+        "metadata": {"title": "Song", "artist": "Artist", "channel": "Channel"},
         "probe": {"duration": 120.0, "width": 1280, "height": 720},
         "config": {"sample_fps": 2.0},
         "tracker": {"name": "bytetrack"},
@@ -828,4 +829,147 @@ def test_build_lrc_gates_low_conf_unvoiced_overlay_using_asr_vocal_gate(tmp_path
     assert any(s.get("reason") == "asr_unvoiced" for s in res["skipped"])
 
 
+def test_build_lrc_channel_not_blindly_copied_to_artist(tmp_path: Path):
+    artifacts_dir = tmp_path / "artifacts_channel"
+    artifacts_dir.mkdir()
+
+    manifest = {
+        "video_id": "vid_chan",
+        "video_path": "/tmp/vid_chan.mp4",
+        "metadata": {"title": "Castle", "channel": "Clarx & Harddope"},
+        "probe": {"duration": 60.0},
+        "tracker": {"name": "bytetrack"},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "bbox": [10, 800, 500, 850],
+                "features": {"dominant_text": "In the castle", "mean_centroid": [0.5, 0.8]},
+                "segments": [{"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "In the castle", "confidence": 0.95}],
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    out_lrc = tmp_path / "channel.lrc"
+    build_lrc_from_artifacts(artifacts_dir, out_lrc, force=True)
+
+    content = out_lrc.read_text(encoding="utf-8")
+    assert "[ti:Castle]" in content
+    # Channel was NOT copied into artist
+    assert "[ar:" not in content
+
+
+def test_build_lrc_parses_artist_from_hyphenated_title(tmp_path: Path):
+    artifacts_dir = tmp_path / "artifacts_hyphen"
+    artifacts_dir.mkdir()
+
+    manifest = {
+        "video_id": "vid_hyphen",
+        "video_path": "/tmp/vid_hyphen.mp4",
+        "metadata": {"title": "Clarx & Harddope - Castle", "channel": "NCS Release"},
+        "probe": {"duration": 60.0},
+        "tracker": {"name": "bytetrack"},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "bbox": [10, 800, 500, 850],
+                "features": {"dominant_text": "In the castle", "mean_centroid": [0.5, 0.8]},
+                "segments": [{"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "In the castle", "confidence": 0.95}],
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    out_lrc = tmp_path / "hyphen.lrc"
+    build_lrc_from_artifacts(artifacts_dir, out_lrc, force=True)
+
+    content = out_lrc.read_text(encoding="utf-8")
+    assert "[ar:Clarx & Harddope]" in content
+
+
+def test_build_lrc_enhanced_plumbing(tmp_path: Path):
+    artifacts_dir = tmp_path / "artifacts_enhanced"
+    artifacts_dir.mkdir()
+
+    v_file = tmp_path / "vid_enh.mp4"
+    v_file.touch()
+
+    manifest = {
+        "video_id": "vid_enh",
+        "video_path": str(v_file),
+        "metadata": {"title": "Song", "artist": "Artist"},
+        "probe": {"duration": 60.0},
+        "tracker": {"name": "bytetrack"},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "bbox": [10, 800, 500, 850],
+                "features": {"dominant_text": "Hello world", "mean_centroid": [0.5, 0.8]},
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 1000,
+                        "end_ms": 3000,
+                        "text": "Hello world",
+                        "confidence": 0.95,
+                    }
+                ],
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    out_lrc = tmp_path / "enhanced.lrc"
+    from unittest.mock import patch
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    # Test passing enhanced=True
+    with patch("lyra_ocr.lyric.build.extract_audio_16k") as mock_extract, patch("lyra_ocr.lyric.build.align_cues_with_audio") as mock_align:
+        mock_extract.return_value = np.zeros(16000, dtype=np.float32)
+        def _add_words(cues, audio):
+            for c in cues:
+                c.words = [
+                    {"word": "Hello", "start_ms": 1000, "end_ms": 1800},
+                    {"word": "world", "start_ms": 1900, "end_ms": 3000},
+                ]
+            return cues
+        mock_align.side_effect = _add_words
+        build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            video_path=str(v_file),
+            force=True,
+            enhanced=True,
+            reference_config=ReferenceConfig(enable_audio_align=True),
+        )
+
+    content = out_lrc.read_text(encoding="utf-8")
+    assert "<00:01.00>Hello <00:01.90>world" in content
 

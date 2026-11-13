@@ -87,12 +87,14 @@ def build_lrc_from_artifacts(
     no_caption_fallback: bool = False,
     reference_config: ReferenceConfig | None = None,
     source_url: str | None = None,
+    enhanced: bool | None = None,
 ) -> dict[str, Any]:
     art_path = Path(artifacts_dir)
     out_path = Path(out_lrc)
 
     correction_cfg = correction_config or CorrectionConfig(method=correct_method)
     reference_cfg = reference_config or ReferenceConfig()
+    eff_enhanced = bool(reference_cfg.enhanced_lrc) if enhanced is None else bool(enhanced)
 
     target_options = {
         "cache_version": BUILD_CACHE_VERSION,
@@ -102,6 +104,7 @@ def build_lrc_from_artifacts(
         "offset_ms": int(offset_ms),
         "title": title or "",
         "artist": artist or "",
+        "enhanced": eff_enhanced,
         # Gate/repair thresholds are part of the cache signature so changing a
         # default or passing a custom config invalidates cached cues.
         "correction_config": asdict(correction_cfg),
@@ -192,7 +195,14 @@ def build_lrc_from_artifacts(
 
     meta = manifest.get("metadata") if isinstance(manifest.get("metadata"), dict) else {}
     m_title = title if title is not None else (meta.get("title") or "")
-    m_artist = artist if artist is not None else (meta.get("channel") or "")
+    if artist is not None and str(artist).strip():
+        m_artist = str(artist).strip()
+    elif meta.get("artist") and str(meta.get("artist")).strip():
+        m_artist = str(meta.get("artist")).strip()
+    else:
+        # Do not blindly copy channel into artist unless parsed from "Artist - Title" in video title
+        parsed_q = parse_reference_query(m_title, channel="")
+        m_artist = parsed_q.artist if parsed_q.artist else ""
 
     metadata = LrcMetadata(
         title=m_title or "",
@@ -431,7 +441,7 @@ def build_lrc_from_artifacts(
     if not n_reference_matches and not n_reference_gap_fills:
         reference_source = ""
 
-    export_res = write_lrc_layers(out_path, cues, metadata)
+    export_res = write_lrc_layers(out_path, cues, metadata, enhanced=eff_enhanced)
     layers_meta = export_res.get("layers", [])
     primary_lang = export_res.get("primary", {}).get("lang", "")
 
