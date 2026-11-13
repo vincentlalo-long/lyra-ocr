@@ -764,4 +764,86 @@ def test_repair_romaji_cue_text_unmerges_glued_ocr_token():
     assert repair_romaji_cue_text("Shinjitakara", "shinjita kara", ocr_confidence=0.80) == "Shinjita kara"
 
 
+def test_modularized_reference_submodules_and_facade():
+    """Verify clean submodules exist, facade re-exports everything, and line counts meet limits."""
+    # 1. Direct submodule imports
+    from lyra_ocr.lyric import ref_align, ref_models, ref_providers, reference
+
+    # Models / Parsers / Cache
+    assert hasattr(ref_models, "ReferenceLine")
+    assert hasattr(ref_models, "ReferenceBundle")
+    assert hasattr(ref_models, "ReferenceQuery")
+    assert hasattr(ref_models, "AlignmentResult")
+    assert hasattr(ref_models, "GapFillResult")
+    assert hasattr(ref_models, "MatchStats")
+    assert hasattr(ref_models, "reference_cache_dir")
+    assert hasattr(ref_models, "reference_cache_key")
+    assert hasattr(ref_models, "save_cached_reference_bundle")
+    assert hasattr(ref_models, "load_cached_reference_bundle")
+    assert hasattr(ref_models, "parse_reference_query")
+    assert hasattr(ref_models, "parse_reference_text")
+    assert hasattr(ref_models, "parse_lyrics_text")
+    assert hasattr(ref_models, "load_reference_file")
+
+    # Providers
+    assert hasattr(ref_providers, "fetch_reference_bundle")
+    assert hasattr(ref_providers, "fetch_reference_lines")
+    assert hasattr(ref_providers, "romanize_bundle")
+    assert hasattr(ref_providers, "select_reference_lines")
+
+    # Alignment / Similarity
+    assert hasattr(ref_align, "line_similarity")
+    assert hasattr(ref_align, "line_match_stats")
+    assert hasattr(ref_align, "best_reference_similarity")
+    assert hasattr(ref_align, "repair_romaji_cue_text")
+    assert hasattr(ref_align, "align_reference")
+    assert hasattr(ref_align, "reconcile_reference_overlaps")
+    assert hasattr(ref_align, "fill_reference_gaps")
+
+    # Facade re-exports all expected public / internal symbols
+    expected_facade_symbols = [
+        "AlignmentResult",
+        "GapFillResult",
+        "MatchStats",
+        "ReferenceBundle",
+        "ReferenceLine",
+        "ReferenceQuery",
+        "reference_cache_dir",
+        "reference_cache_key",
+        "save_cached_reference_bundle",
+        "load_cached_reference_bundle",
+        "parse_reference_query",
+        "parse_reference_text",
+        "parse_lyrics_text",
+        "load_reference_file",
+        "fetch_reference_bundle",
+        "fetch_reference_lines",
+        "romanize_bundle",
+        "select_reference_lines",
+        "line_similarity",
+        "line_match_stats",
+        "best_reference_similarity",
+        "repair_romaji_cue_text",
+        "align_reference",
+        "reconcile_reference_overlaps",
+        "fill_reference_gaps",
+        "_phonetic_skeleton",
+    ]
+    for sym in expected_facade_symbols:
+        assert hasattr(reference, sym), f"Facade missing {sym}"
+
+    # Line count constraints
+    pkg_dir = Path(reference.__file__).parent
+    ref_lines = len((pkg_dir / "reference.py").read_text(encoding="utf-8").splitlines())
+    models_lines = len((pkg_dir / "ref_models.py").read_text(encoding="utf-8").splitlines())
+    providers_lines = len((pkg_dir / "ref_providers.py").read_text(encoding="utf-8").splitlines())
+    align_lines = len((pkg_dir / "ref_align.py").read_text(encoding="utf-8").splitlines())
+
+    assert ref_lines < 120, f"reference.py has {ref_lines} lines (must be < 120)"
+    assert models_lines < 650, f"ref_models.py has {models_lines} lines (must be < 650)"
+    assert providers_lines < 650, f"ref_providers.py has {providers_lines} lines (must be < 650)"
+    assert align_lines < 650, f"ref_align.py has {align_lines} lines (must be < 650)"
+
+
+
 
