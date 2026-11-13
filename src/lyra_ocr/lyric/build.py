@@ -10,6 +10,7 @@ from typing import Any
 from lyra_ocr.audio import (
     align_cues_with_audio,
     asr_to_reference_bundle,
+    asr_vocal_gate_score,
     compute_vocal_activity_profile,
     extract_audio_16k,
     load_asr_transcript,
@@ -24,7 +25,7 @@ from lyra_ocr.lyric.grouping import (
     share_solitary_cross_layer_cues,
 )
 
-from lyra_ocr.lyric.models import CorrectionConfig, LrcMetadata, ReferenceConfig
+from lyra_ocr.lyric.models import CorrectionConfig, LrcMetadata, LyricCue, ReferenceConfig
 from lyra_ocr.lyric.reference import (
     ReferenceBundle,
     ReferenceLine,
@@ -314,6 +315,34 @@ def build_lrc_from_artifacts(
                 asr_transcript = transcribe_audio_words(audio_16k, cache_dir=art_path)
             except Exception as exc:
                 logger.warning("Word-level ASR failed for %s: %s", eff_video_path, exc)
+
+    if cues and asr_transcript is not None and asr_transcript.segments:
+        gated_cues: list[LyricCue] = []
+        for cue in cues:
+            if cue.decision == "human_accept":
+                gated_cues.append(cue)
+                continue
+            vscore = asr_vocal_gate_score(cue, asr_transcript)
+            eff_conf = cue.ocr_confidence if cue.ocr_confidence is not None else cue.confidence
+            if vscore < 0.20:
+                if "asr_unvoiced" not in cue.qa_flags:
+                    cue.qa_flags = list(cue.qa_flags) + ["asr_unvoiced"]
+                if eff_conf < 0.65:
+                    if include_review:
+                        cue.review_required = True
+                        gated_cues.append(cue)
+                    else:
+                        skipped.append({
+                            "track_id": cue.source_track_ids[0] if cue.source_track_ids else None,
+                            "segment_id": cue.source_segment_ids[0] if cue.source_segment_ids else None,
+                            "reason": "asr_unvoiced",
+                            "label": "lyric",
+                            "decision": cue.decision,
+                            "text": cue.text,
+                        })
+                    continue
+            gated_cues.append(cue)
+        cues = gated_cues
 
     # Optional reference lyrics: repair cue text and fill reference gaps without touching OCR timing.
     n_reference_matches = 0

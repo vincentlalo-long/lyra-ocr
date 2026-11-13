@@ -757,3 +757,74 @@ def test_build_lrc_per_layer_reference_alignment_protects_romaji(tmp_path: Path)
     assert gap_cue["lang"] == "ja"
 
 
+def test_build_lrc_gates_low_conf_unvoiced_overlay_using_asr_vocal_gate(tmp_path: Path):
+    artifacts_dir = tmp_path / "art_asr_gate"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "vid_asr_gate",
+        "probe": {"duration": 30.0},
+    }
+    tracks = {
+        "total_tracks": 2,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.90,
+                "features": {"dominant_text": "hello singing world", "mean_centroid": [0.5, 0.8]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "hello singing world", "confidence": 0.90}
+                ],
+            },
+            {
+                "track_id": 2,
+                "start_ms": 20000,
+                "end_ms": 23000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.58,
+                "features": {"dominant_text": "subscribe channel watermark", "mean_centroid": [0.5, 0.8]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 20000, "end_ms": 23000, "text": "subscribe channel watermark", "confidence": 0.58}
+                ],
+            },
+        ],
+    }
+    asr_payload = {
+        "language": "en",
+        "model_size": "small",
+        "segments": [
+            {
+                "text": "hello singing world",
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "language": "en",
+                "words": [
+                    {"word": "hello", "start_ms": 1000, "end_ms": 1600, "probability": 0.95},
+                    {"word": "singing", "start_ms": 1600, "end_ms": 2300, "probability": 0.95},
+                    {"word": "world", "start_ms": 2300, "end_ms": 3000, "probability": 0.95},
+                ],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+    (artifacts_dir / "asr_transcript.json").write_text(json.dumps(asr_payload), encoding="utf-8")
+
+    out_lrc = tmp_path / "asr_gate.lrc"
+    cfg = CorrectionConfig(method="dictionary", min_ocr_confidence=0.50)
+    res = build_lrc_from_artifacts(
+        artifacts_dir,
+        out_lrc,
+        include_review=False,
+        correction_config=cfg,
+        force=True,
+    )
+    assert res["n_cues"] == 1
+    assert any(s.get("reason") == "asr_unvoiced" for s in res["skipped"])
+
+
+

@@ -379,5 +379,23 @@ def test_share_solitary_cross_layer_cues_inherits_english_bridge():
     assert ja_inherited[0].end_ms == 34000
 
 
+def test_resolve_simultaneous_multiline_cues_does_not_absorb_sequential_under_long_banner():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    cues = [
+        LyricCue(start_ms=1000, end_ms=20000, text="Long background banner", layer_id=1, lang="en", y_center=0.90),
+        LyricCue(start_ms=1000, end_ms=4000, text="Line one", layer_id=1, lang="en", y_center=0.75),
+        LyricCue(start_ms=5000, end_ms=9000, text="Line two", layer_id=1, lang="en", y_center=0.75),
+        LyricCue(start_ms=10000, end_ms=14000, text="Line three", layer_id=1, lang="en", y_center=0.75),
+    ]
+    resolved = resolve_simultaneous_multiline_cues(cues)
+    by_text = {c.text: (c.start_ms, c.end_ms) for c in resolved}
+    assert by_text["Line one"] == (1000, 4000)
+    assert by_text["Line two"] == (5000, 9000)
+    assert by_text["Line three"] == (10000, 14000)
+    assert by_text["Long background banner"] == (1000, 20000)
+
+
+
 
 

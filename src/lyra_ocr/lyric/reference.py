@@ -609,7 +609,12 @@ def repair_romaji_cue_text(
                 ref_joined = "".join(ref_words[j1:j2])
                 sim = line_similarity(wo.lower(), ref_joined.lower())
                 if sim >= 0.55:
-                    out_tokens.append(_match_word_case(ref_joined, wo))
+                    cased_first = _match_word_case(ref_words[j1], wo)
+                    rest = [
+                        _match_word_case(w, wo) if wo.isupper() else w
+                        for w in ref_words[j1 + 1 : j2]
+                    ]
+                    out_tokens.extend([cased_first, *rest])
                 elif is_asr and (ocr_confidence is None or ocr_confidence < 0.85):
                     out_tokens.extend(ref_words[j1:j2])
                 else:

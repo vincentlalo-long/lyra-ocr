@@ -370,14 +370,43 @@ def _repair_token(
 _ROMAN_CONJ_RN_RE = re.compile(r"(?<![A-Za-z])([Rr])([Nn])(?=[aeiouAEIOU])|([Rr])([Nn])(?=[aeiouAEIOU])")
 
 
+_ROMAJI_PROTECTED_ENGLISH = frozenset({
+    "clear",
+    "clean",
+    "close",
+    "closed",
+    "cloud",
+    "clouds",
+    "morning",
+    "learning",
+    "journey",
+    "burn",
+    "burning",
+    "born",
+    "return",
+    "corner",
+    "eternal",
+    "eternity",
+})
+
+
 def repair_romaji_confusables(text: str) -> str:
     """Repair reference-free Hepburn Romaji OCR character confusables inside words."""
     if not text or not text.strip():
         return text
 
+    lex = _load_lexicon()
+    eng_words = lex.words if lex and lex.words else {}
+
     def _fix_word(match: re.Match[str]) -> str:
         tok = match.group(0)
         if not any(ch.isalpha() for ch in tok):
+            return tok
+
+        lower_tok = tok.lower()
+        if lower_tok in _ROMAJI_PROTECTED_ENGLISH or (
+            lower_tok.isalpha() and len(lower_tok) >= 3 and eng_words.get(lower_tok, 0) >= 50000
+        ):
             return tok
 
         # Protect all-caps alphanumeric codes (e.g. '00A01', 'OP1', 'ICBM')

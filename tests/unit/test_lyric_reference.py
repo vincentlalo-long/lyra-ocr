@@ -739,3 +739,17 @@ def test_repair_romaji_cue_text_preserves_ateji_for_high_confidence_ocr():
     assert repaired_asr == "aoi uchuu e"
 
 
+def test_repair_romaji_cue_text_unmerges_glued_ocr_token():
+    from lyra_ocr.lyric.reference import repair_romaji_cue_text
+
+    repaired = repair_romaji_cue_text(
+        "kimi wo shinjitakara",
+        "kimi wo shinjita kara",
+        ocr_confidence=0.80,
+        is_asr=False,
+    )
+    assert repaired == "kimi wo shinjita kara"
+    assert repair_romaji_cue_text("Shinjitakara", "shinjita kara", ocr_confidence=0.80) == "Shinjita kara"
+
+
+

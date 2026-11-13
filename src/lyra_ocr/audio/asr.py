@@ -238,13 +238,28 @@ def transcribe_audio_words(
     return transcript
 
 
+_kakasi_instance: Any | None = None
+
+
+def _get_kakasi() -> Any | None:
+    """Return a cached pykakasi instance or None if pykakasi is unavailable."""
+    global _kakasi_instance
+    if _kakasi_instance is None:
+        try:
+            import pykakasi
+
+            _kakasi_instance = pykakasi.kakasi()
+        except ImportError:
+            return None
+    return _kakasi_instance
+
+
 def _romanize_ja_text(text: str) -> str:
     """Convert Japanese Kanji/Kana text to Hepburn Romaji with particle normalization."""
     if not text or not text.strip():
         return ""
-    try:
-        import pykakasi
-    except ImportError:
+    kks = _get_kakasi()
+    if kks is None:
         return text
 
     try:
@@ -253,7 +268,6 @@ def _romanize_ja_text(text: str) -> str:
     except ImportError:
         text_norm = text
 
-    kks = pykakasi.kakasi()
     items = kks.convert(text_norm)
     tokens: list[str] = []
     for idx, item in enumerate(items):

@@ -12,3 +12,8 @@ def test_repair_romaji_confusables_fixes_rn_vv_cl_and_digits():
 def test_repair_romaji_confusables_preserves_standalone_numbers_and_normal_words():
     assert repair_romaji_confusables("Track 01 and 1000 dreams") == "Track 01 and 1000 dreams"
     assert repair_romaji_confusables("senbonzakura yoru ni magire") == "senbonzakura yoru ni magire"
+
+
+def test_repair_romaji_confusables_preserves_english_loanwords():
+    out = repair_romaji_confusables("clear sky in the morning close your eyes and rnirai")
+    assert out == "clear sky in the morning close your eyes and mirai"

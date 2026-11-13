@@ -292,8 +292,9 @@ def resolve_simultaneous_multiline_cues(
                 c_dur = max(1, cue.end_ms - cue.start_ms)
                 g_dur = max(1, g_end - g_start)
                 ov = min(cue.end_ms, g_end) - max(cue.start_ms, g_start)
-                ov_ratio = ov / min(c_dur, g_dur) if ov > 0 else 0.0
-                if abs(cue.start_ms - g_start) <= 300 or ov_ratio >= 0.65:
+                union = g_dur + c_dur - ov if ov > 0 else 0
+                iou = ov / union if union > 0 else 0.0
+                if abs(cue.start_ms - g_start) <= 600 and iou >= 0.60:
                     grp.append(cue)
                     placed = True
                     break
