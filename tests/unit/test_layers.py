@@ -201,3 +201,68 @@ def test_discover_layers_rejects_hud_code_tracks():
     assert len(layers) == 1
     assert layers[0].kind == "overlay"
 
+
+def test_discover_layers_rescues_companion_multiline_band():
+    tracks = []
+    main_lines = [
+        "Won't you take me home tonight",
+        "Give me wings so I can fly",
+        "Castle floating in the sky",
+        "Higher than the morning sun",
+        "Where the silver rivers run",
+        "Take me up above the stars",
+        "Lighting up the fading dark",
+        "Running out of precious time",
+        "Keep the distant dream alive",
+        "Never look behind the veil",
+        "Through the storm we set our sail",
+        "Echoes calling out my name",
+        "Dancing in the golden flame",
+        "Waiting for the dawn to break",
+        "Every promise that we make",
+    ]
+    # Main lyric band: 15 distinct lines at cy=0.81
+    for i, txt in enumerate(main_lines):
+        tracks.append(
+            _make_track(
+                track_id=i + 1,
+                start_ms=i * 3000 + 1000,
+                end_ms=i * 3000 + 3500,
+                text=txt,
+                cx=0.50,
+                cy=0.81,
+            )
+        )
+    # Companion 2nd-line wrap band: only 2 tracks at cy=0.88 (adjacent: |0.88 - 0.81| = 0.07)
+    # overlapping tracks 1 and 5 temporally.
+    tracks.append(
+        _make_track(
+            track_id=101,
+            start_ms=1000,
+            end_ms=3500,
+            text="wrapped second part one",
+            cx=0.50,
+            cy=0.88,
+        )
+    )
+    tracks.append(
+        _make_track(
+            track_id=102,
+            start_ms=4 * 3000 + 1000,
+            end_ms=4 * 3000 + 3500,
+            text="wrapped second part two",
+            cx=0.50,
+            cy=0.88,
+        )
+    )
+
+    layers = discover_layers(tracks)
+    companion_layers = [l for l in layers if 101 in l.track_ids]
+    assert len(companion_layers) == 1
+    assert companion_layers[0].kind == "lyric"
+    assert companion_layers[0].lang == "en"
+    for t in tracks:
+        if t.track_id in (101, 102):
+            assert t.features.get("layer_kind") == "lyric"
+
+

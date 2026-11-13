@@ -162,6 +162,7 @@ def consolidate_language_layers(
     cues: list[LyricCue],
     *,
     overlap_threshold: float = 0.25,
+    asr_transcript: Any = None,
 ) -> list[LyricCue]:
     """Consolidate layers so that each distinct language has at most ONE layer.
 
@@ -169,7 +170,8 @@ def consolidate_language_layers(
     - Then for remaining layers of the same language:
       - If they are non-overlapping/complementary (e.g. ad-libs, alternating lines),
         merge the secondary layer into the primary layer.
-      - If they overlap significantly, keep the dominant layer and filter noisy/duplicate cues.
+      - If they overlap significantly, keep vertically stacked companion bands or drop noisy overlays.
+    - Resolves simultaneous multi-line cues before returning.
     """
     if not cues:
         return []
@@ -182,7 +184,7 @@ def consolidate_language_layers(
             by_layer[c.layer_id].append(c)
 
     if len(by_layer) < 2:
-        return cues
+        return resolve_simultaneous_multiline_cues(cues, asr_transcript=asr_transcript)
 
     # Group layers by voted language
     layers_by_lang: dict[str, list[Any]] = defaultdict(list)
@@ -223,12 +225,21 @@ def consolidate_language_layers(
                     sc.lang = lang
                 dom_cues.extend(sec_cues)
             else:
-                # Overlapping layer: only keep non-duplicate cues, or drop if trivial/noisy
+                sec_y = sum(c.y_center for c in sec_cues) / len(sec_cues)
+                dom_y = sum(c.y_center for c in dom_cues) / len(dom_cues)
+                sec_x = sum(c.x_center for c in sec_cues) / len(sec_cues)
+                is_companion_band = (
+                    0.02 <= abs(sec_y - dom_y) <= 0.18 and 0.28 <= sec_x <= 0.72
+                )
+
+                # Overlapping layer: rescue companion stacked bands or filter noisy duplicates
                 for sc in sec_cues:
                     norm = _normalize_text(sc.text)
                     if norm and _text_in(dom_texts, norm):
                         dropped_cues.add(id(sc))
-                    elif len(sec_cues) < 0.35 * len(dom_cues) or len(sec_cues) < 10:
+                    elif (not is_companion_band) and (
+                        len(sec_cues) < 0.35 * len(dom_cues) or len(sec_cues) < 10
+                    ):
                         dropped_cues.add(id(sc))
                     else:
                         sc.layer_id = dominant_lid
@@ -239,11 +250,152 @@ def consolidate_language_layers(
     if dropped_cues:
         cues = [c for c in cues if id(c) not in dropped_cues]
 
+    cues = resolve_simultaneous_multiline_cues(cues, asr_transcript=asr_transcript)
     cues.sort(key=lambda c: (c.start_ms, c.end_ms))
     return cues
 
 
-def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
+def _is_cjk_heavy(text: str) -> bool:
+    no_space = re.sub(r"\s+", "", text)
+    if not no_space:
+        return False
+    cjk_chars = len(re.findall(r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]", no_space))
+    return cjk_chars > 0
+
+
+def resolve_simultaneous_multiline_cues(
+    cues: list[LyricCue],
+    *,
+    asr_transcript: Any = None,
+    short_wrap_max_dur_ms: int = 4000,
+    short_wrap_max_words: int = 12,
+    min_stagger_gap_ms: int = 350,
+) -> list[LyricCue]:
+    """Resolve simultaneous multi-line cues inside each layer via wrap-merging or de-colliding."""
+    if not cues:
+        return []
+
+    by_layer: dict[Any, list[LyricCue]] = defaultdict(list)
+    for cue in cues:
+        by_layer[cue.layer_id].append(cue)
+
+    resolved: list[LyricCue] = []
+
+    for _lid, lcues in by_layer.items():
+        ordered = sorted(lcues, key=lambda c: (c.start_ms, c.y_center, c.end_ms))
+        groups: list[list[LyricCue]] = []
+        for cue in ordered:
+            placed = False
+            for grp in groups:
+                g_start = min(c.start_ms for c in grp)
+                g_end = max(c.end_ms for c in grp)
+                c_dur = max(1, cue.end_ms - cue.start_ms)
+                g_dur = max(1, g_end - g_start)
+                ov = min(cue.end_ms, g_end) - max(cue.start_ms, g_start)
+                ov_ratio = ov / min(c_dur, g_dur) if ov > 0 else 0.0
+                if abs(cue.start_ms - g_start) <= 300 or ov_ratio >= 0.65:
+                    grp.append(cue)
+                    placed = True
+                    break
+            if not placed:
+                groups.append([cue])
+
+        for grp in groups:
+            if len(grp) < 2:
+                resolved.extend(grp)
+                continue
+
+            grp.sort(key=lambda c: (c.y_center, c.start_ms))
+            t_start = min(c.start_ms for c in grp)
+            t_end = max(c.end_ms for c in grp)
+            delta_t = max(0, t_end - t_start)
+
+            # Branch 1: Short 2-line wrapped sentence in adjacent vertical bands
+            can_merge_wrap = False
+            if len(grp) == 2 and delta_t <= short_wrap_max_dur_ms:
+                l1, l2 = grp[0], grp[1]
+                y_diff = abs(l2.y_center - l1.y_center)
+                if 0.015 <= y_diff <= 0.18:
+                    combined = f"{l1.text.strip()} {l2.text.strip()}"
+                    if l1.lang in ("ja", "zh", "ko") or _is_cjk_heavy(combined):
+                        can_merge_wrap = len(re.sub(r"\s+", "", combined)) <= 22
+                    else:
+                        can_merge_wrap = len(combined.split()) <= short_wrap_max_words
+
+            if can_merge_wrap:
+                l1, l2 = grp[0], grp[1]
+                lang = l1.lang if l1.lang and l1.lang != "und" else l2.lang
+                sep = "" if lang in ("ja", "zh", "ko") else " "
+                merged_text = f"{l1.text.strip()}{sep}{l2.text.strip()}"
+                raw_1 = (l1.raw_text or l1.text).strip()
+                raw_2 = (l2.raw_text or l2.text).strip()
+                merged_raw = f"{raw_1}{sep}{raw_2}"
+                tids = sorted(set(l1.source_track_ids + l2.source_track_ids), key=_track_sort_key)
+                sids = sorted(set(l1.source_segment_ids + l2.source_segment_ids), key=_track_sort_key)
+                qa = list(dict.fromkeys(list(l1.qa_flags) + list(l2.qa_flags) + ["multiline_merged"]))
+                resolved.append(
+                    LyricCue(
+                        start_ms=t_start,
+                        end_ms=t_end,
+                        text=merged_text,
+                        raw_text=merged_raw,
+                        source_track_ids=tids,
+                        source_segment_ids=sids,
+                        confidence=round((l1.confidence + l2.confidence) / 2.0, 4),
+                        decision=l1.decision,
+                        review_required=l1.review_required or l2.review_required,
+                        bbox=l1.bbox,
+                        x_center=round((l1.x_center + l2.x_center) / 2.0, 4),
+                        y_center=round((l1.y_center + l2.y_center) / 2.0, 4),
+                        correction=l1.correction,
+                        qa_flags=qa,
+                        ocr_confidence=l1.ocr_confidence,
+                        text_quality=l1.text_quality,
+                        layer_id=l1.layer_id,
+                        lang=lang,
+                    )
+                )
+                continue
+
+            # Branch 2: Multi-line stanza / simultaneous card — de-collide timestamps
+            asr_ok = False
+            if asr_transcript is not None:
+                try:
+                    from lyra_ocr.audio.asr import align_multiline_cues_with_asr
+
+                    asr_ok = bool(align_multiline_cues_with_asr(grp, asr_transcript))
+                except ImportError:
+                    asr_ok = False
+
+            if not asr_ok:
+                weights = [max(1, len(re.sub(r"\s+", "", c.text))) for c in grp]
+                total_w = sum(weights)
+                delta_eff = max(delta_t, len(grp) * min_stagger_gap_ms)
+                cum_w = 0
+                for cue, w in zip(grp, weights):
+                    cue.start_ms = t_start + int((delta_eff * cum_w) // total_w)
+                    cum_w += w
+                    cue.end_ms = t_start + int((delta_eff * cum_w) // total_w)
+                    if "multiline_staggered" not in cue.qa_flags:
+                        cue.qa_flags = list(cue.qa_flags) + ["multiline_staggered"]
+
+            resolved.extend(grp)
+
+    resolved.sort(
+        key=lambda c: (
+            c.start_ms,
+            c.y_center,
+            _track_sort_key(c.source_track_ids[0]) if c.source_track_ids else (0, -1),
+        )
+    )
+    return resolved
+
+
+def dedupe_and_group(
+    cues: list[LyricCue],
+    *,
+    asr_transcript: Any = None,
+) -> list[LyricCue]:
     if not cues:
         return []
 
@@ -320,9 +472,10 @@ def dedupe_and_group(cues: list[LyricCue]) -> list[LyricCue]:
         else:
             merged.append(cue)
 
-    # 3. Cap end_ms at the next cue's start_ms within the same layer
-    from collections import defaultdict
+    # 3. Resolve simultaneous multi-line cues before enforcing non-overlap cap
+    merged = resolve_simultaneous_multiline_cues(merged, asr_transcript=asr_transcript)
 
+    # 4. Cap end_ms at the next cue's start_ms within the same layer
     by_layer: dict[Any, list[LyricCue]] = defaultdict(list)
     for c in merged:
         by_layer[c.layer_id].append(c)

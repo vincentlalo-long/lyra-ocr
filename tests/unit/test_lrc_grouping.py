@@ -262,3 +262,82 @@ def test_consolidate_language_layers_overlapping_noise_filtered():
     assert {c.layer_id for c in result} == {1}
 
 
+def test_consolidate_keeps_companion_multiline_band():
+    dom = [
+        LyricCue(
+            start_ms=i * 3000 + 1000,
+            end_ms=i * 3000 + 3500,
+            text=f"Dominant first line number {i} extra words here",
+            layer_id=1,
+            lang="en",
+            x_center=0.50,
+            y_center=0.81,
+        )
+        for i in range(15)
+    ]
+    companion = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=3500,
+            text="and companion second line continues here with more words",
+            layer_id=2,
+            lang="en",
+            x_center=0.50,
+            y_center=0.88,
+        ),
+        LyricCue(
+            start_ms=4000,
+            end_ms=6500,
+            text="another companion second line that must survive consolidation",
+            layer_id=2,
+            lang="en",
+            x_center=0.50,
+            y_center=0.88,
+        ),
+    ]
+    result = consolidate_language_layers(dom + companion)
+    texts = [c.text for c in result]
+    assert {c.layer_id for c in result} == {1}
+    assert "and companion second line continues here with more words" in texts
+    assert "another companion second line that must survive consolidation" in texts
+    assert len(result) == 17
+
+
+def test_resolve_simultaneous_multiline_cues_merges_short_two_line_wrap():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    cues = [
+        LyricCue(start_ms=1000, end_ms=3200, text="In the castle", y_center=0.81, layer_id=1, lang="en", source_track_ids=[1]),
+        LyricCue(start_ms=1000, end_ms=3200, text="of the sky", y_center=0.88, layer_id=1, lang="en", source_track_ids=[2]),
+    ]
+    resolved = resolve_simultaneous_multiline_cues(cues)
+    assert len(resolved) == 1
+    assert resolved[0].text == "In the castle of the sky"
+    assert resolved[0].start_ms == 1000
+    assert resolved[0].end_ms == 3200
+    assert resolved[0].source_track_ids == [1, 2]
+
+
+def test_resolve_simultaneous_multiline_cues_staggers_three_line_stanza():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    cues = [
+        LyricCue(start_ms=10000, end_ms=19000, text="First stanza line here", y_center=0.72, layer_id=1, lang="en", source_track_ids=[1]),
+        LyricCue(start_ms=10000, end_ms=19000, text="Second stanza line here", y_center=0.80, layer_id=1, lang="en", source_track_ids=[2]),
+        LyricCue(start_ms=10000, end_ms=19000, text="Third stanza line here", y_center=0.88, layer_id=1, lang="en", source_track_ids=[3]),
+    ]
+    resolved = resolve_simultaneous_multiline_cues(cues)
+    assert len(resolved) == 3
+    assert [c.text for c in resolved] == [
+        "First stanza line here",
+        "Second stanza line here",
+        "Third stanza line here",
+    ]
+    starts = [c.start_ms for c in resolved]
+    assert starts[0] == 10000
+    assert starts[0] < starts[1] < starts[2]
+    assert len(set(starts)) == 3
+    assert all("multiline_staggered" in c.qa_flags for c in resolved)
+
+
+
