@@ -15,13 +15,13 @@ _ROMAJI_TOKEN_RE = re.compile(
 
 # Common short English words that coincidentally match Japanese mora structure
 _ENGLISH_STOPWORDS = {
-    "a", "i", "to", "do", "so", "no", "go", "me", "he", "be", "we",
+    "a", "i", "to", "do", "so", "no", "go", "me", "he", "be", "we", "you",
     "at", "in", "on", "as", "is", "it", "or", "an", "am", "us", "by", "my",
     "one", "more", "time", "take", "home", "make", "like", "life", "love",
     "come", "some", "same", "name", "game", "side", "ride", "hide", "wide",
     "wake", "face", "fade", "late", "gate", "hate", "fate", "date", "rate",
     "hope", "rope", "note", "vote", "rise", "wise", "rule", "pure", "sure",
-    "cure", "fire", "wire", "tire", "care", "share", "dare", "bare", "rare",
+    "cure", "fire", "wire", "tire", "care", "share", "bare", "rare",
     "mine", "fine", "line", "shine", "wine", "nine", "live", "give", "save",
     "wave", "gave", "have", "here", "there", "where", "were", "gone", "done",
     "none", "bone", "tone", "zone", "alone", "before", "above", "alive",
@@ -35,7 +35,7 @@ _ENGLISH_SILENT_E_RE = re.compile(r"^[bcdfghjklmnpqrstvwxyz][aeiou][bcdfghjklmnp
 
 # Genuine common 2-mora Romaji words excluded from silent-e detection
 _GENUINE_2MORA_ROMAJI_E = {
-    "kaze", "koe", "mune", "yume", "ame", "hane", "kage", "tane", "fune",
+    "kaze", "koe", "mune", "yume", "ame", "hane", "kage", "tane", "fune", "tame",
     "sore", "kore", "are", "dare", "naze", "toki", "sora", "kimi", "boku",
     "hito", "machi", "hoshi", "hana", "uta", "ima",
 }
@@ -46,8 +46,9 @@ _ROMAJI_PARTICLES_AND_FUNCTION = {
     "ze", "zo", "sa", "kara", "made", "dake", "demo", "nara", "kedo", "tachi",
     "koto", "mono", "toki", "sora", "kimi", "boku", "watashi", "kokoro",
     "namida", "hikari", "sekai", "mirai", "ashita", "yume", "kaze", "uta",
-    "koi", "ai", "sono", "kono", "ano", "doko", "nani", "itsu",
+    "koi", "ai", "sono", "kono", "ano", "doko", "nani", "itsu", "dare", "tame",
 }
+
 
 # Japanese morphological substrings
 _ROMAJI_MORPHOLOGICAL_SUBSTRINGS = (

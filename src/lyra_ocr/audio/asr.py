@@ -575,28 +575,43 @@ def asr_has_new_prefix_onset(
 
     words_in_win.sort(key=lambda w: (w.start_ms, w.end_ms))
 
-    # Candidate ASR prefixes from the first 1-2 words in the onset window
-    w1_clean = _clean_match_str(words_in_win[0].word)
-    w2_clean = _clean_match_str(words_in_win[1].word) if len(words_in_win) >= 2 else ""
-
-    asr_candidates: list[str] = []
-    if w1_clean:
-        asr_candidates.append(w1_clean)
-    if w1_clean and w2_clean:
-        asr_candidates.append(f"{w1_clean} {w2_clean}")
-        if _CJK_RE.search(w1_clean) or _CJK_RE.search(w2_clean):
-            asr_candidates.append(f"{w1_clean}{w2_clean}")
-
-    if not asr_candidates:
-        return False
-
     cue_clean = _clean_match_str(cue_text)
     if not cue_clean:
         return False
 
-    cue_prefixes: list[str] = []
     is_cjk = bool(_CJK_RE.search(cue_clean))
+
+    # Candidate ASR prefixes from consecutive 1-2 words starting at each index in onset window
+    asr_candidates: list[str] = []
+    for k in range(len(words_in_win)):
+        wk_clean = _clean_match_str(words_in_win[k].word)
+        if wk_clean:
+            asr_candidates.append(wk_clean)
+        if k + 1 < len(words_in_win):
+            wk1_clean = _clean_match_str(words_in_win[k + 1].word)
+            if wk_clean and wk1_clean:
+                asr_candidates.append(f"{wk_clean} {wk1_clean}")
+                if is_cjk or _CJK_RE.search(wk_clean) or _CJK_RE.search(wk1_clean):
+                    asr_candidates.append(f"{wk_clean}{wk1_clean}")
+        if is_cjk and k + 2 < len(words_in_win):
+            wk1_clean = _clean_match_str(words_in_win[k + 1].word)
+            wk2_clean = _clean_match_str(words_in_win[k + 2].word)
+            if wk_clean and wk1_clean and wk2_clean:
+                asr_candidates.append(f"{wk_clean}{wk1_clean}{wk2_clean}")
+
     if is_cjk:
+        joined_cjk = "".join(_clean_match_str(w.word) for w in words_in_win if _CJK_RE.search(w.word))
+        if len(joined_cjk) >= 3:
+            for sz in (3, 4):
+                for i in range(len(joined_cjk) - sz + 1):
+                    asr_candidates.append(joined_cjk[i : i + sz])
+
+    if not asr_candidates:
+        return False
+
+    cue_prefixes: list[str] = []
+    if is_cjk:
+
         cjk_chars = re.sub(r"\s+", "", cue_clean)
         if len(cjk_chars) >= 4:
             cue_prefixes.append(cjk_chars[:4])

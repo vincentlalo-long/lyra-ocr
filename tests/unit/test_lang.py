@@ -91,3 +91,11 @@ def test_detect_line_lang_romaji_positive_indicators():
     assert detect_line_lang("sono kodou wa toki wo koete") == "ja-Latn"
 
 
+def test_dare_romaji_and_english():
+    # Japanese Romaji phrases containing "dare" (誰)
+    assert detect_line_lang("dare ga tame ni") == "ja-Latn"
+    assert detect_line_lang("dare mo") == "ja-Latn"
+    assert romaji_score("dare da") >= 0.5
+    # English phrase containing "dare"
+    assert detect_line_lang("I dare you") == "en"
+

@@ -56,6 +56,30 @@ def _layer_lang(cues: list[LyricCue]) -> str:
     return counts.most_common(1)[0][0] if counts else "und"
 
 
+def _merge_cue_words(
+    words_a: list[dict[str, Any]] | None,
+    words_b: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    """Merge word timing dictionaries, deduplicating identical spans and sorting chronologically."""
+    if not words_a and not words_b:
+        return []
+    if not words_a:
+        merged = [dict(w) for w in (words_b or [])]
+    elif not words_b:
+        merged = [dict(w) for w in (words_a or [])]
+    else:
+        merged = [dict(w) for w in words_a]
+        existing_spans = {(w.get("start_ms"), w.get("end_ms"), w.get("word")) for w in merged}
+        for cw in words_b:
+            span_key = (cw.get("start_ms"), cw.get("end_ms"), cw.get("word"))
+            if span_key not in existing_spans:
+                merged.append(dict(cw))
+                existing_spans.add(span_key)
+    merged.sort(key=lambda w: (w.get("start_ms", 0), w.get("end_ms", 0)))
+    return merged
+
+
+
 def merge_duplicate_layers(
     cues: list[LyricCue],
     *,
@@ -354,7 +378,7 @@ def resolve_simultaneous_multiline_cues(
                         text_quality=l1.text_quality,
                         layer_id=l1.layer_id,
                         lang=lang,
-                        words=list(l1.words or []) + list(l2.words or []),
+                        words=_merge_cue_words(l1.words, l2.words),
                     )
                 )
                 continue
@@ -512,18 +536,7 @@ def dedupe_and_group(
             if (not target.lang or target.lang == "und") and cue.lang and cue.lang != "und":
                 target.lang = cue.lang
             if cue.words:
-                if not target.words:
-                    target.words = list(cue.words)
-                else:
-                    combined_words = list(target.words)
-                    existing_spans = {(w.get("start_ms"), w.get("end_ms"), w.get("word")) for w in combined_words}
-                    for cw in cue.words:
-                        span_key = (cw.get("start_ms"), cw.get("end_ms"), cw.get("word"))
-                        if span_key not in existing_spans:
-                            combined_words.append(cw)
-                            existing_spans.add(span_key)
-                    combined_words.sort(key=lambda w: (w.get("start_ms", 0), w.get("end_ms", 0)))
-                    target.words = combined_words
+                target.words = _merge_cue_words(target.words, cue.words)
         else:
             merged.append(cue)
 

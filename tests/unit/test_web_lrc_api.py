@@ -234,6 +234,81 @@ def test_web_save_can_disable_enhanced_lrc(tmp_path: Path):
         lrc_text = out_lrc.read_text(encoding="utf-8")
         assert "<00:01.00>" not in lrc_text
         assert "[00:01.00]Hello world" in lrc_text
+
+        saved_cues2 = json.loads(out_cues.read_text(encoding="utf-8"))
+        assert saved_cues2.get("enhanced") is False
+        assert (saved_cues2.get("options") or {}).get("enhanced") is False
+
+        # Third save: omit enhanced completely, editing only text
+        save_payload3 = {
+            "out_lrc": str(out_lrc),
+            "cues": [
+                {
+                    "start_ms": 1000,
+                    "end_ms": 3000,
+                    "text": "Hello world THIRD",
+                    "words": [
+                        {"word": "Hello", "start_ms": 1000, "end_ms": 1800},
+                        {"word": "world", "start_ms": 1900, "end_ms": 2500},
+                        {"word": "THIRD", "start_ms": 2600, "end_ms": 3000},
+                    ],
+                }
+            ],
+            "metadata": {"title": "Test Title", "artist": "Test Artist"},
+        }
+        status3, resp3 = http_request(f"{base_url}/api/lrc/save", data=save_payload3, method="POST")
+        assert status3 == 200
+        assert resp3.get("ok") is True
+
+        # Verify enhanced tags remain disabled
+        lrc_text3 = out_lrc.read_text(encoding="utf-8")
+        assert "<00:01.00>" not in lrc_text3
+        assert "[00:01.00]Hello world THIRD" in lrc_text3
+        saved_cues3 = json.loads(out_cues.read_text(encoding="utf-8"))
+        assert saved_cues3.get("enhanced") is False
+        assert (saved_cues3.get("options") or {}).get("enhanced") is False
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_web_generate_lrc_forwards_enhanced_flag(tmp_path: Path):
+    from unittest.mock import patch
+
+    server = create_server("127.0.0.1", 0, workspace_root=tmp_path)
+    import threading
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+
+        art_dir = tmp_path / "artifacts"
+        art_dir.mkdir()
+        (art_dir / "manifest.json").write_text(json.dumps({"video_id": "v1"}), encoding="utf-8")
+        (art_dir / "tracks.json").write_text(json.dumps({"tracks": []}), encoding="utf-8")
+
+        with patch("lyra_ocr.web.lrc_api.build_lrc_from_artifacts") as mock_build:
+            mock_build.return_value = {
+                "ok": True,
+                "out_lrc": str(tmp_path / "artifacts" / "test.lrc"),
+                "out_cues_json": str(tmp_path / "artifacts" / "test.cues.json"),
+                "lrc_text": "[00:01.00]<00:01.00>word",
+                "cues": [],
+                "n_cues": 0,
+            }
+
+            gen_payload = {
+                "artifact_dir": str(art_dir),
+                "enhanced": True,
+            }
+            status, resp = http_request(f"{base_url}/api/lrc/generate", data=gen_payload, method="POST")
+            assert status == 200
+            assert resp.get("ok") is True
+            mock_build.assert_called_once()
+            _, kwargs = mock_build.call_args
+            assert kwargs.get("enhanced") is True
+
     finally:
         server.shutdown()
         server.server_close()

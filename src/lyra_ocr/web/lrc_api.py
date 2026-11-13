@@ -68,7 +68,9 @@ class LrcAPIMixin:
         force = bool(payload.get("force", False))
         use_reference = bool(payload.get("use_reference", False))
         no_caption_fallback = bool(payload.get("no_caption_fallback", False))
+        enhanced = bool(payload.get("enhanced", False))
         reference_path_str = str(payload.get("reference_path", "")).strip()
+
         source_url = str(payload.get("source_url", "")).strip()
 
         root = self._workspace_root()
@@ -108,6 +110,7 @@ class LrcAPIMixin:
                     use_online_reference=use_reference,
                     no_caption_fallback=no_caption_fallback,
                     source_url=source_url or None,
+                    enhanced=enhanced,
                 )
             # Case 2: Build from video path or URL
             elif video_path:
@@ -153,6 +156,7 @@ class LrcAPIMixin:
                     use_online_reference=use_reference,
                     no_caption_fallback=no_caption_fallback,
                     source_url=source_url or None,
+                    enhanced=enhanced,
                 )
             else:
                 self._send_error("Either 'video_path' or 'artifact_dir' is required", 400)
@@ -399,11 +403,10 @@ class LrcAPIMixin:
 
                 if "enhanced" in payload and payload["enhanced"] is not None:
                     enhanced = bool(payload["enhanced"])
+                elif existing_cues_data.get("enhanced") is not None:
+                    enhanced = bool(existing_cues_data["enhanced"])
                 else:
-                    enhanced = bool(
-                        existing_cues_data.get("enhanced")
-                        or (existing_cues_data.get("options") or {}).get("enhanced")
-                    )
+                    enhanced = bool((existing_cues_data.get("options") or {}).get("enhanced", False))
                 export_res = write_lrc_layers(out_lrc, cues, meta, enhanced=enhanced)
                 layers_meta = export_res.get("layers", [])
                 primary_lang = export_res.get("primary", {}).get("lang", "")
@@ -413,6 +416,7 @@ class LrcAPIMixin:
                 tracker = str(payload.get("tracker") or existing_cues_data.get("tracker", ""))
                 skipped = [s for s in (payload.get("skipped") or existing_cues_data.get("skipped") or []) if isinstance(s, dict)]
                 options = dict(payload.get("options") or existing_cues_data.get("options") or {})
+                options["enhanced"] = enhanced
 
                 write_cues_json(
                     cues_json_path,
@@ -426,7 +430,9 @@ class LrcAPIMixin:
                     options=options,
                     layers=layers_meta,
                     primary_lang=primary_lang,
+                    enhanced=enhanced,
                 )
+
 
                 # Re-apply a hand-edited raw layer text after regenerating the
                 # layer files, so the edit is not silently discarded.

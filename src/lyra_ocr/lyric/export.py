@@ -268,17 +268,28 @@ def write_cues_json(
     reference_warnings: list[str] | None = None,
     layers: list[dict[str, Any]] | None = None,
     primary_lang: str = "",
+    enhanced: bool | None = None,
 ) -> None:
     out = Path(out_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    eff_options = dict(options or {})
+    if enhanced is not None:
+        eff_options["enhanced"] = bool(enhanced)
+    elif "enhanced" in eff_options:
+        enhanced = bool(eff_options["enhanced"])
+    else:
+        enhanced = False
 
     data = {
         "video_id": video_id,
         "video_path": video_path,
         "duration_ms": duration_ms,
         "tracker": tracker,
-        "options": options or {},
+        "enhanced": bool(enhanced),
+        "options": eff_options,
         "has_labels": has_labels,
+
         "reference_source": reference_source,
         "n_reference_matches": n_reference_matches,
         "n_reference_gap_fills": n_reference_gap_fills,

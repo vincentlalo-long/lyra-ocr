@@ -333,7 +333,7 @@ def test_resolve_simultaneous_multiline_cues_merges_words():
             words=[
                 {"word": "In", "start_ms": 1000, "end_ms": 1400},
                 {"word": "the", "start_ms": 1400, "end_ms": 1800},
-                {"word": "castle", "start_ms": 1800, "end_ms": 3200},
+                {"word": "castle", "start_ms": 1800, "end_ms": 2000},
             ],
         ),
         LyricCue(
@@ -345,9 +345,9 @@ def test_resolve_simultaneous_multiline_cues_merges_words():
             lang="en",
             source_track_ids=[2],
             words=[
-                {"word": "of", "start_ms": 1000, "end_ms": 1500},
-                {"word": "the", "start_ms": 1500, "end_ms": 2000},
-                {"word": "sky", "start_ms": 2000, "end_ms": 3200},
+                {"word": "of", "start_ms": 2000, "end_ms": 2400},
+                {"word": "the", "start_ms": 2400, "end_ms": 2800},
+                {"word": "sky", "start_ms": 2800, "end_ms": 3200},
             ],
         ),
     ]
@@ -356,6 +356,48 @@ def test_resolve_simultaneous_multiline_cues_merges_words():
     assert resolved[0].text == "In the castle of the sky"
     assert len(resolved[0].words) == 6
     assert [w["word"] for w in resolved[0].words] == ["In", "the", "castle", "of", "the", "sky"]
+
+
+def test_resolve_simultaneous_multiline_cues_dedupes_and_sorts_words():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    cues = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=3200,
+            text="In the castle",
+            y_center=0.81,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[1],
+            words=[
+                {"word": "the", "start_ms": 1400, "end_ms": 1800},
+                {"word": "In", "start_ms": 1000, "end_ms": 1400},
+                {"word": "castle", "start_ms": 1800, "end_ms": 2200},
+                {"word": "overlap", "start_ms": 2200, "end_ms": 2500},
+            ],
+        ),
+        LyricCue(
+            start_ms=1000,
+            end_ms=3200,
+            text="of the sky",
+            y_center=0.88,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[2],
+            words=[
+                {"word": "overlap", "start_ms": 2200, "end_ms": 2500},
+                {"word": "sky", "start_ms": 2800, "end_ms": 3200},
+                {"word": "of", "start_ms": 2500, "end_ms": 2800},
+            ],
+        ),
+    ]
+    resolved = resolve_simultaneous_multiline_cues(cues)
+    assert len(resolved) == 1
+    assert len(resolved[0].words) == 6
+    assert [w["word"] for w in resolved[0].words] == ["In", "the", "castle", "overlap", "of", "sky"]
+    assert [w["start_ms"] for w in resolved[0].words] == [1000, 1400, 1800, 2200, 2500, 2800]
+
 
 
 def test_resolve_simultaneous_multiline_cues_staggers_three_line_stanza():
@@ -528,7 +570,57 @@ def test_dedupe_keeps_genuine_repeated_line_confirmed_by_asr():
     assert result[1].start_ms == 13000
 
 
+def test_dedupe_and_group_merges_dedupes_and_sorts_cue_words():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
 
-
+    cue1 = LyricCue(
+        start_ms=10000,
+        end_ms=13500,
+        text="I will always love you",
+        source_track_ids=[1],
+        confidence=0.90,
+        y_center=0.8,
+        bbox=[100, 600, 800, 650],
+        layer_id=1,
+        words=[
+            {"word": "I", "start_ms": 10000, "end_ms": 10500},
+            {"word": "will", "start_ms": 10500, "end_ms": 11000},
+            {"word": "always", "start_ms": 11000, "end_ms": 12000},
+            {"word": "love", "start_ms": 12000, "end_ms": 13000},  # duplicate in cue2
+        ],
+    )
+    cue2 = LyricCue(
+        start_ms=14000,
+        end_ms=17500,
+        text="I will always love you",
+        source_track_ids=[2],
+        confidence=0.95,
+        y_center=0.8,
+        bbox=[100, 600, 800, 650],
+        layer_id=1,
+        words=[
+            {"word": "love", "start_ms": 12000, "end_ms": 13000},  # duplicate
+            {"word": "you", "start_ms": 13500, "end_ms": 17500},
+        ],
+    )
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="love you",
+                start_ms=13800,
+                end_ms=15000,
+                words=[
+                    ASRWord("love", 13800, 14200),
+                    ASRWord("you", 14500, 15000),
+                ],
+            )
+        ],
+    )
+    res = dedupe_and_group([cue1, cue2], asr_transcript=transcript)
+    assert len(res) == 1
+    assert len(res[0].words) == 5
+    assert [w["word"] for w in res[0].words] == ["I", "will", "always", "love", "you"]
+    assert [w["start_ms"] for w in res[0].words] == [10000, 10500, 11000, 12000, 13500]
 
 

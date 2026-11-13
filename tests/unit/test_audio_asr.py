@@ -235,3 +235,30 @@ def test_asr_has_new_prefix_onset_first_start_ms_guard():
     # must NOT trigger as a new onset for second_start_ms!
     assert asr_has_new_prefix_onset("Hello world", second_start_ms=1400, transcript=transcript, first_start_ms=1000) is False
 
+
+def test_asr_has_new_prefix_onset_pre_window_tail_word_masking():
+    # Cue 1 ends with "away" at 12800ms (within second_start_ms - 450 = 12550ms)
+    # Cue 2 onset "Let" is at 13050ms (second_start_ms = 13000ms)
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="far away Let it go",
+                start_ms=12550,
+                end_ms=14500,
+                words=[
+                    ASRWord("far", 12600, 12750),
+                    ASRWord("away", 12800, 12950),  # Cue 1 trailing words in window
+                    ASRWord("Let", 13050, 13300),   # Cue 2 onset
+                    ASRWord("it", 13300, 13500),
+                    ASRWord("go", 13500, 14200),
+                ],
+            )
+        ],
+    )
+    assert asr_has_new_prefix_onset(
+        "Let it go",
+        second_start_ms=13000,
+        transcript=transcript,
+        first_start_ms=10000,
+    ) is True

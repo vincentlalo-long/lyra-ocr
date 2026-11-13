@@ -466,7 +466,9 @@ def build_lrc_from_artifacts(
         reference_warnings=ref_warnings,
         layers=layers_meta,
         primary_lang=primary_lang,
+        enhanced=eff_enhanced,
     )
+
 
     return {
         "video_id": video_id,
