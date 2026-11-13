@@ -196,14 +196,9 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
     if not valleys:
         return text
 
-    # Only reconstruct if text has fewer spaces than detected visual valleys
-    num_spaces = text.count(" ")
-    if num_spaces >= len(valleys):
-        return text
-
     no_space_text = text.replace(" ", "")
     total_len = len(no_space_text)
-    if total_len < 3:
+    if total_len < 2:
         return text
 
     existing_splits: list[int] = []
@@ -215,6 +210,10 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
         else:
             char_count += 1
 
+    # Only reconstruct if text has fewer spaces than detected visual valleys
+    if len(existing_splits) >= len(valleys):
+        return text
+
     total_ink_cols = max(1, int(np.count_nonzero(d_smooth[x_left : x_right + 1] > 0.04)))
 
     new_splits = list(existing_splits)
@@ -223,7 +222,7 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
         ink_cols_before = int(np.count_nonzero(d_smooth[x_left : int(round(x_mid)) + 1] > 0.04))
         r_ink = ink_cols_before / float(total_ink_cols) if total_ink_cols > 0 else r_k
         cand_i = int(round(r_ink * total_len))
-        if cand_i < 2 or cand_i > total_len - 2:
+        if cand_i < 1 or cand_i > total_len - 1:
             continue
         if any(abs(cand_i - s) < 2 for s in new_splits):
             continue
@@ -300,7 +299,9 @@ class OCREngine:
                 self._models[model_id] = engine
                 return engine
             except Exception:
-                return self._models[self.DEFAULT_MODEL]
+                fallback = self._models[self.DEFAULT_MODEL]
+                self._models[model_id] = fallback
+                return fallback
 
         # Fallback to default
         return self._models[self.DEFAULT_MODEL]
