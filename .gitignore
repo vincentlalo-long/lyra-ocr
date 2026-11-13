@@ -63,6 +63,13 @@ review_batch*.csv
 .licenses/
 doc/WEB_UI_PLAN.md
 doc/RESEARCH_*.md
+doc/*_plan.md
+doc/*_PLAN.md
+doc/phase*.md
+doc/PHASE*.md
+docs/superpowers/
+docs/notes/
+scratch/
 
 # =============================================================================
 # 4. Large Media Files & Binary Image Artifacts

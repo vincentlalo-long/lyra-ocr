@@ -1,328 +1,135 @@
 # Lyra OCR
 
-A modular pipeline and command-line toolchain for video frame sampling, scene text detection, and lyric OCR (English / Romaji / Japanese).
+Pipeline và CLI trích xuất lyric hardcode từ video thành phụ đề `.lrc` đồng bộ thời gian (hỗ trợ tiếng Anh, tiếng Nhật Kanji/Kana, Romaji `ja-Latn`, và các video đa ngôn ngữ).
 
 ---
 
-## 🗺️ Roadmap & Phases
+## Tổng quan kiến trúc & Trạng thái hiện tại
 
-> **Current Progress:** **Phase 1 (Lyric Identification & Tracking) — Evaluated & Verified (F1: 96.26%) 🟢**
+Pipeline gồm 2 giai đoạn chính (chạy qua CLI `lyra-ocr` hoặc giao diện Web `lyra-ocr review-ui`):
 
-| Phase | Milestone | Purpose | Status |
-|:---:|---|---|:---:|
-| **0** | **Foundations** | Video probing, PTS frame extraction, full-frame detection, and decoupled OCR engine. | Completed ✅ |
-| **1** | **Lyric Identification** | Temporal text tracking to filter out watermarks, channel logos, and title cards from actual lyrics. | Completed & Evaluated (F1 > 96%) ✅ |
-| **2** | **Timing & LRC** | Refining cue timestamps, NLP correction, deduplication, and exporting standard `.lrc` lyric files. | Available 🚀 |
-| **3** | **Trained Classifier** | Training lightweight models on user-confirmed review data to automate filtering. | Planned 📋 |
-| **4** | **Audio & Karaoke** | Voice alignment and syllable tracking for word-by-word karaoke synchronization. | Planned 📋 |
+1. **Nhận diện & Theo dõi theo thời gian (`identify` / `smoke`)**:
+   - Đọc metadata (`ffprobe`), trích xuất frame theo PTS (`ffmpeg`, chế độ `pipe` hoặc `disk`, tuỳ chọn `--dedup`).
+   - Phát hiện vùng chữ bằng RapidOCR DBNet (`src/lyra_ocr/ocr/detect.py`, có tách box 2 dòng theo horizontal projection profile) và nhận diện chữ (`src/lyra_ocr/ocr/engine.py`, phóng to crop chữ nhỏ `< 36px`, áp dụng CLAHE cho vùng đủ tương phản, padding viền).
+   - Gom nhóm theo không gian-thời gian thành `TextTrack` (`greedy` hoặc `bytetrack`) và phân loại `lyric` / `non_lyric` theo rule (`src/lyra_ocr/classify.py`: watermark, title card ở intro, chat/overlay).
+2. **Dựng & Xuất file LRC đa ngôn ngữ (`lrc`)**:
+   - Phân tầng không gian & phát hiện ngôn ngữ (`src/lyra_ocr/layers.py`, `src/lyra_ocr/lang.py`): giữ riêng các layer `ja`, `ja-Latn`, `en`, v.v., đồng thời giữ lại companion band khi lyric hiển thị nhiều dòng xếp chồng.
+   - Sửa lỗi OCR không cần mạng (`dictionary`: từ điển SymSpell tiếng Anh cho tách/sửa từ + sửa lỗi ký tự dễ nhầm của Romaji Hepburn trong `src/lyra_ocr/lyric/text_repair.py`).
+   - Tín hiệu audio (`src/lyra_ocr/audio/`): tách audio 16kHz mono, profile RMS VAD + căn chỉnh onset (`forced_align.py`), và ASR cấp từng từ bằng `faster-whisper` (`asr.py`) được cache vào `asr_transcript.json` để:
+     - tách timestamp cho stanza nhiều dòng hiện đồng thời (`resolve_simultaneous_multiline_cues`, fallback sang chia tỷ lệ độ dài chữ nếu không khớp ASR);
+     - đối chiếu/sửa text khi không có reference ngoài;
+     - gắn cờ `asr_unvoiced` / lọc overlay độ tin cậy thấp (`< 0.65`) ở các đoạn không có giọng hát (`asr_vocal_gate_score`).
+   - Đối chiếu reference tuỳ chọn (`--use-reference`): thứ tự ưu tiên Manual > LRCLIB > YouTube captions, căn chỉnh N:M (`1:1`, `1:2`, `1:3`, `2:1`, `3:1`), chuyển tự `ja -> ja-Latn` có bảo vệ ateji (giữ cách đọc OCR khi độ tin cậy cao) và không để lọt ký tự CJK vào layer Romaji.
+   - Xuất file (`src/lyra_ocr/lyric/export.py`): tạo `<name>.lrc` (layer chính, ưu tiên `ja-Latn` > ngôn ngữ gốc > `en`), các file `<name>.<lang>.lrc` cho từng layer, và `<name>.cues.json` lưu bbox, độ tin cậy, log bỏ qua (`skipped`) và nguồn reference.
 
----
+### Giới hạn hiện tại
 
-## 📊 Benchmark & Evaluation (Phase 1)
-
-Phase 1 tracking and discrimination heuristics were rigorously benchmarked on the real-world dataset **`Fix_lyric_EN`** (100 full-length music lyric videos from YouTube, encompassing pop, R&B, rock, country, electronic, and multilingual songs).
-
-### 1. Overall Tracker Benchmark: Greedy vs. ByteTrack
-
-Evaluation was executed over a diverse 25-video test subset (>1,350 evaluated text tracks per tracker) evaluated against reference Ground Truth segments:
-
-```mermaid
-flowchart LR
-    A["Raw Video (1.0 FPS)"] --> B["PP-OCRv6 Det/Rec"]
-    B --> C{"Tracker Strategy"}
-    C -->|"Greedy (IoU + Centroid)"| D["1,417 Tracks"]
-    C -->|"ByteTrack (Hungarian + 2-Stage)"| E["1,359 Tracks (4.1% cleaner)"]
-    D --> F["Heuristic Classifier v2"]
-    E --> F
-    F --> G["Hungarian Evaluation vs Silver GT"]
-    G --> H["F1: 96.21% (Greedy) / 96.26% (ByteTrack)"]
-```
-
-| Metric | Baseline (Initial Heuristics) | Greedy Tracker (Tuned) | ByteTrack (Tuned) | Quality Gate | Assessment |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Overall Accuracy** | 82.93% | **93.30%** | **93.08%** | ≥ 90.0% | ✅ **Passed (+10.37% gain)** |
-| **Lyric Precision** | 99.60% | **99.75%** | **99.83%** | ≥ 90.0% | ✅ **Near-Perfect (only 2 FP leaks)** |
-| **Lyric Recall** | 81.83% | **92.91%** | **92.93%** | ≥ 90.0% | ✅ **Passed (+11.10% gain)** |
-| **F1-Score** | 89.84% | **96.21%** | **96.26%** | ≥ 90.0% | ✅ **Exceeds target (>96%)** |
-| **Leakage Rate (Non-lyric in lyrics)** | 0.40% | **0.25%** (3 tracks) | **0.17%** (2 tracks) | ≤ 10.0% | ✅ **Near-Zero (0.17%)** |
-| **False Drop Rate (Missed lyrics)** | 18.17% | **7.09%** (92 tracks) | **7.07%** (92 tracks) | ≤ 10.0% | ✅ **Reduced from 18.2% to 7.1%** |
-| **Total Generated Tracks** | 1,646 (30 vid) | **1,417** (25 vid) | **1,359** (25 vid) | — | ByteTrack produces 58 fewer fragmented tracks |
-| **Inference Latency** | ~15.3s / video | **15.3s / video** | **15.1s / video** | — | Real-time on GPU (~12x faster than playback) |
-
-> [!NOTE]
-> **Ground Truth Provenance**: The metrics reported above reflect evaluation against an automatic Silver Ground Truth alignment. Golden Ground Truth promotion strictly requires human annotators (`promote_run` skips silver records). True false negatives for tracks missed by the detector are retained as missing segments during evaluation.
-
-### 2. Confusion Matrix (25 Videos Benchmark)
-
-| Classification Category | Greedy Tracker | ByteTrack | Technical Significance |
-| :--- | :---: | :---: | :--- |
-| **True Positives (TP)** | **1,206** | **1,210** | Correctly accepted lyric lines (ByteTrack recovered 4 additional tracks) |
-| **False Positives (FP)** | **3** | **2** | Watermarks or title cards misclassified as lyric (extremely low) |
-| **False Negatives (FN)** | **92** | **92** | Lyrics missed (primarily non-Latin font styling or fast ad-libs) |
-| **True Negatives (TN)** | **116** | **55** | Distractor tracks correctly rejected as non-lyric |
-
-### 3. Key Findings & Engineering Insights
-
-1. **Title Matching Trap Resolved**:
-   - *Previous Failure Mode*: Song lyrics frequently repeat words from the title in their hook/chorus (e.g. *"Tell It To My Heart"*, *"Anymore"*, *"High Forever"*). An overly broad video title overlap rule previously rejected these chorus lines when they appeared mid-video.
-   - *Resolution*: Title-card matching is now strictly bound to the intro window ($\le 25\%$ of duration) and requires significant title token coverage ($\ge 50\%$). Mid-video hook lines in active reading zones are reliably accepted.
-2. **Reading Zone Cadence & Duration Tuning**:
-   - Expanded acceptable duration bounds from `1000–9000ms` to `500–16000ms`, capturing both fast ad-libs (0.5–1s) and slow ballad cues (10–14s).
-   - Removed casing restrictions: all-caps lyrics (common in video typography) are evaluated strictly through spatial reading zone priors ($cy \in [0.20, 0.95]$, $cx \in [0.10, 0.90]$).
-3. **Greedy vs. ByteTrack Strategy**:
-   - **ByteTrack** leverages Hungarian matching and two-stage association, allowing tracks to persist through frame-to-frame OCR confidence drops or karaoke color transitions without splitting into fragmented pieces (reducing track count by 4.1%).
-   - **Recommendation**: ByteTrack is recommended as the default tracker for video subtitle/lyric extraction.
+- Pipeline phát hiện/tách dòng hiện chỉ nhắm vào chữ **nằm ngang** (chưa hỗ trợ chia cột chữ dọc *tategaki*).
+- `faster-whisper` chạy trực tiếp trên audio hỗn hợp 16kHz mono (chưa tích hợp bước tách nhạc/giọng bằng Demucs/UVR).
+- Khi video có nhạc nền át giọng hoặc lyric ateji không khớp từ điển/reference, độ chính xác vẫn phụ thuộc vào chất lượng crop OCR ban đầu và dữ liệu LRCLIB/ASR.
+- Các chỉ số benchmark dưới đây chỉ mới đo trên tập tiếng Anh **Phase 1 (`Fix_lyric_EN`)**; các module xử lý đa ngôn ngữ, ASR và LRC sau đó được kiểm chứng qua unit test và test mẫu cục bộ.
 
 ---
 
-## 📖 Documentation
+## Tài liệu kỹ thuật
 
-- [System Architecture & Design Philosophy](doc/ARCHITECTURE.md): Layered subsystem decomposition, domain entities, decoupled vision pipeline, and fundamental architectural decisions (ADRs).
-- [Data Contracts & Artifact Specifications](doc/SPECIFICATION.md): Formal schemas, coordinate systems, and serialization contracts for all pipeline artifacts (`manifest.json`, `frame_index.json`, `ocr_raw.json`, `tracks.json`, `review.csv`, `labels.jsonl`).
-
----
-
-## 🔮 Up Next
-
-- **Phase 2: Dense Boundary Timing & LRC Export**: Sub-sampling boundary frames around confirmed lyric tracks to pin start/end cues at centisecond precision and export standard line-level `.lrc` files.
-- **Line Grouping & Multiline Stanzas**: Grouping multi-line lyric blocks and separating translation/secondary text tracks.
+- [Kiến trúc hệ thống](doc/ARCHITECTURE.md): phân rã module, entity domain và các quyết định thiết kế.
+- [Đặc tả dữ liệu & Artifact](doc/SPECIFICATION.md): schema cho `manifest.json`, `frame_index.json`, `ocr_raw.json`, `tracks.json`, `review.csv`, `labels.jsonl`.
 
 ---
 
-## 📌 Current Features
+## Yêu cầu môi trường
 
-- **Video Metadata Inspection** ([`src/lyra_ocr/video/probe.py`](src/lyra_ocr/video/probe.py)): Analyzes video files using `ffprobe` to extract resolution, FPS, duration, rotation, and audio stream details.
-- **Precision PTS Frame Sampling** ([`src/lyra_ocr/video/frames.py`](src/lyra_ocr/video/frames.py)): Samples frames at a configurable rate (default: 2.0 FPS) while recording exact Presentation Time Stamps (PTS) from container metadata.
-- **Full-Frame Scene Text Detection** ([`src/lyra_ocr/ocr/detect.py`](src/lyra_ocr/ocr/detect.py)): Detects text boxes across the entire frame without hardcoded region-of-interest assumptions using DBNet (`PP-OCRv6_det_small`).
-- **Text Recognition & Normalization** ([`src/lyra_ocr/ocr/engine.py`](src/lyra_ocr/ocr/engine.py)): Crops and recognizes text lines with RapidOCR (`PP-OCRv6_rec_small`), normalizes Unicode text to NFC, and classifies script types (`latin`, `japan`, `mixed`).
-- **Temporal Text Tracking** ([`src/lyra_ocr/track.py`](src/lyra_ocr/track.py)): Clusters frame-level OCR detections across time into continuous `TextTrack` streams via spatial IoU and string edit-distance continuity.
-- **Rule-Based Distractor Discrimination** ([`src/lyra_ocr/classify.py`](src/lyra_ocr/classify.py)): Classifies each track as `lyric` or `non_lyric`, while retaining diagnostic reasons for watermarks, title cards, and scenery text.
-- **Human-in-the-Loop Review & Audit** ([`src/lyra_ocr/review.py`](src/lyra_ocr/review.py)): Automatically exports structured `tracks.json`, human-auditable `review.csv`, and color-coded visual verification overlays (`roi_preview.jpg`).
-- **Lyric Identification & Smoke CLI** (`lyra-ocr identify` / `lyra-ocr smoke`): Complete command-line pipeline from raw video to classified lyric tracks.
-- **Automated Test Suite**: Unit and evaluation tests covering probe extraction, PTS indexing, Unicode normalization, tracking association, rule classification, label persistence, Hungarian track matching, and metric calculations.
+- **Python**: `>= 3.11`
+- **Công cụ hệ thống**: `ffmpeg` và `ffprobe` có trên `PATH`
+- **Dependencies chính** (`pyproject.toml`): `rapidocr>=3.0.0`, `onnxruntime>=1.17.0`, `opencv-python>=4.8.0`, `numpy>=1.24.0`, `pillow>=10.0.0`, `scipy>=1.10.0`, `yt-dlp>=2024.0.0`, `symspellpy>=6.7.7`, `pykakasi>=2.3.0`, `faster-whisper>=1.0.0`
 
 ---
 
-## ⚙️ Requirements
+## Cài đặt & Sử dụng
 
-- **Python**: 3.11 or 3.12
-- **System Tools**: `ffmpeg` and `ffprobe` available on `PATH`
-- **Core Dependencies**: `rapidocr>=3.0.0`, `onnxruntime>=1.17.0`, `opencv-python>=4.8.0`, `numpy>=1.24.0`, `pillow>=10.0.0`, `yt-dlp>=2024.0.0`, `pytest>=8.0.0`, `scipy>=1.12.0`
-- **Optional Dependencies**: `matplotlib>=3.8.0` (for publication evaluation charts)
-
----
-
-## 🚀 Getting Started
-
-### 1. Installation
+### 1. Cài đặt
 
 ```bash
 git clone https://github.com/vincentlalo-long/lyra-ocr.git
 cd lyra-ocr
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e ".[eval]"
+pip install -e ".[dev,eval]"
 ```
 
-### 2. Run Lyric Identification (Phase 1)
-
-Execute full-frame detection, recognition, temporal tracking, and rule-based lyric discrimination:
-
-```bash
-lyra-ocr identify path/to/video.mp4 \
-  --out ./output \
-  --title "Song Title" \
-  --channel "Channel Name" \
-  --tracker bytetrack \
-  -n 10 -s 20.0
-```
-
-#### Supported Tracking Strategies (`--tracker`):
-- `greedy` (default baseline): Spatial IoU + centroid distance greedy association.
-- `bytetrack` (experimental, not default): Two-stage confidence association — stage 1 matches high-confidence detections, stage 2 matches leftover tracks against low-confidence boxes so a track survives a blurred or low-OCR frame. Never spawns tracks from low-confidence detections.
-
-Both strategies share the text-turnover split from `BaseTracker.associate()`: when a
-stable region swaps its text (similarity < 0.60 against the track's current line), the
-track closes and a new one opens. One track therefore equals one text identity — a
-lyric line, a watermark, a title card — which is what the `lyric`/`non_lyric` labels and
-the ground-truth segments are keyed to.
-
-Outputs generated in `./output`:
-- `tracks.json`: Clustered `TextTrack` entities with frame-level `occurrences`, temporal statistics, segment transitions, and binary labels (`lyric`, `non_lyric`).
-- `review.csv`: Tabular spreadsheet for human-in-the-loop audit (`track_id,start_ms,end_ms,machine_label,machine_decision,confidence,suggested_text,human_label,human_decision,review_note`).
-- `labels.jsonl`: Append-only human annotation audit trail with hash provenance.
-- `manifest.json`: Tool versions, model metadata, config hash, and video configuration.
-- `ocr_raw.json`: Frame-by-frame text lines with 4-point polygons, bounding boxes, raw/normalized text, and confidence scores.
-- `frame_index.json`: Extracted frame indices mapped to millisecond PTS timestamps.
-- `roi_preview.jpg`: Color-coded visual audit preview (Green = Lyric, Red = Non-Lyric).
-- `frames/`: Directory containing extracted JPEG frames.
-
-#### Performance Options (`identify` and `smoke`)
-
-```bash
-lyra-ocr identify path/to/video.mp4 \
-  --out ./output \
-  --device auto \
-  --rec-batch-size 8 \
-  --dedup \
-  --frame-source pipe
-```
-
-| Flag | Default | Effect |
-|---|---|---|
-| `--device` | `auto` | `auto` picks CUDA when `onnxruntime-gpu` exposes `CUDAExecutionProvider`, else CPU. `cuda` falls back to CPU with a warning; `cpu` is explicit. Env override: `LYRA_OCR_DEVICE`. |
-| `--rec-batch-size` | `8` | Text-line crops batched per recognition call. Use `1` for the old per-crop behaviour. |
-| `--dedup` / `--no-dedup` | off | Reuse OCR output and JPEG for near-identical consecutive frames. Off by default until an eval run proves it is lossless. |
-| `--frame-source` | `pipe` | `pipe` streams frames from ffmpeg while OCR runs; it falls back to disk only when extraction fails before the first frame, while a mid-stream failure fails the job. `disk` keeps the write-then-read path. |
-
-The manifest records the effective runtime under `runtime` (requested and actual
-device, providers, batch size, dedup, frame source, `pipeline_version: "2"`), and
-`config_hash` includes those options so artifacts from different configurations
-are never skipped by mistake. Benchmark stages with
-`python scripts/benchmark_pipeline.py --video <file>` (JSON goes to `reports/bench/`).
-
-GPU install (optional, outside the default requirements):
+*(Tuỳ chọn GPU cho ONNX / faster-whisper)*:
 
 ```bash
 pip uninstall -y onnxruntime
 pip install "onnxruntime-gpu[cuda,cudnn]==1.31.1"
-python -c "import onnxruntime as ort; ort.preload_dlls(cuda=True, cudnn=True); print(ort.get_available_providers())"
 ```
 
-Re-running `pip install -r requirements.txt` or `pip install -e .` puts CPU
-`onnxruntime` back and replaces the GPU wheel; repeat the swap above if that
-happens. `pip check` also reports `onnxruntime` as missing because the GPU wheel
-is distributed under a different name — that warning is expected.
-
-### 3. Export Synchronized LRC Lyrics (Phase 2)
-
-Export standard, line-synchronized `.lrc` lyrics directly from Phase 1 artifacts or end-to-end from a raw video:
+### 2. Chạy trích xuất & Xuất `.lrc`
 
 ```bash
-# Export from existing Phase 1 artifacts (instant)
-lyra-ocr lrc path/to/video.mp4 --artifacts ./output -o song.lrc
+# Chạy toàn bộ pipeline từ video sang .lrc (lưu artifact vào ./lyra_output/<video_stem>)
+lyra-ocr lrc path/to/video.mp4 -o song.lrc --tracker bytetrack --device auto
 
-# Run end-to-end from video with ByteTrack and corpus dictionary correction
-lyra-ocr lrc path/to/video.mp4 \
-  -o song.lrc \
-  --tracker bytetrack \
-  --correct dictionary \
-  --device auto
+# Bật đối chiếu reference (Manual / LRCLIB / YouTube captions)
+lyra-ocr lrc path/to/video.mp4 -o song.lrc --tracker bytetrack --use-reference
+
+# Xuất lại .lrc từ thư mục artifact có sẵn (không chạy lại OCR video)
+lyra-ocr lrc --artifacts ./lyra_output/video -o song.lrc
 ```
 
-#### Key Options for `lyra-ocr lrc`:
-- `-o, --out`: Output `.lrc` file path (default: `./lyrics.lrc`). A companion structured JSON file (`*.cues.json`) is also generated containing bounding boxes, confidence scores, and skipped tracks.
-- `--artifacts`: Path to an existing Phase 1 artifact directory (`tracks.json`, `manifest.json`, `labels.jsonl`). When provided, avoids re-running video OCR.
-- `--correct`: Correction method (`none`, `consensus`, `dictionary`). Default is `dictionary` (corpus-frequency based token correction plus conservative dictionary word-boundary/spell repair, preserving rare proper nouns and casing).
-- `--include-review`: Include tracks marked with `decision=review` (default: excluded, only `accept` lyrics are included).
-- `--offset-ms`: Adjust global timestamp offset tag (`[offset:+/-ms]`).
-- `--refine`: Dense frame-level scan for sub-sampling boundary timing.
-- `--use-reference`: Opt-in auto reference lyrics repair (LRCLIB, with fallback to YouTube captions). Preserves detected OCR cue timing; fills missing gaps using synchronized reference timestamps.
-- `--no-caption-fallback`: Disable YouTube caption fallback when `--use-reference` is enabled and LRCLIB has no matching lyrics.
-- `--force`: Force re-running video OCR pipeline even if artifacts exist.
+Một số cờ hay dùng của `lyra-ocr lrc`:
+- `-o, --out`: đường dẫn `.lrc` đầu ra (sinh thêm `<name>.<lang>.lrc` nếu có nhiều layer ngôn ngữ và `<name>.cues.json`).
+- `--artifacts`: thư mục artifact từ bước `identify` / `lrc` trước đó.
+- `--tracker`: `greedy` hoặc `bytetrack` (`greedy` là mặc định trong CLI; `bytetrack` được khuyến nghị cho video chuyển cảnh/karaoke).
+- `--correct`: `none`, `consensus`, `dictionary` (mặc định `dictionary`).
+- `--refine`: quét thêm frame quanh biên để tinh chỉnh mốc thời gian.
+- `--include-review`: giữ cả cue đang ở trạng thái `review`.
+- `--use-reference` / `--no-caption-fallback`: bật sửa chữ & bù khoảng trống bằng LRCLIB / YouTube captions.
+- `--offset-ms`: chỉnh tag `[offset:+/-ms]`.
+- `--force`: bỏ qua cache và chạy lại pipeline.
 
-#### Text Quality & Reference Lyrics (single-lyric videos)
-
-The current LRC runtime targets **single-lyric** videos: at any timestamp there is
-at most one active lyric line. Multi-line/simultaneous lyrics are deferred.
-
-`--correct dictionary` (the default) performs conservative English word-boundary
-and spell repair using the bundled SymSpell lexicon, with no network, LLM, or
-reference-lyrics input:
-
-- merged OCR words are split only when every piece is a real word
-  (`Iwalk` → `I walk`, `nothinginmy` → `nothing in my`);
-- obvious one-edit OCR errors are repaired (`oniy` → `only`, `lhis` → `this`);
-- proper nouns, numbers, ordinals, codes, URLs, CJK, and corpus-frequent tokens
-  are preserved.
-
-Text that is still unreadable is routed to `review` with an explicit reason
-(`low_ocr_confidence`, `low_text_quality`) instead of being emitted as lyrics.
-`--include-review` includes those cues for auditing. Chat/stream overlays are
-classified out before lyric selection.
-
-##### Reference-Assisted Repair & Gap Recovery (`--use-reference`)
-
-When enabled via `--use-reference` (CLI) or the UI checkbox:
-- **Provider Priority:** Manual reference (`.lrc`/`.txt`) > LRCLIB (synced or plain) > YouTube captions fallback.
-- **Source-Aware Matching:** Stricter similarity thresholds are applied to captions (0.90) than LRCLIB (0.85) to mitigate ASR errors. Original-language captions are enforced (translated captions are rejected).
-- **Caption Source Resolution & Cache:** Captions resolve from the original URL, artifact `source_url`, or an 11-character YouTube ID in the manifest/path; local media paths are never passed to `yt-dlp`. Caption results, including empty lookups, are cached in `reference_cache/` for one hour.
-- **Conservative Timing:** Visual OCR timing for detected cues is **never** altered by reference lyrics. Synchronized references are only used to fill gaps (cues that were entirely missed by OCR) in unoccupied intervals. Edge or overlapping gap fills are skipped with a `reference_warnings` entry instead of forcing a duplicate/degraded cue.
-- **Full Provenance:** Every `.cues.json` records `reference_source`, `n_reference_matches`, `n_reference_gap_fills`, and `reference_warnings`.
-
-Inspect text quality for an export:
+### 3. Chạy chỉ bước nhận diện & review (`identify`, `label`, `review-ui`)
 
 ```bash
-python scripts/eval_lrc_text.py outputs/song/song.cues.json
-```
+# Bước 1: trích xuất tracks.json, review.csv, roi_preview.jpg
+lyra-ocr identify path/to/video.mp4 --out ./output --tracker bytetrack --device auto
 
-The evaluation script is CJK-aware and expands multiple timestamps on one reference
-line, so repeated chorus sections are counted independently in recall.
-
-### 4. Human Review & Annotation CLI
-
-Export blind batch CSV for offline labeling, inspect status, or ingest annotations:
-
-```bash
-# Check labeling coverage
-lyra-ocr label status --artifacts ./output
-
-# Export blind review CSV (machine labels omitted to prevent bias)
+# Gán nhãn review CSV ngoại tuyến
 lyra-ocr label export --artifacts ./output --out label_batch.csv --blind
+lyra-ocr label ingest --artifacts ./output --csv label_batch.csv --annotator human
 
-# Ingest completed annotations into labels.jsonl
-lyra-ocr label ingest --artifacts ./output --csv label_batch.csv --annotator reviewer_name
+# Hoặc mở Web UI (Runs / Review / Eval / Datasets / LRC Studio)
+lyra-ocr review-ui --port 8000
 ```
 
-### 5. Run Evaluation
+---
 
-Evaluate predictions against a labeled dataset manifest with Hungarian matching and optional charts:
+## Kiểm thử & Đánh giá
 
-```bash
-lyra-ocr eval --golden path/to/dataset --out outputs/eval --charts --compare-trackers
-```
-
-### 6. Run Automated Tests
+### Chạy unit test
 
 ```bash
 pytest
 ```
 
----
+Mặc định trong `pyproject.toml`, `pytest` chạy các test nhanh (`-m 'not slow and not gpu'`).
 
-### 7. Reproducing Benchmark & Evaluation Experiments
+### Benchmark Phase 1 (25 video `Fix_lyric_EN`)
 
-You can independently reproduce the 25–30 video benchmark and tracker comparison using the automated pipeline scripts:
+Đánh giá phân loại & theo dõi track Phase 1 trên tập 25 video tiếng Anh thuộc `Fix_lyric_EN` (>1.350 track so với Silver GT tự động):
 
-#### A. Dataset Preparation (`Fix_lyric_EN`)
-The benchmark dataset consists of 100 YouTube lyric videos managed under `datasets/Fix_lyric_EN/`. You can ingest videos or fetch channels directly via the Web UI:
+| Metric | Baseline Heuristic | Greedy (Tuned) | ByteTrack (Tuned) |
+| :--- | :---: | :---: | :---: |
+| **Accuracy** | 82.93% | 93.30% | 93.08% |
+| **Lyric Precision** | 99.60% | 99.75% | 99.83% |
+| **Lyric Recall** | 81.83% | 92.91% | 92.93% |
+| **F1-Score** | 89.84% | 96.21% | 96.26% |
+| **Tracks tạo ra** | 1,646 (30 vid) | 1,417 (25 vid) | 1,359 (25 vid) |
+
+Lệnh đánh giá lại từ dataset hoặc file LRC:
+
 ```bash
-lyra-ocr review-ui --port 8000
-# Open http://localhost:8000 -> Datasets tab -> Ingest YouTube Playlist or Channel
+lyra-ocr eval --golden path/to/dataset --out outputs/eval --charts --compare-trackers
+python scripts/eval_lrc_text.py outputs/song/song.cues.json
 ```
-
-#### B. Automated Ground Truth Generation & Single-Run Evaluation
-Extracts reference song lyrics (via YouTube descriptions and LRCLIB fallback), aligns tracks using fuzzy token and spatial priors, generates canonical ground truth segments under `datasets/Fix_lyric_EN/ground_truth/`, and runs evaluation:
-```bash
-python scripts/auto_ground_truth.py --dataset Fix_lyric_EN --count 25 --device auto
-```
-
-#### C. Full Head-to-Head Comparison: Greedy Tracker vs. ByteTrack
-Runs both trackers in parallel on the same dataset subset, evaluates them against the canonical ground truth, and outputs a formatted markdown report:
-```bash
-python scripts/compare_trackers.py \
-  --dataset Fix_lyric_EN \
-  --count 25 \
-  --device auto \
-  --output reports/COMPARISON_GREEDY_VS_BYTETRACK.md
-```
-
-#### D. Interactive Visual Verification & Audit
-Audit individual frame detections, inspect Hungarian matching alignments, and modify labels interactively:
-```bash
-lyra-ocr review-ui --port 8000
-```
-- **Runs tab**: Compare run metrics, inspect job queue status, and create or delete runs.
-- **Review tab**: Step frame-by-frame (`A`/`D` or Arrow keys), inspect track bounding boxes, toggle labels (`1`/`2`), and save corrections (`Enter`).
-- **Eval tab**: Visualize Hungarian match pairs, confusion matrices, and review discrepancy error cases.
