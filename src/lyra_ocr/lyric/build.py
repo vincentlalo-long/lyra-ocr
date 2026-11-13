@@ -7,7 +7,14 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from lyra_ocr.audio import align_cues_with_audio, compute_vocal_activity_profile, extract_audio_16k
+from lyra_ocr.audio import (
+    align_cues_with_audio,
+    asr_to_reference_bundle,
+    compute_vocal_activity_profile,
+    extract_audio_16k,
+    load_asr_transcript,
+    transcribe_audio_words,
+)
 from lyra_ocr.lang import vote_layer_lang
 from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
 from lyra_ocr.lyric.grouping import consolidate_language_layers, dedupe_and_group, merge_duplicate_layers
@@ -281,9 +288,10 @@ def build_lrc_from_artifacts(
         except Exception as e:
             logger.warning("Refine timings failed, falling back to coarse: %s", e)
 
-    # Multimodal audio analysis (VAD & Forced Alignment)
+    # Multimodal audio analysis (VAD, ASR & Forced Alignment)
     audio_16k = None
     vocal_profile = None
+    asr_transcript = None
     if eff_video_path and Path(eff_video_path).is_file():
         try:
             audio_16k = extract_audio_16k(eff_video_path, cache_dir=art_path)
@@ -291,6 +299,16 @@ def build_lrc_from_artifacts(
                 vocal_profile = compute_vocal_activity_profile(audio_16k)
         except Exception as exc:
             logger.warning("Audio processing failed for %s: %s", eff_video_path, exc)
+
+    if getattr(reference_cfg, "enable_asr", True):
+        cached_asr_path = art_path / "asr_transcript.json"
+        if cached_asr_path.is_file():
+            asr_transcript = load_asr_transcript(cached_asr_path)
+        elif audio_16k is not None:
+            try:
+                asr_transcript = transcribe_audio_words(audio_16k, cache_dir=art_path)
+            except Exception as exc:
+                logger.warning("Word-level ASR failed for %s: %s", eff_video_path, exc)
 
     # Optional reference lyrics: repair cue text and fill reference gaps without touching OCR timing.
     n_reference_matches = 0
@@ -303,7 +321,7 @@ def build_lrc_from_artifacts(
             provider="manual" if reference_source == "manual" else "",
         )
 
-    if cues and ref_bundle and ref_bundle.lines:
+    if cues and ((ref_bundle and ref_bundle.lines) or asr_transcript is not None):
         from collections import defaultdict
 
         layer_groups: dict[Any, list[LyricCue]] = defaultdict(list)
@@ -313,16 +331,25 @@ def build_lrc_from_artifacts(
         processed_cues: list[LyricCue] = []
         for layer_id, layer_cues in layer_groups.items():
             layer_lang = vote_layer_lang([c.lang for c in layer_cues if c.lang])
-            ref_for_layer = select_reference_lines(ref_bundle, layer_lang)
+            ref_for_layer = (
+                select_reference_lines(ref_bundle, layer_lang)
+                if (ref_bundle and ref_bundle.lines)
+                else None
+            )
+            if ref_for_layer is None and asr_transcript is not None:
+                ref_for_layer = asr_to_reference_bundle(asr_transcript, target_lang=layer_lang)
 
-            if ref_for_layer and ref_for_layer.lines and layer_lang != "ja-Latn":
+            if ref_for_layer and ref_for_layer.lines:
+                layer_ref_source = ref_for_layer.source or reference_source
                 align_res = align_reference(
                     layer_cues,
                     ref_for_layer,
-                    source=reference_source,
+                    source=layer_ref_source,
                     config=reference_cfg,
                 )
                 n_reference_matches += int(align_res.replaced_count)
+                if not reference_source and align_res.replaced_count:
+                    reference_source = layer_ref_source
                 layer_cues, overlap_warnings = reconcile_reference_overlaps(
                     layer_cues,
                     ref_for_layer,
@@ -333,7 +360,7 @@ def build_lrc_from_artifacts(
                     layer_cues,
                     ref_for_layer,
                     config=reference_cfg,
-                    source=reference_source,
+                    source=layer_ref_source,
                     duration_ms=duration_ms,
                     matched_pairs=align_res.matched_pairs,
                     vocal_profile=vocal_profile,
@@ -352,8 +379,8 @@ def build_lrc_from_artifacts(
 
         cues = processed_cues
 
-    cues = consolidate_language_layers(cues)
-    cues = dedupe_and_group(cues)
+    cues = consolidate_language_layers(cues, asr_transcript=asr_transcript)
+    cues = dedupe_and_group(cues, asr_transcript=asr_transcript)
 
     if audio_16k is not None and getattr(reference_cfg, "enable_audio_align", True):
         try:

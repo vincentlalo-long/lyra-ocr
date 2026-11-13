@@ -6,7 +6,7 @@ import unicodedata
 from typing import Any, Mapping
 
 from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo
-from lyra_ocr.lyric.text_repair import RepairConfig, repair_text, text_quality
+from lyra_ocr.lyric.text_repair import RepairConfig, repair_romaji_confusables, repair_text, text_quality
 from lyra_ocr.track import string_similarity
 
 
@@ -321,6 +321,10 @@ def correct_text(
             vocab=effective_vocab,
         )
         repaired = _normalize_string(repaired)
+        if repaired:
+            cleaned_final = repaired
+    elif config.enable_nlp and track_lang == "ja-Latn" and not _is_cjk(cleaned_final):
+        repaired = _normalize_string(repair_romaji_confusables(cleaned_final))
         if repaired:
             cleaned_final = repaired
 

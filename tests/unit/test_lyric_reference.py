@@ -668,3 +668,74 @@ def test_align_reference_two_to_one_projects_tokens():
     assert cues[0].start_ms == 1000
     assert cues[1].start_ms == 2600
 
+
+def test_cross_script_kanji_to_romaji_alignment_repairs_without_cjk():
+    from lyra_ocr.lyric.reference import (
+        ReferenceBundle,
+        ReferenceLine,
+        align_reference,
+        select_reference_lines,
+    )
+
+    cues = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=4500,
+            text="sono koclou wa t0ki wo koete",
+            lang="ja-Latn",
+            layer_id=0,
+            ocr_confidence=0.80,
+        )
+    ]
+    kanji_bundle = ReferenceBundle(
+        lines=[ReferenceLine(text="その鼓動は時を超えて", start_ms=1000, end_ms=4500, language="ja")],
+        source="lrclib_synced",
+        provider="lrclib",
+        language="ja",
+    )
+
+    ref_for_romaji = select_reference_lines(kanji_bundle, "ja-Latn")
+    assert ref_for_romaji is not None
+    assert ref_for_romaji.language == "ja-Latn"
+    assert ref_for_romaji.source == "lrclib_romanized"
+    # Zero CJK characters allowed in romanized reference
+    assert not any("\u3040" <= ch <= "\u9fff" for line in ref_for_romaji.lines for ch in line.text)
+
+    res = align_reference(cues, ref_for_romaji)
+    assert res.replaced_count == 1
+    assert cues[0].text.lower() == "sono kodou wa toki wo koete"
+    assert not any("\u3040" <= ch <= "\u9fff" for ch in cues[0].text)
+
+
+def test_repair_romaji_cue_text_preserves_ateji_for_high_confidence_ocr():
+    from lyra_ocr.lyric.reference import repair_romaji_cue_text, romanize_bundle
+
+    kanji_bundle = ReferenceBundle(
+        lines=[ReferenceLine(text="青い宇宙へ", start_ms=1000, end_ms=3500, language="ja")],
+        source="lrclib_synced",
+        language="ja",
+    )
+    rom = romanize_bundle(kanji_bundle)
+    assert rom is not None
+    assert rom.lines[0].text.lower() == "aoi uchuu e"
+
+    # High-confidence OCR read ateji 'sora' instead of literal 'uchuu' -> keep 'sora', fix 'he' -> 'e'
+    repaired = repair_romaji_cue_text(
+        "aoi sora he",
+        rom.lines[0].text,
+        ocr_confidence=0.92,
+        is_asr=False,
+    )
+    assert repaired == "aoi sora e"
+    assert "uchuu" not in repaired.lower()
+
+    # Low-confidence OCR when ASR actually heard 'uchuu' -> use ASR word
+    repaired_asr = repair_romaji_cue_text(
+        "aoi sora he",
+        "aoi uchuu e",
+        ocr_confidence=0.65,
+        is_asr=True,
+    )
+    assert repaired_asr == "aoi uchuu e"
+
+

@@ -367,6 +367,45 @@ def _repair_token(
     return _match_casing(corrected, token)
 
 
+_ROMAN_CONJ_RN_RE = re.compile(r"(?<![A-Za-z])([Rr])([Nn])(?=[aeiouAEIOU])|([Rr])([Nn])(?=[aeiouAEIOU])")
+
+
+def repair_romaji_confusables(text: str) -> str:
+    """Repair reference-free Hepburn Romaji OCR character confusables inside words."""
+    if not text or not text.strip():
+        return text
+
+    def _fix_word(match: re.Match[str]) -> str:
+        tok = match.group(0)
+        if not any(ch.isalpha() for ch in tok):
+            return tok
+
+        # Protect all-caps alphanumeric codes (e.g. '00A01', 'OP1', 'ICBM')
+        has_lower = any("a" <= ch <= "z" for ch in tok)
+
+        fixed = re.sub(
+            r"([Rr])([Nn])(?=[aeiouAEIOU])",
+            lambda m: "M" if (m.group(1).isupper() and m.group(2).isupper()) else "m",
+            tok,
+        )
+        fixed = re.sub(
+            r"([Vv])([Vv])",
+            lambda m: "W" if (m.group(1).isupper() and m.group(2).isupper()) else "w",
+            fixed,
+        )
+        fixed = re.sub(
+            r"([Cc])([Ll])(?=[aeiouAEIOU])",
+            lambda m: "D" if (m.group(1).isupper() and m.group(2).isupper()) else "d",
+            fixed,
+        )
+        if has_lower:
+            fixed = re.sub(r"(?<=[A-Za-z])0|0(?=[A-Za-z])", "o", fixed)
+            fixed = re.sub(r"(?<=[A-Za-z])1|1(?=[A-Za-z])", "i", fixed)
+        return fixed
+
+    return re.sub(r"[A-Za-z0-9]+", _fix_word, text)
+
+
 def repair_text(
     text: str,
     *,

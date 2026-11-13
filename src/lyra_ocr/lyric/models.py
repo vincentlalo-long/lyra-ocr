@@ -82,5 +82,6 @@ class ReferenceConfig:
     allow_edge_gap_fill: bool = False
     split_overlapping_reference_cues: bool = True
     enable_audio_align: bool = True
+    enable_asr: bool = True
     enhanced_lrc: bool = False
 

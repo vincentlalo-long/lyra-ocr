@@ -525,6 +525,109 @@ def _project_ref_onto_cues(cue_texts: list[str], ref_text: str) -> list[str]:
     return parts
 
 
+_CJK_CHAR_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff]+")
+_PARTICLE_EQUIV_MAP: dict[tuple[str, str], str] = {
+    ("wa", "ha"): "wa",
+    ("ha", "wa"): "wa",
+    ("e", "he"): "e",
+    ("he", "e"): "e",
+}
+
+
+def _match_word_case(replacement: str, original: str) -> str:
+    if len(original) > 1 and original.isupper():
+        return replacement.upper()
+    if original[:1].isupper():
+        return replacement[:1].upper() + replacement[1:]
+    return replacement
+
+
+def _repair_romaji_pair(
+    w_ocr: str,
+    w_ref: str,
+    *,
+    ocr_confidence: float | None = None,
+    is_asr: bool = False,
+) -> str:
+    lo, lr = w_ocr.lower(), w_ref.lower()
+    if (lo, lr) in _PARTICLE_EQUIV_MAP:
+        return _match_word_case(_PARTICLE_EQUIV_MAP[(lo, lr)], w_ocr)
+    if (lo, lr) in {("o", "wo"), ("wo", "o")}:
+        return w_ocr
+    sim = line_similarity(lo, lr)
+    if sim >= 0.55:
+        return _match_word_case(w_ref, w_ocr) if sim < 1.0 else w_ocr
+    if is_asr and (ocr_confidence is None or ocr_confidence < 0.85):
+        return _match_word_case(w_ref, w_ocr)
+    return w_ocr
+
+
+def repair_romaji_cue_text(
+    ocr_text: str,
+    ref_text: str,
+    *,
+    ocr_confidence: float | None = None,
+    is_asr: bool = False,
+) -> str:
+    """Token-level Romaji repair against romanized reference, guarding ateji and zero CJK."""
+    from lyra_ocr.lyric.text_repair import repair_romaji_confusables
+
+    ocr_work = repair_romaji_confusables((ocr_text or "").strip())
+    ocr_work = _CJK_CHAR_RE.sub("", ocr_work).strip()
+    ref_clean = _CJK_CHAR_RE.sub("", (ref_text or "").strip()).strip()
+    if not ocr_work:
+        return ""
+    if not ref_clean:
+        return re.sub(r"\s+", " ", ocr_work)
+
+    ocr_words = ocr_work.split()
+    ref_words = ref_clean.split()
+    if not ocr_words or not ref_words:
+        return re.sub(r"\s+", " ", ocr_work)
+
+    sm = SequenceMatcher(
+        None,
+        [w.lower() for w in ocr_words],
+        [w.lower() for w in ref_words],
+        autojunk=False,
+    )
+    out_tokens: list[str] = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag in ("equal", "delete"):
+            out_tokens.extend(ocr_words[i1:i2])
+        elif tag == "insert":
+            continue
+        elif tag == "replace":
+            n_o, n_r = i2 - i1, j2 - j1
+            if n_o == n_r:
+                for wo, wr in zip(ocr_words[i1:i2], ref_words[j1:j2]):
+                    out_tokens.append(
+                        _repair_romaji_pair(wo, wr, ocr_confidence=ocr_confidence, is_asr=is_asr)
+                    )
+            elif n_o == 1 and n_r >= 2:
+                wo = ocr_words[i1]
+                ref_joined = "".join(ref_words[j1:j2])
+                sim = line_similarity(wo.lower(), ref_joined.lower())
+                if sim >= 0.55:
+                    out_tokens.append(_match_word_case(ref_joined, wo))
+                elif is_asr and (ocr_confidence is None or ocr_confidence < 0.85):
+                    out_tokens.extend(ref_words[j1:j2])
+                else:
+                    out_tokens.append(wo)
+            elif n_o >= 2 and n_r == 1:
+                ocr_joined = "".join(ocr_words[i1:i2])
+                wr = ref_words[j1]
+                if line_similarity(ocr_joined.lower(), wr.lower()) >= 0.70:
+                    out_tokens.append(_match_word_case(wr, ocr_words[i1]))
+                else:
+                    out_tokens.extend(ocr_words[i1:i2])
+            else:
+                out_tokens.extend(ocr_words[i1:i2])
+
+    repaired = _CJK_CHAR_RE.sub("", " ".join(out_tokens))
+    return re.sub(r"\s+", " ", repaired).strip()
+
+
 def align_reference(
     cues: list[LyricCue],
     reference: list[str] | list[ReferenceLine] | ReferenceBundle,
@@ -557,6 +660,8 @@ def align_reference(
         return AlignmentResult()
 
     is_caption = "caption" in eff_source.lower()
+    is_romaji_ref = eff_source in ("lrclib_romanized", "asr_romanized")
+    is_asr_rom = eff_source == "asr_romanized"
     if is_caption:
         replace_thresh = cfg.caption_replace_similarity
         review_thresh = 0.75
@@ -568,7 +673,16 @@ def align_reference(
         review_thresh = min_similarity
 
     n, m = len(cues), len(ref_lines)
-    stats_matrix = [[line_match_stats(cues[i].text, ref_lines[j].text) for j in range(m)] for i in range(n)]
+    from lyra_ocr.lyric.text_repair import repair_romaji_confusables
+
+    cue_cmp_texts = [
+        repair_romaji_confusables(c.text) if (c.lang == "ja-Latn" or is_romaji_ref) else c.text
+        for c in cues
+    ]
+    stats_matrix = [
+        [line_match_stats(cue_cmp_texts[i], ref_lines[j].text) for j in range(m)]
+        for i in range(n)
+    ]
 
     # DP alignment with N:M transitions
     dp = [[0.0] * (m + 1) for _ in range(n + 1)]
@@ -592,7 +706,7 @@ def align_reference(
                 if kc == 1 and kr == 1:
                     st = stats_matrix[i - 1][j - 1]
                 else:
-                    cand_cue_text = " ".join(cues[idx].text for idx in range(i - kc, i))
+                    cand_cue_text = " ".join(cue_cmp_texts[idx] for idx in range(i - kc, i))
                     cand_ref_text = " ".join(ref_lines[jdx].text for jdx in range(j - kr, j))
                     la, lb = len(cand_cue_text), len(cand_ref_text)
                     if (2.0 * min(la, lb) / max(1, la + lb)) < review_thresh * 0.85:
@@ -648,22 +762,37 @@ def align_reference(
             if not ref_clean:
                 continue
 
+            cue_is_romaji = cue.lang == "ja-Latn" or is_romaji_ref
+            eff_replace = min(replace_thresh, 0.78) if cue_is_romaji else replace_thresh
+            eff_cov = min(cfg.min_token_coverage, 0.40) if cue_is_romaji else cfg.min_token_coverage
             guards_passed = (
-                st.similarity >= replace_thresh
-                and st.token_coverage >= cfg.min_token_coverage
+                st.similarity >= eff_replace
+                and st.token_coverage >= eff_cov
                 and cfg.min_length_ratio <= st.length_ratio <= cfg.max_length_ratio
                 and bool(_WORD_RE.search(ref_clean))
             )
             if guards_passed:
-                if ref_clean != cue.text:
+                target_text = (
+                    repair_romaji_cue_text(
+                        cue.text,
+                        ref_clean,
+                        ocr_confidence=cue.ocr_confidence,
+                        is_asr=is_asr_rom,
+                    )
+                    if cue_is_romaji
+                    else ref_clean
+                )
+                if cue_is_romaji:
+                    target_text = _CJK_CHAR_RE.sub("", target_text).strip()
+                if target_text and target_text != cue.text:
                     corr_method = "reference_caption" if is_caption else "reference"
                     cue.correction = CorrectionInfo(
                         method=corr_method,
                         changed=True,
                         confidence=cue.confidence,
-                        diff=f"'{cue.text}' -> '{ref_clean}'",
+                        diff=f"'{cue.text}' -> '{target_text}'",
                     )
-                    cue.text = ref_clean
+                    cue.text = target_text
                     replaced_count += 1
             else:
                 cue.review_required = True
@@ -676,22 +805,37 @@ def align_reference(
             if cue.correction.method == "human":
                 continue
             combined_ref = " ".join(ref_lines[ri].text.strip() for ri in ref_idxs)
-            st = line_match_stats(cue.text, combined_ref)
+            st = line_match_stats(cue_cmp_texts[cue_idxs[0]], combined_ref)
+            cue_is_romaji = cue.lang == "ja-Latn" or is_romaji_ref
+            eff_replace = min(replace_thresh, 0.78) if cue_is_romaji else replace_thresh
+            eff_cov = min(cfg.min_token_coverage, 0.40) if cue_is_romaji else cfg.min_token_coverage
             guards_passed = (
-                st.similarity >= replace_thresh
-                and st.token_coverage >= cfg.min_token_coverage
+                st.similarity >= eff_replace
+                and st.token_coverage >= eff_cov
                 and bool(_WORD_RE.search(combined_ref))
             )
             if guards_passed:
-                if combined_ref != cue.text:
+                target_text = (
+                    repair_romaji_cue_text(
+                        cue.text,
+                        combined_ref,
+                        ocr_confidence=cue.ocr_confidence,
+                        is_asr=is_asr_rom,
+                    )
+                    if cue_is_romaji
+                    else combined_ref
+                )
+                if cue_is_romaji:
+                    target_text = _CJK_CHAR_RE.sub("", target_text).strip()
+                if target_text and target_text != cue.text:
                     corr_method = "reference_caption" if is_caption else "reference"
                     cue.correction = CorrectionInfo(
                         method=corr_method,
                         changed=True,
                         confidence=cue.confidence,
-                        diff=f"'{cue.text}' -> '{combined_ref}'",
+                        diff=f"'{cue.text}' -> '{target_text}'",
                     )
-                    cue.text = combined_ref
+                    cue.text = target_text
                     replaced_count += 1
             else:
                 cue.review_required = True
@@ -704,26 +848,41 @@ def align_reference(
             ocr_cues = [cues[ci] for ci in cue_idxs]
             if any(c.correction.method == "human" for c in ocr_cues):
                 continue
-            cand_cue_text = " ".join(c.text for c in ocr_cues)
+            cand_cue_text = " ".join(cue_cmp_texts[ci] for ci in cue_idxs)
             st = line_match_stats(cand_cue_text, ref_clean)
+            cue_is_romaji = any(c.lang == "ja-Latn" for c in ocr_cues) or is_romaji_ref
+            eff_replace = min(replace_thresh, 0.78) if cue_is_romaji else replace_thresh
+            eff_cov = min(cfg.min_token_coverage, 0.40) if cue_is_romaji else cfg.min_token_coverage
             guards_passed = (
-                st.similarity >= replace_thresh
-                and st.token_coverage >= cfg.min_token_coverage
+                st.similarity >= eff_replace
+                and st.token_coverage >= eff_cov
                 and bool(_WORD_RE.search(ref_clean))
             )
             if guards_passed:
                 projected = _project_ref_onto_cues([c.text for c in ocr_cues], ref_clean)
                 for ci, part in zip(cue_idxs, projected):
                     c = cues[ci]
-                    if part and part != c.text:
+                    target_part = (
+                        repair_romaji_cue_text(
+                            c.text,
+                            part,
+                            ocr_confidence=c.ocr_confidence,
+                            is_asr=is_asr_rom,
+                        )
+                        if (c.lang == "ja-Latn" or is_romaji_ref)
+                        else part
+                    )
+                    if c.lang == "ja-Latn" or is_romaji_ref:
+                        target_part = _CJK_CHAR_RE.sub("", target_part).strip()
+                    if target_part and target_part != c.text:
                         corr_method = "reference_caption" if is_caption else "reference"
                         c.correction = CorrectionInfo(
                             method=corr_method,
                             changed=True,
                             confidence=c.confidence,
-                            diff=f"'{c.text}' -> '{part}'",
+                            diff=f"'{c.text}' -> '{target_part}'",
                         )
-                        c.text = part
+                        c.text = target_part
                         replaced_count += 1
             else:
                 for c in ocr_cues:
@@ -1193,6 +1352,7 @@ def romanize_bundle(bundle: ReferenceBundle) -> ReferenceBundle | None:
 
     kks = pykakasi.kakasi()
     romanized_lines: list[ReferenceLine] = []
+    suffixes_to_attach = {"て", "で", "た", "だ", "ない", "ます", "ました", "たい", "ず", "ぬ"}
 
     for l in bundle.lines:
         if not l.text.strip():
@@ -1200,10 +1360,43 @@ def romanize_bundle(bundle: ReferenceBundle) -> ReferenceBundle | None:
         # Convert Katakana okurigana to Hiragana for proper compound verb romanization
         text_norm = jaconv.kata2hira(l.text) if jaconv else l.text
         res = kks.convert(text_norm)
-        hepburn_tokens = [item["hepburn"].strip() for item in res if item.get("hepburn") and item["hepburn"].strip()]
-        romaji_text = " ".join(hepburn_tokens).strip()
+        hepburn_tokens: list[str] = []
+        cursor = 0
+        for idx, item in enumerate(res):
+            orig = str(item.get("orig", ""))
+            hira = str(item.get("hira", ""))
+            hep = str(item.get("hepburn", "")).strip()
+
+            found_at = text_norm.find(orig, cursor) if orig else -1
+            preceded_by_space = False
+            if found_at > cursor:
+                preceded_by_space = bool(text_norm[cursor:found_at].strip() == "" and found_at > cursor)
+            if found_at >= 0:
+                cursor = found_at + len(orig)
+
+            if orig == "は" and idx > 0:
+                hep = "wa"
+            elif orig == "へ" and idx > 0:
+                hep = "e"
+
+            hep_clean = _CJK_CHAR_RE.sub("", hep).strip()
+            if not hep_clean:
+                continue
+
+            if (
+                orig in suffixes_to_attach
+                and not preceded_by_space
+                and hepburn_tokens
+                and hira == orig
+            ):
+                hepburn_tokens[-1] = f"{hepburn_tokens[-1]}{hep_clean}"
+            else:
+                hepburn_tokens.append(hep_clean)
+
+        romaji_text = _CJK_CHAR_RE.sub("", " ".join(hepburn_tokens)).strip()
+        romaji_text = re.sub(r"\s+", " ", romaji_text).strip()
         if not romaji_text:
-            romaji_text = l.text
+            continue
         romanized_lines.append(
             ReferenceLine(
                 text=romaji_text,
@@ -1230,11 +1423,8 @@ def select_reference_lines(
     bundle: ReferenceBundle | None,
     target_lang: str,
 ) -> ReferenceBundle | None:
-    """Select reference lines matching a target layer language.
-
-    Romaji layers ('ja-Latn') are protected: never replaced or gap-filled by reference lyrics.
-    """
-    if not bundle or not bundle.lines or target_lang == "ja-Latn":
+    """Select reference lines matching a target layer language, romanizing ja -> ja-Latn."""
+    if not bundle or not bundle.lines:
         return None
 
     from lyra_ocr.lang import detect_line_lang, vote_layer_lang
@@ -1242,6 +1432,23 @@ def select_reference_lines(
     bundle_lang = bundle.language or vote_layer_lang(
         [l.language or detect_line_lang(l.text) for l in bundle.lines]
     )
+
+    if target_lang == "ja-Latn":
+        if bundle_lang == "ja-Latn":
+            return bundle
+        ja_lines = [
+            l for l in bundle.lines if (l.language or detect_line_lang(l.text)) == "ja"
+        ]
+        if bundle_lang == "ja" or ja_lines:
+            src_bundle = ReferenceBundle(
+                lines=ja_lines or bundle.lines,
+                source=bundle.source,
+                provider=bundle.provider,
+                language="ja",
+                warnings=list(bundle.warnings),
+            )
+            return romanize_bundle(src_bundle)
+        return None
 
     # If the bundle as a whole matches the target layer
     if bundle_lang == target_lang or (bundle_lang in ("en", "und") and target_lang in ("en", "und")):
