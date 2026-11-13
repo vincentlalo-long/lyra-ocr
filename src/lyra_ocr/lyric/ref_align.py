@@ -382,7 +382,7 @@ def align_reference(
                         if _update_cue_text(c, part, is_romaji=rom, is_caption=is_caption, is_asr_rom=is_asr_rom):
                             replaced_count += 1
             else:
-                _mark_review(ocr_cues, is_romaji=cue_is_romaji, repair_romaji_cfg=cfg.repair_romaji)
+                review_count += _mark_review(ocr_cues, is_romaji=cue_is_romaji, repair_romaji_cfg=cfg.repair_romaji)
 
     return AlignmentResult(
         matched_count=len({pair[0] for pair in pairs}),

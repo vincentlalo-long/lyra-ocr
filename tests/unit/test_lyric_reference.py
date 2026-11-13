@@ -845,5 +845,25 @@ def test_modularized_reference_submodules_and_facade():
     assert align_lines < 650, f"ref_align.py has {align_lines} lines (must be < 650)"
 
 
+def test_align_reference_multi_cue_to_one_ref_review_count():
+    """Verify kc > 1 and kr == 1 match failing replace threshold increments review_count."""
+    cues = [
+        _cue(1000, "hello world"),
+        _cue(2000, "foo bar"),
+    ]
+    ref = ["hello world foo baz"]
+    res = align_reference(
+        cues,
+        ref,
+        config=ReferenceConfig(review_similarity=0.70, replace_similarity=0.95),
+    )
+    assert res.matched_count == 2
+    assert res.replaced_count == 0
+    assert res.review_count == 2
+    assert all(c.review_required for c in cues)
+    assert all("reference_uncertain" in c.qa_flags for c in cues)
+
+
+
 
 
