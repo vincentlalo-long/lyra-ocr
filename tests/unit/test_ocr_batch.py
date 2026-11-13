@@ -7,7 +7,7 @@ import pytest
 
 from lyra_ocr.ocr import runtime as runtime_mod
 from lyra_ocr.ocr.detect import Detection, crop_quad
-from lyra_ocr.ocr.engine import OCREngine
+from lyra_ocr.ocr.engine import OCREngine, preprocess_crop_for_recognition
 
 
 class FakeOut:
@@ -110,7 +110,8 @@ def test_process_detections_batches_all_crops_in_detection_order():
         ),
     ]
     expected = [
-        f"t{int(round(float(crop_quad(image, det.polygon).mean())))}" for det in detections
+        f"t{int(round(float(preprocess_crop_for_recognition(crop_quad(image, det.polygon)).mean())))}"
+        for det in detections
     ]
 
     lines = engine.process_detections(image, detections)

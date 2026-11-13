@@ -56,6 +56,87 @@ def crop_quad(image: np.ndarray, polygon: list[list[int | float]]) -> np.ndarray
     return warped
 
 
+def _quad_dimensions(pts: np.ndarray) -> tuple[float, float]:
+    w = float(max(np.linalg.norm(pts[0] - pts[1]), np.linalg.norm(pts[2] - pts[3])))
+    h = float(max(np.linalg.norm(pts[0] - pts[3]), np.linalg.norm(pts[1] - pts[2])))
+    return w, h
+
+
+def split_multiline_crop_quads(
+    frame: np.ndarray,
+    quads: list[np.ndarray],
+    scores: list[float],
+) -> tuple[list[np.ndarray], list[float]]:
+    """Split tall 2-line merged quads along their horizontal gradient valley."""
+    if frame is None or getattr(frame, "size", 0) == 0 or not quads:
+        return quads, scores
+
+    out_quads: list[np.ndarray] = []
+    out_scores: list[float] = []
+
+    for i, quad in enumerate(quads):
+        score = float(scores[i]) if i < len(scores) else 1.0
+        pts = np.asarray(quad, dtype=np.float32)
+        if pts.shape != (4, 2):
+            out_quads.append(quad)
+            out_scores.append(score)
+            continue
+
+        w, h = _quad_dimensions(pts)
+        if h < 52.0 or h <= 0.0 or (w / h) >= 12.0:
+            out_quads.append(quad)
+            out_scores.append(score)
+            continue
+
+        crop = crop_quad(frame, pts.tolist())
+        if crop is None or crop.size == 0 or crop.shape[0] < 52 or crop.shape[1] < 4:
+            out_quads.append(quad)
+            out_scores.append(score)
+            continue
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        grad_x = np.abs(np.diff(gray.astype(np.float32), axis=1))
+        row_energy = grad_x.mean(axis=1)
+
+        ch = gray.shape[0]
+        cand_start = max(18, int(round(0.32 * ch)))
+        cand_end = min(ch - 18, int(round(0.68 * ch))) + 1
+        if cand_end <= cand_start:
+            out_quads.append(quad)
+            out_scores.append(score)
+            continue
+
+        y_split = cand_start + int(np.argmin(row_energy[cand_start:cand_end]))
+        e_top = float(row_energy[:y_split].max()) if y_split > 0 else 0.0
+        e_bot = float(row_energy[y_split + 1 :].max()) if y_split + 1 < ch else 0.0
+        e_valley = float(row_energy[y_split])
+
+        if min(e_top, e_bot) < 5.0 or e_valley >= 0.25 * max(e_top, e_bot):
+            out_quads.append(quad)
+            out_scores.append(score)
+            continue
+
+        r = float(y_split) / float(ch)
+        left_mid = pts[0] + r * (pts[3] - pts[0])
+        right_mid = pts[1] + r * (pts[2] - pts[1])
+
+        top_quad = np.stack([pts[0], pts[1], right_mid, left_mid], axis=0)
+        bot_quad = np.stack([left_mid, right_mid, pts[2], pts[3]], axis=0)
+
+        orig_dtype = np.asarray(quad).dtype
+        if np.issubdtype(orig_dtype, np.integer):
+            top_quad = np.round(top_quad).astype(orig_dtype)
+            bot_quad = np.round(bot_quad).astype(orig_dtype)
+        else:
+            top_quad = top_quad.astype(orig_dtype)
+            bot_quad = bot_quad.astype(orig_dtype)
+
+        out_quads.extend([top_quad, bot_quad])
+        out_scores.extend([score, score])
+
+    return out_quads, out_scores
+
+
 class TextDetector:
     """Det-only wrapper using DBNet via RapidOCR."""
 
@@ -107,10 +188,22 @@ class TextDetector:
         if boxes is None or len(boxes) == 0:
             return []
 
+        quads = [np.asarray(pts, dtype=np.float32) for pts in boxes]
+        score_list = [
+            round(float(scores[i]), 4) if scores and i < len(scores) else 1.0
+            for i in range(len(quads))
+        ]
+
+        has_tall = any(_quad_dimensions(q)[1] >= 52.0 for q in quads if q.shape == (4, 2))
+        if has_tall:
+            frame_bgr = image if isinstance(image, np.ndarray) else cv2.imread(str(image))
+            if frame_bgr is not None:
+                quads, score_list = split_multiline_crop_quads(frame_bgr, quads, score_list)
+
         detections: list[Detection] = []
-        for i, pts in enumerate(boxes):
+        for i, pts in enumerate(quads):
             poly = [[int(round(pt[0])), int(round(pt[1]))] for pt in pts]
-            score = round(float(scores[i]), 4) if scores and i < len(scores) else 1.0
+            score = score_list[i]
             bbox = polygon_to_bbox(poly)
             detections.append(Detection(polygon=poly, bbox=bbox, score=score))
 

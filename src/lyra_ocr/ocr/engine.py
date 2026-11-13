@@ -30,6 +30,35 @@ class TextLine:
         return asdict(self)
 
 
+def preprocess_crop_for_recognition(crop: np.ndarray | None) -> np.ndarray | None:
+    """Upscale tiny text crops, enhance local contrast via CLAHE, and add border padding."""
+    if crop is None or getattr(crop, "size", 0) == 0:
+        return crop
+
+    img = crop
+    h, w = img.shape[:2]
+    if h < 36:
+        scale = max(2.0, 56.0 / max(1, h))
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(1, int(round(h * scale)))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+    # Apply subtle CLAHE only on images with non-trivial texture/contrast to avoid
+    # amplifying flat-background noise or distorting uniform synthetic crops.
+    if img.ndim == 3 and img.shape[2] == 3 and float(img.std()) >= 8.0:
+        lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
+        l_chan, a_chan, b_chan = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(4, 4))
+        l_enhanced = clahe.apply(l_chan)
+        img = cv2.cvtColor(cv2.merge((l_enhanced, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
+    elif img.ndim == 2 and float(img.std()) >= 8.0:
+        clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(4, 4))
+        img = clahe.apply(img)
+
+    pad = 4
+    return cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
+
+
 def normalize_text(text: str, form: str = "NFC") -> str:
     """Normalize text using Unicode normalization and strip zero-width artifacts."""
     if not text:
@@ -152,7 +181,8 @@ class OCREngine:
         chosen_model = model_id or self._default_model
         engine = self._get_model(chosen_model)
 
-        out = engine(crop)
+        proc_crop = preprocess_crop_for_recognition(crop)
+        out = engine(proc_crop)
         txts = getattr(out, "txts", None)
         scores = getattr(out, "scores", None)
 
@@ -186,7 +216,7 @@ class OCREngine:
         results: list[tuple[str, float, str]] = [("", 0.0, chosen_model) for _ in crops]
 
         valid: list[tuple[int, np.ndarray]] = [
-            (i, crop)
+            (i, preprocess_crop_for_recognition(crop))
             for i, crop in enumerate(crops)
             if crop is not None and getattr(crop, "size", 0) > 0
         ]
