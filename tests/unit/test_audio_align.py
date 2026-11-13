@@ -27,7 +27,8 @@ def test_tokenize_words_cjk_character_splitting():
     assert _tokenize_words("Hello world today") == ["Hello", "world", "today"]
 
     # Mixed Latin and CJK
-    assert _tokenize_words("Hello 世界!") == ["Hello", "世", "界!"] or _tokenize_words("Hello 世界!") == ["Hello", "世", "界"] or _tokenize_words("Hello 世界") == ["Hello", "世", "界"]
+    assert _tokenize_words("Hello 世界!") == ["Hello", "世", "界", "!"]
+    assert _tokenize_words("Hello 世界") == ["Hello", "世", "界"]
 
 
 def test_align_cues_with_audio_cjk_proportional_word_timings():

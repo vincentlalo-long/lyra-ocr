@@ -973,3 +973,48 @@ def test_build_lrc_enhanced_plumbing(tmp_path: Path):
     content = out_lrc.read_text(encoding="utf-8")
     assert "<00:01.00>Hello <00:01.90>world" in content
 
+
+def test_build_lrc_from_video_channel_not_leaked_as_artist(tmp_path: Path):
+    artifacts_dir = tmp_path / "vid_chan_art"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "test_chan",
+        "probe": {"duration": 10.0},
+        "tracker": {"name": "bytetrack"},
+        "config": {"sample_fps": 2.0},
+        "metadata": {"title": "Just Title", "channel": "MyChannel"},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "LINE ONE"},
+                "segments": [{"segment_id": 0, "start_ms": 1000, "end_ms": 3000, "text": "LINE ONE", "confidence": 0.95}],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    out_lrc = tmp_path / "vid_chan.lrc"
+    with patch("lyra_ocr.pipeline.run_phase1_pipeline"):
+        build_lrc_from_video(
+            video_path=tmp_path / "dummy.mp4",
+            out_lrc=out_lrc,
+            artifacts_dir=artifacts_dir,
+            title="Just Title",
+            channel="MyChannel",
+            force=False,
+        )
+
+    content = out_lrc.read_text(encoding="utf-8")
+    assert "[ti:Just Title]" in content
+    # Channel MUST NOT be leaked into artist tag
+    assert "[ar:" not in content
+

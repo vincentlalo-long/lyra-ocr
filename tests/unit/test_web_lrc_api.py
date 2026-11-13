@@ -171,3 +171,69 @@ def test_web_save_preserves_words_qa_flags_and_enhanced_lrc(tmp_path: Path):
     finally:
         server.shutdown()
         server.server_close()
+
+def test_web_save_can_disable_enhanced_lrc(tmp_path: Path):
+    server = create_server("127.0.0.1", 0, workspace_root=tmp_path)
+    import threading
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    try:
+        host, port = server.server_address
+        base_url = f"http://{host}:{port}"
+
+        out_lrc = tmp_path / "song2.lrc"
+        out_cues = tmp_path / "song2.cues.json"
+
+        # Prepopulate existing cues.json WITH ENHANCED=TRUE
+        cues_data = {
+            "video_id": "vid_test2",
+            "video_path": "vid_test2.mp4",
+            "duration_ms": 60000,
+            "tracker": "bytetrack",
+            "enhanced": True,
+            "options": {"enhanced": True},
+            "cues": [
+                {
+                    "start_ms": 1000,
+                    "end_ms": 3000,
+                    "text": "Hello world",
+                    "words": [
+                        {"word": "Hello", "start_ms": 1000, "end_ms": 1800},
+                        {"word": "world", "start_ms": 1900, "end_ms": 3000},
+                    ],
+                }
+            ],
+            "metadata": {"title": "Test Title", "artist": "Test Artist"},
+        }
+        out_cues.write_text(json.dumps(cues_data), encoding="utf-8")
+        out_lrc.write_text("[ti:Test Title]\n[00:01.00]<00:01.00>Hello <00:01.90>world\n", encoding="utf-8")
+
+        # Explicitly pass enhanced: False in save_payload
+        save_payload = {
+            "out_lrc": str(out_lrc),
+            "cues": [
+                {
+                    "start_ms": 1000,
+                    "end_ms": 3000,
+                    "text": "Hello world",
+                    "words": [
+                        {"word": "Hello", "start_ms": 1000, "end_ms": 1800},
+                        {"word": "world", "start_ms": 1900, "end_ms": 3000},
+                    ],
+                }
+            ],
+            "metadata": {"title": "Test Title", "artist": "Test Artist"},
+            "enhanced": False,
+        }
+
+        status, resp = http_request(f"{base_url}/api/lrc/save", data=save_payload, method="POST")
+        assert status == 200
+        assert resp.get("ok") is True
+
+        # Verify enhanced LRC tags were NOT written because enhanced was explicitly False
+        lrc_text = out_lrc.read_text(encoding="utf-8")
+        assert "<00:01.00>" not in lrc_text
+        assert "[00:01.00]Hello world" in lrc_text
+    finally:
+        server.shutdown()
+        server.server_close()

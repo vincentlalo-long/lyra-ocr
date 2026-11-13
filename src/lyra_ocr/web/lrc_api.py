@@ -397,11 +397,13 @@ class LrcAPIMixin:
                     except Exception:
                         pass
 
-                enhanced = bool(
-                    payload.get("enhanced")
-                    or existing_cues_data.get("enhanced")
-                    or (existing_cues_data.get("options") or {}).get("enhanced")
-                )
+                if "enhanced" in payload and payload["enhanced"] is not None:
+                    enhanced = bool(payload["enhanced"])
+                else:
+                    enhanced = bool(
+                        existing_cues_data.get("enhanced")
+                        or (existing_cues_data.get("options") or {}).get("enhanced")
+                    )
                 export_res = write_lrc_layers(out_lrc, cues, meta, enhanced=enhanced)
                 layers_meta = export_res.get("layers", [])
                 primary_lang = export_res.get("primary", {}).get("lang", "")

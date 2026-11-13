@@ -600,7 +600,7 @@ def build_lrc_from_video(
         )
 
     effective_force = force or needs_pipeline
-    eff_artist = channel or build_kwargs.pop("artist", None)
+    eff_artist = (build_kwargs.pop("artist", None) or "").strip() or None
     eff_title = title or build_kwargs.pop("title", None)
     build_kwargs.pop("force", None)
     return build_lrc_from_artifacts(
