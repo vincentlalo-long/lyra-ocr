@@ -527,3 +527,113 @@ def asr_vocal_gate_score(
         return round(min(1.0, max(0.5 * mean_prob, ratio * mean_prob)), 4)
 
     return round(min(0.5, 0.5 * mean_prob), 4)
+
+
+def asr_has_new_prefix_onset(
+    cue_text: str,
+    second_start_ms: int,
+    transcript: ASRTranscript | None,
+    *,
+    first_start_ms: int | None = None,
+    window_before_ms: int = 450,
+    window_after_ms: int = 1100,
+) -> bool:
+    """Quickly check whether ASR confirms a new vocal onset for cue_text prefix at second_start_ms."""
+    if not cue_text or not cue_text.strip() or transcript is None or not transcript.segments:
+        return False
+
+    win_start = second_start_ms - window_before_ms
+    if first_start_ms is not None:
+        win_start = max(win_start, first_start_ms + 300)
+    win_end = second_start_ms + window_after_ms
+
+    if win_start > win_end:
+        return False
+
+    need_romanize = (transcript.language == "ja") and not bool(_CJK_RE.search(cue_text))
+
+    words_in_win: list[ASRWord] = []
+    for seg in transcript.segments:
+        if seg.end_ms < win_start or seg.start_ms > win_end:
+            continue
+        if seg.words:
+            for w in seg.words:
+                if win_start <= w.start_ms <= win_end and w.word.strip():
+                    w_txt = _romanize_ja_text(w.word) if need_romanize else w.word.strip()
+                    if not w_txt:
+                        w_txt = w.word.strip()
+                    words_in_win.append(
+                        ASRWord(word=w_txt, start_ms=int(w.start_ms), end_ms=int(w.end_ms), probability=w.probability)
+                    )
+        elif win_start <= seg.start_ms <= win_end and seg.text.strip():
+            for sw in seg.text.strip().split():
+                sw_txt = _romanize_ja_text(sw) if need_romanize else sw
+                words_in_win.append(ASRWord(word=sw_txt or sw, start_ms=int(seg.start_ms), end_ms=int(seg.end_ms)))
+
+    if not words_in_win:
+        return False
+
+    words_in_win.sort(key=lambda w: (w.start_ms, w.end_ms))
+
+    # Candidate ASR prefixes from the first 1-2 words in the onset window
+    w1_clean = _clean_match_str(words_in_win[0].word)
+    w2_clean = _clean_match_str(words_in_win[1].word) if len(words_in_win) >= 2 else ""
+
+    asr_candidates: list[str] = []
+    if w1_clean:
+        asr_candidates.append(w1_clean)
+    if w1_clean and w2_clean:
+        asr_candidates.append(f"{w1_clean} {w2_clean}")
+        if _CJK_RE.search(w1_clean) or _CJK_RE.search(w2_clean):
+            asr_candidates.append(f"{w1_clean}{w2_clean}")
+
+    if not asr_candidates:
+        return False
+
+    cue_clean = _clean_match_str(cue_text)
+    if not cue_clean:
+        return False
+
+    cue_prefixes: list[str] = []
+    is_cjk = bool(_CJK_RE.search(cue_clean))
+    if is_cjk:
+        cjk_chars = re.sub(r"\s+", "", cue_clean)
+        if len(cjk_chars) >= 4:
+            cue_prefixes.append(cjk_chars[:4])
+        if len(cjk_chars) >= 3:
+            cue_prefixes.append(cjk_chars[:3])
+        cue_prefixes.append(cjk_chars)
+        c_words = cue_clean.split()
+        if c_words:
+            cue_prefixes.append(c_words[0])
+            if len(c_words) >= 2:
+                cue_prefixes.append(f"{c_words[0]} {c_words[1]}")
+                cue_prefixes.append(f"{c_words[0]}{c_words[1]}")
+        # Also support romanized Japanese prefix if available
+        kks_text = _romanize_ja_text(cue_clean)
+        if kks_text:
+            kks_clean = _clean_match_str(kks_text)
+            kks_words = kks_clean.split()
+            if kks_words:
+                cue_prefixes.append(kks_words[0])
+                if len(kks_words) >= 2:
+                    cue_prefixes.append(f"{kks_words[0]} {kks_words[1]}")
+    else:
+        cue_words = cue_clean.split()
+        if cue_words:
+            cue_prefixes.append(cue_words[0])
+            if len(cue_words) >= 2:
+                cue_prefixes.append(f"{cue_words[0]} {cue_words[1]}")
+
+    from lyra_ocr.lyric.reference import line_similarity
+
+    for asr_cand in asr_candidates:
+        for cue_p in cue_prefixes:
+            sim = line_similarity(asr_cand, cue_p)
+            if sim < 0.65:
+                sim = max(sim, SequenceMatcher(None, asr_cand, cue_p).ratio())
+            if sim >= 0.65:
+                return True
+
+    return False
+

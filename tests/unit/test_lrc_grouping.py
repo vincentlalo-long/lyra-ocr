@@ -396,6 +396,99 @@ def test_resolve_simultaneous_multiline_cues_does_not_absorb_sequential_under_lo
     assert by_text["Long background banner"] == (1000, 20000)
 
 
+def test_dedupe_merges_long_held_line_split_across_frames():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+
+    cue1 = LyricCue(
+        start_ms=10000,
+        end_ms=13500,
+        text="I will always love you",
+        source_track_ids=[1],
+        confidence=0.92,
+        y_center=0.8,
+        bbox=[100, 600, 800, 650],
+        layer_id=1,
+    )
+    cue2 = LyricCue(
+        start_ms=14000,
+        end_ms=17500,
+        text="I will always love you",
+        source_track_ids=[2],
+        confidence=0.95,
+        y_center=0.8,
+        bbox=[100, 600, 800, 650],
+        layer_id=1,
+    )
+    # ASR only hears "love you" around 14000ms (held continuation), no "I will" onset
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="love you",
+                start_ms=13800,
+                end_ms=15000,
+                words=[
+                    ASRWord("love", 13800, 14200),
+                    ASRWord("you", 14500, 15000),
+                ],
+            )
+        ],
+    )
+    result = dedupe_and_group([cue1, cue2], asr_transcript=transcript)
+    assert len(result) == 1
+    assert result[0].start_ms == 10000
+    assert result[0].end_ms == 17500
+    assert sorted(result[0].source_track_ids) == [1, 2]
+
+
+def test_dedupe_keeps_genuine_repeated_line_confirmed_by_asr():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+
+    cue1 = LyricCue(
+        start_ms=10000,
+        end_ms=12500,
+        text="Let it go",
+        source_track_ids=[1],
+        confidence=0.95,
+        y_center=0.8,
+        bbox=[100, 600, 600, 650],
+        layer_id=1,
+    )
+    cue2 = LyricCue(
+        start_ms=13000,
+        end_ms=15500,
+        text="Let it go",
+        source_track_ids=[2],
+        confidence=0.95,
+        y_center=0.8,
+        bbox=[100, 600, 600, 650],
+        layer_id=1,
+    )
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="Let it go Let it go",
+                start_ms=10000,
+                end_ms=16000,
+                words=[
+                    ASRWord("Let", 10100, 10400),
+                    ASRWord("it", 10400, 10600),
+                    ASRWord("go", 10600, 11200),
+                    ASRWord("Let", 13050, 13300),
+                    ASRWord("it", 13300, 13500),
+                    ASRWord("go", 13500, 14000),
+                ],
+            )
+        ],
+    )
+    result = dedupe_and_group([cue1, cue2], asr_transcript=transcript)
+    assert len(result) == 2
+    assert result[0].start_ms == 10000
+    assert result[1].start_ms == 13000
+
+
+
 
 
 

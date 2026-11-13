@@ -7,6 +7,7 @@ from lyra_ocr.audio.asr import (
     ASRTranscript,
     ASRWord,
     align_multiline_cues_with_asr,
+    asr_has_new_prefix_onset,
     asr_to_reference_bundle,
     asr_vocal_gate_score,
     load_asr_transcript,
@@ -126,3 +127,111 @@ def test_asr_vocal_gate_score_detects_active_vs_silent():
 
     assert asr_vocal_gate_score(active_cue, transcript) >= 0.8
     assert asr_vocal_gate_score(silent_cue, transcript) == 0.0
+
+
+def test_asr_has_new_prefix_onset_repeated_line():
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="Let it go Let it go",
+                start_ms=10000,
+                end_ms=16000,
+                words=[
+                    ASRWord("Let", 10100, 10300),
+                    ASRWord("it", 10300, 10500),
+                    ASRWord("go", 10500, 11200),
+                    ASRWord("Let", 13050, 13300),
+                    ASRWord("it", 13300, 13500),
+                    ASRWord("go", 13500, 14200),
+                ],
+            )
+        ],
+    )
+    # Check second occurrence at 13000ms
+    has_onset = asr_has_new_prefix_onset("Let it go", second_start_ms=13000, transcript=transcript, first_start_ms=10000)
+    assert has_onset is True
+
+
+def test_asr_has_new_prefix_onset_held_line_tail_only():
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="I will always love you",
+                start_ms=10000,
+                end_ms=15500,
+                words=[
+                    ASRWord("I", 10100, 10300),
+                    ASRWord("will", 10300, 10600),
+                    ASRWord("always", 10600, 11500),
+                    ASRWord("love", 13800, 14200),
+                    ASRWord("you", 14200, 14800),
+                ],
+            )
+        ],
+    )
+    # At 14000ms, ASR only has tail words ("love", "you"), not prefix "I will"
+    has_onset = asr_has_new_prefix_onset(
+        "I will always love you",
+        second_start_ms=14000,
+        transcript=transcript,
+        first_start_ms=10000,
+    )
+    assert has_onset is False
+
+
+def test_asr_has_new_prefix_onset_none_or_empty_transcript():
+    assert asr_has_new_prefix_onset("Hello world", 5000, None) is False
+    empty = ASRTranscript(language="en", segments=[])
+    assert asr_has_new_prefix_onset("Hello world", 5000, empty) is False
+
+
+def test_asr_has_new_prefix_onset_cjk():
+    transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="その鼓動は時を超えて",
+                start_ms=13000,
+                end_ms=16000,
+                words=[
+                    ASRWord("その", 13000, 13400),
+                    ASRWord("鼓動", 13400, 14000),
+                    ASRWord("は", 14000, 14200),
+                ],
+            )
+        ],
+    )
+    assert asr_has_new_prefix_onset("その鼓動は時を超えて", 13000, transcript) is True
+    # With only tail word "超えて"
+    tail_transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="超えて",
+                start_ms=13000,
+                end_ms=14000,
+                words=[ASRWord("超えて", 13000, 13800)],
+            )
+        ],
+    )
+    assert asr_has_new_prefix_onset("その鼓動は時を超えて", 13000, tail_transcript) is False
+
+
+def test_asr_has_new_prefix_onset_first_start_ms_guard():
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="Hello world",
+                start_ms=1000,
+                end_ms=1300,
+                words=[ASRWord("Hello", 1020, 1200)],
+            )
+        ],
+    )
+    # If second_start_ms is 1400 and first_start_ms is 1000, the onset of first cue at 1020ms
+    # must NOT trigger as a new onset for second_start_ms!
+    assert asr_has_new_prefix_onset("Hello world", second_start_ms=1400, transcript=transcript, first_start_ms=1000) is False
+

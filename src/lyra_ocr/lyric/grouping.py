@@ -427,24 +427,64 @@ def dedupe_and_group(
             ):
                 continue
 
-            # Check dedupe criteria. A line sampled at 2 fps can appear as two
-            # tracks starting ~1s apart; allow a wider window only for
-            # near-identical text so genuine short consecutive lines survive.
+            y_diff = abs(existing.y_center - cue.y_center)
+            iou = _bbox_iou(existing.bbox, cue.bbox)
+            same_band = (y_diff <= 0.08 or iou >= 0.30)
+            if not same_band:
+                continue
+
             sim = string_similarity(existing.text, cue.text)
+            text_match = (sim >= 0.88)
+            if not text_match:
+                e_clean = existing.text.strip().lower()
+                c_clean = cue.text.strip().lower()
+                if (len(e_clean) >= 10 or len(c_clean) >= 10) and sim >= 0.80:
+                    if (
+                        e_clean.startswith(c_clean)
+                        or e_clean.endswith(c_clean)
+                        or c_clean.startswith(e_clean)
+                        or c_clean.endswith(e_clean)
+                    ):
+                        text_match = True
+
+            if not text_match:
+                continue
+
             start_delta = abs(existing.start_ms - cue.start_ms)
-            time_close = start_delta <= 500 or (
-                sim >= 0.92
-                and start_delta <= 1500
-                and min(existing.end_ms, cue.end_ms)
-                - max(existing.start_ms, cue.start_ms)
-                >= -500
-            )
-            if sim >= 0.90 and time_close:
-                y_diff = abs(existing.y_center - cue.y_center)
-                iou = _bbox_iou(existing.bbox, cue.bbox)
-                if y_diff <= 0.08 or iou >= 0.3:
-                    matched_idx = i
-                    break
+            gap_ms = cue.start_ms - existing.end_ms
+
+            should_merge = False
+            if start_delta <= 1500 or gap_ms <= 200:
+                # Case 1: Overlapping or Simultaneous Duplicate
+                if gap_ms > 0:
+                    from lyra_ocr.audio.asr import asr_has_new_prefix_onset
+
+                    is_repeat = asr_has_new_prefix_onset(
+                        cue.text,
+                        cue.start_ms,
+                        asr_transcript,
+                        first_start_ms=existing.start_ms,
+                    )
+                    if not is_repeat:
+                        should_merge = True
+                else:
+                    should_merge = True
+            elif 200 < gap_ms <= 2500 and start_delta > 1500:
+                # Case 2: Long Line Split Across Frames
+                from lyra_ocr.audio.asr import asr_has_new_prefix_onset
+
+                is_repeat = asr_has_new_prefix_onset(
+                    cue.text,
+                    cue.start_ms,
+                    asr_transcript,
+                    first_start_ms=existing.start_ms,
+                )
+                if not is_repeat:
+                    should_merge = True
+
+            if should_merge:
+                matched_idx = i
+                break
 
         if matched_idx >= 0:
             target = merged[matched_idx]
@@ -470,6 +510,19 @@ def dedupe_and_group(
                 target.layer_id = cue.layer_id
             if (not target.lang or target.lang == "und") and cue.lang and cue.lang != "und":
                 target.lang = cue.lang
+            if cue.words:
+                if not target.words:
+                    target.words = list(cue.words)
+                else:
+                    combined_words = list(target.words)
+                    existing_spans = {(w.get("start_ms"), w.get("end_ms"), w.get("word")) for w in combined_words}
+                    for cw in cue.words:
+                        span_key = (cw.get("start_ms"), cw.get("end_ms"), cw.get("word"))
+                        if span_key not in existing_spans:
+                            combined_words.append(cw)
+                            existing_spans.add(span_key)
+                    combined_words.sort(key=lambda w: (w.get("start_ms", 0), w.get("end_ms", 0)))
+                    target.words = combined_words
         else:
             merged.append(cue)
 
