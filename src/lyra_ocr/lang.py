@@ -14,10 +14,45 @@ _ROMAJI_TOKEN_RE = re.compile(
 )
 
 # Common short English words that coincidentally match Japanese mora structure
-_AMBIGUOUS_ENGLISH_SHORT_WORDS = {
+_ENGLISH_STOPWORDS = {
     "a", "i", "to", "do", "so", "no", "go", "me", "he", "be", "we",
     "at", "in", "on", "as", "is", "it", "or", "an", "am", "us", "by", "my",
+    "one", "more", "time", "take", "home", "make", "like", "life", "love",
+    "come", "some", "same", "name", "game", "side", "ride", "hide", "wide",
+    "wake", "face", "fade", "late", "gate", "hate", "fate", "date", "rate",
+    "hope", "rope", "note", "vote", "rise", "wise", "rule", "pure", "sure",
+    "cure", "fire", "wire", "tire", "care", "share", "dare", "bare", "rare",
+    "mine", "fine", "line", "shine", "wine", "nine", "live", "give", "save",
+    "wave", "gave", "have", "here", "there", "where", "were", "gone", "done",
+    "none", "bone", "tone", "zone", "alone", "before", "above", "alive",
+    "away", "again", "into", "onto", "upon", "over", "ever", "never", "under",
+    "eyes", "open", "baby", "nite", "night", "sky", "fly", "cry", "try",
 }
+_AMBIGUOUS_ENGLISH_SHORT_WORDS = _ENGLISH_STOPWORDS
+
+# English silent-e detector: CVCe pattern
+_ENGLISH_SILENT_E_RE = re.compile(r"^[bcdfghjklmnpqrstvwxyz][aeiou][bcdfghjklmnpqrstvwxyz]e$")
+
+# Genuine common 2-mora Romaji words excluded from silent-e detection
+_GENUINE_2MORA_ROMAJI_E = {
+    "kaze", "koe", "mune", "yume", "ame", "hane", "kage", "tane", "fune",
+    "sore", "kore", "are", "dare", "naze", "toki", "sora", "kimi", "boku",
+    "hito", "machi", "hoshi", "hana", "uta", "ima",
+}
+
+# Positive Japanese Romaji indicators (particles and core vocabulary)
+_ROMAJI_PARTICLES_AND_FUNCTION = {
+    "wa", "ga", "wo", "ni", "de", "to", "mo", "no", "ka", "ne", "yo", "na",
+    "ze", "zo", "sa", "kara", "made", "dake", "demo", "nara", "kedo", "tachi",
+    "koto", "mono", "toki", "sora", "kimi", "boku", "watashi", "kokoro",
+    "namida", "hikari", "sekai", "mirai", "ashita", "yume", "kaze", "uta",
+    "koi", "ai", "sono", "kono", "ano", "doko", "nani", "itsu",
+}
+
+# Japanese morphological substrings
+_ROMAJI_MORPHOLOGICAL_SUBSTRINGS = (
+    "shi", "chi", "tsu", "ky", "gy", "ny", "hy", "my", "ry", "ou", "uu", "ai", "oi", "ei",
+)
 
 # Spanish stopwords and distinct characters
 _SPANISH_STOPWORDS = {
@@ -58,13 +93,38 @@ def romaji_score(text: str) -> float:
         tok_lower = tok.lower()
         if _ROMAJI_TOKEN_RE.fullmatch(tok_lower):
             romaji_tokens += 1
-            if tok_lower not in _AMBIGUOUS_ENGLISH_SHORT_WORDS:
+            is_english = (
+                tok_lower in _ENGLISH_STOPWORDS
+                or (
+                    bool(_ENGLISH_SILENT_E_RE.fullmatch(tok_lower))
+                    and tok_lower not in _GENUINE_2MORA_ROMAJI_E
+                )
+            )
+            if not is_english:
                 unambiguous_romaji_tokens += 1
         else:
             non_romaji_tokens += 1
 
     # If there are any clearly non-romaji Latin tokens, heavily penalize
     if non_romaji_tokens > 0:
+        return 0.0
+
+    # Line with <= 4 tokens that contains zero positive Japanese Romaji indicators/morphology
+    # and >= 1 silent-e or English word must score < 0.50 so it never triggers ja-Latn
+    has_positive = any(
+        tok.lower() in _ROMAJI_PARTICLES_AND_FUNCTION
+        or any(sub in tok.lower() for sub in _ROMAJI_MORPHOLOGICAL_SUBSTRINGS)
+        for tok in tokens
+    )
+    has_english = any(
+        tok.lower() in _ENGLISH_STOPWORDS
+        or (
+            bool(_ENGLISH_SILENT_E_RE.fullmatch(tok.lower()))
+            and tok.lower() not in _GENUINE_2MORA_ROMAJI_E
+        )
+        for tok in tokens
+    )
+    if total_tokens <= 4 and not has_positive and has_english:
         return 0.0
 
     # Fraction of unambiguous romaji words among all tokens

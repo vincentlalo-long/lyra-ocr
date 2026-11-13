@@ -168,6 +168,7 @@ def test_write_lrc_layers_multi_layer_romaji_priority(tmp_path: Path):
             lang="en",
         ),
     ]
+    # By default ('auto'), original script ('ja') wins cleanly over Romaji and English when cue counts match
     res = write_lrc_layers(out_file, cues, metadata)
 
     assert out_file.exists()
@@ -175,13 +176,16 @@ def test_write_lrc_layers_multi_layer_romaji_priority(tmp_path: Path):
     assert (tmp_path / "song.ja.lrc").exists()
     assert (tmp_path / "song.en.lrc").exists()
 
-    # Primary is ja-Latn
-    assert res["primary"]["lang"] == "ja-Latn"
+    assert res["primary"]["lang"] == "ja"
     assert res["primary"]["path"] == str(out_file)
     assert len(res["layers"]) == 3
+    assert out_file.read_text(encoding="utf-8") == (tmp_path / "song.ja.lrc").read_text(encoding="utf-8")
 
-    # Primary file matches romaji layer file
-    assert out_file.read_text(encoding="utf-8") == (tmp_path / "song.ja-Latn.lrc").read_text(encoding="utf-8")
+    # When preferred_lang="ja-Latn" is specified, Romaji is chosen as primary
+    out_romaji = tmp_path / "song_romaji.lrc"
+    res_romaji = write_lrc_layers(out_romaji, cues, metadata, preferred_lang="ja-Latn")
+    assert res_romaji["primary"]["lang"] == "ja-Latn"
+    assert out_romaji.read_text(encoding="utf-8") == (tmp_path / "song_romaji.ja-Latn.lrc").read_text(encoding="utf-8")
 
 
 def test_write_lrc_layers_strict_one_file_per_language(tmp_path: Path):
@@ -280,5 +284,53 @@ def test_write_lrc_enhanced_karaoke_tags(tmp_path: Path):
     write_lrc(out_file, cues, metadata, enhanced=True)
     content = out_file.read_text(encoding="utf-8")
     assert "[00:01.00]<00:01.00>Hello <00:01.50>beautiful <00:02.30>world" in content
+
+
+def test_write_lrc_layers_coverage_primary_selection(tmp_path: Path):
+    out_file = tmp_path / "song.lrc"
+    metadata = LrcMetadata(title="English Song", artist="Artist")
+    # 30 'en' cues and 2 stray 'ja-Latn' cues (verification step 2)
+    en_cues = [
+        LyricCue(
+            start_ms=i * 2000,
+            end_ms=i * 2000 + 1500,
+            text=f"English line {i}",
+            layer_id=0,
+            lang="en",
+        )
+        for i in range(30)
+    ]
+    romaji_cues_2 = [
+        LyricCue(
+            start_ms=65000 + i * 2000,
+            end_ms=65000 + i * 2000 + 1500,
+            text=f"one more time {i}",
+            layer_id=1,
+            lang="ja-Latn",
+        )
+        for i in range(2)
+    ]
+    res_2 = write_lrc_layers(out_file, en_cues + romaji_cues_2, metadata)
+    assert res_2["primary"]["lang"] == "en"
+
+    # Multi-layer with 5 'ja-Latn' cues (>= 4 cues so both layers output .<lang>.lrc)
+    out_multi = tmp_path / "multi.lrc"
+    romaji_cues_5 = [
+        LyricCue(
+            start_ms=65000 + i * 2000,
+            end_ms=65000 + i * 2000 + 1500,
+            text=f"one more time {i}",
+            layer_id=1,
+            lang="ja-Latn",
+        )
+        for i in range(5)
+    ]
+    res_5 = write_lrc_layers(out_multi, en_cues + romaji_cues_5, metadata)
+    assert res_5["primary"]["lang"] == "en"
+    assert (tmp_path / "multi.en.lrc").exists()
+    assert (tmp_path / "multi.ja-Latn.lrc").exists()
+    assert out_multi.read_text(encoding="utf-8") == (tmp_path / "multi.en.lrc").read_text(encoding="utf-8")
+
+
 
 

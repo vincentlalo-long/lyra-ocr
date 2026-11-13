@@ -837,7 +837,8 @@ def test_web_server_lrc_multi_layer_and_save(make_web_server, tmp_path: Path):
     status, gen_resp = http_request(f"{url}/api/lrc/generate", data=gen_payload, method="POST")
     assert status == 200
     assert gen_resp["ok"] is True
-    assert gen_resp["primary_lang"] == "ja-Latn"
+    # Without ja-Latn bias, original Japanese script (ja) is chosen over Romaji when cue counts match
+    assert gen_resp["primary_lang"] == "ja"
     assert len(gen_resp["layers"]) == 2
     for layer in gen_resp["layers"]:
         assert "layer_id" in layer

@@ -739,7 +739,8 @@ def test_build_lrc_per_layer_reference_alignment_protects_romaji(tmp_path: Path)
     # Layer files generated
     assert (tmp_path / "multi.ja-Latn.lrc").exists()
     assert (tmp_path / "multi.ja.lrc").exists()
-    assert res["primary_lang"] == "ja-Latn"
+    # Primary layer is ja because ja has more cues (2) than ja-Latn (1)
+    assert res["primary_lang"] == "ja"
     assert len(res["layers"]) == 2
 
     # Layer 0 (ja-Latn) must NEVER be replaced by Kanji reference

@@ -78,3 +78,16 @@ def test_detect_line_lang_spanish():
     # Regular English with one stopword must not be mistaken for Spanish
     assert detect_line_lang("this is the day we wait for") == "en"
 
+
+def test_detect_line_lang_english_silent_e_not_romaji():
+    assert detect_line_lang("one more time") == "en"
+    assert detect_line_lang("take me home") == "en"
+    assert detect_line_lang("open your eyes") == "en"
+    assert detect_line_lang("before I go alone") == "en"
+
+
+def test_detect_line_lang_romaji_positive_indicators():
+    assert detect_line_lang("kimi no kokoro wa") == "ja-Latn"
+    assert detect_line_lang("sono kodou wa toki wo koete") == "ja-Latn"
+
+

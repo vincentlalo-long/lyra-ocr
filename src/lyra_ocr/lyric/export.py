@@ -88,20 +88,42 @@ def write_lrc(
     out.write_text(content, encoding="utf-8")
 
 
-def _layer_priority_key(lang: str, n_cues: int) -> tuple[int, int, str]:
+def _layer_priority_key(
+    lang: str,
+    n_cues: int,
+    preferred_lang: str = "auto",
+    max_cues: int = 0,
+) -> tuple[int, int, int, str]:
     """Sort key for choosing primary layer. Lower tuple is higher priority:
-    1. 'ja-Latn' (priority 0)
-    2. Non-English original language with the most cues (priority 1, -n_cues)
-    3. 'en' (priority 2, -n_cues)
-    4. Other / 'und' (priority 3, -n_cues)
+
+    If preferred_lang not in ("", "auto"):
+        Priority 0: lang == preferred_lang
+        Priority 1: other known languages (lang != "und")
+        Priority 2: 'und'
+
+    When preferred_lang == "auto":
+        Priority 0: Any known language (lang != "und") whose n_cues >= 0.7 * max_cues
+        Priority 1: Other known languages with fewer cues
+        Priority 2: 'und'
+
+    Tie-breaker across all tiers: (-n_cues, 0 if lang not in ("en", "und") else 1, lang)
     """
-    if lang == "ja-Latn":
-        return (0, -n_cues, lang)
-    if lang not in ("en", "und"):
-        return (1, -n_cues, lang)
-    if lang == "en":
-        return (2, -n_cues, lang)
-    return (3, -n_cues, lang)
+    effective_max = max(max_cues, n_cues, 1)
+    lang_pref = 0 if lang not in ("en", "und") else 1
+
+    if preferred_lang not in ("", "auto"):
+        tier = 0 if lang == preferred_lang else (1 if lang != "und" else 2)
+        return (tier, -n_cues, lang_pref, lang)
+
+    # preferred_lang == "auto"
+    if lang != "und" and n_cues >= 0.7 * effective_max:
+        tier = 0
+    elif lang != "und":
+        tier = 1
+    else:
+        tier = 2
+
+    return (tier, -n_cues, lang_pref, lang)
 
 
 def write_lrc_layers(
@@ -110,6 +132,7 @@ def write_lrc_layers(
     metadata: LrcMetadata,
     *,
     enhanced: bool = False,
+    preferred_lang: str = "auto",
 ) -> dict[str, Any]:
     """Write name.lrc (primary) + name.<lang>.lrc per lyric layer.
 
@@ -196,9 +219,15 @@ def write_lrc_layers(
         })
 
     # 2. Select primary layer according to priority
+    max_layer_cues = max((it["n_cues"] for it in layer_items), default=0)
     sorted_by_priority = sorted(
         layer_items,
-        key=lambda it: _layer_priority_key(it["lang"], it["n_cues"]),
+        key=lambda it: _layer_priority_key(
+            it["lang"],
+            it["n_cues"],
+            preferred_lang=preferred_lang,
+            max_cues=max_layer_cues,
+        ),
     )
     primary_layer = sorted_by_priority[0]
 
