@@ -888,4 +888,93 @@ def test_share_solitary_cross_layer_cues_strict_global_check():
     assert any(c.layer_id == 2 and c.text == "Hacking to the Gate" and "cross_layer_inherited" in c.qa_flags for c in res)
 
 
+def test_layer_consolidation_exports_match_grouping_reexports():
+    from lyra_ocr.lyric import grouping, layer_consolidation
+
+    assert grouping.merge_duplicate_layers is layer_consolidation.merge_duplicate_layers
+    assert grouping.consolidate_language_layers is layer_consolidation.consolidate_language_layers
+    assert grouping.share_solitary_cross_layer_cues is layer_consolidation.share_solitary_cross_layer_cues
+    assert callable(grouping.dedupe_and_group)
+    assert callable(grouping.resolve_simultaneous_multiline_cues)
+
+
+def test_grouping_thresholds_govern_dedupe_and_layer_consolidation():
+    from lyra_ocr.config import GroupingThresholds
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+    from lyra_ocr.lyric.layer_consolidation import (
+        consolidate_language_layers,
+        merge_duplicate_layers,
+        share_solitary_cross_layer_cues,
+    )
+
+    # 1. dedupe_text_similarity governs dedupe_and_group merging
+    cue_a = LyricCue(start_ms=1000, end_ms=3000, text="Walk through the night", y_center=0.82, layer_id=1, confidence=0.9)
+    cue_b = LyricCue(start_ms=3050, end_ms=5050, text="Walk toward the night", y_center=0.86, layer_id=1, confidence=0.95)
+    assert len(dedupe_and_group([cue_a, cue_b])) == 2
+    merged = dedupe_and_group(
+        [
+            LyricCue(start_ms=1000, end_ms=3000, text="Walk through the night", y_center=0.82, layer_id=1, confidence=0.9),
+            LyricCue(start_ms=3050, end_ms=5050, text="Walk toward the night", y_center=0.86, layer_id=1, confidence=0.95),
+        ],
+        thresholds=GroupingThresholds(dedupe_text_similarity=0.70),
+    )
+    assert len(merged) == 1
+
+    # 2. duplicate_max_y_gap governs merge_duplicate_layers
+    band1 = [LyricCue(start_ms=i * 2000, end_ms=i * 2000 + 1500, text=f"Line number {i}", layer_id=1, lang="en", y_center=0.75) for i in range(4)]
+    band2 = [LyricCue(start_ms=i * 2000, end_ms=i * 2000 + 1500, text=f"Line number {i}", layer_id=2, lang="en", y_center=0.82) for i in range(4)]
+    assert {c.layer_id for c in merge_duplicate_layers(band1 + band2)} == {1}
+    kept_both = merge_duplicate_layers(
+        band1 + band2,
+        thresholds=GroupingThresholds(duplicate_max_y_gap=0.02),
+    )
+    assert {c.layer_id for c in kept_both} == {1, 2}
+
+    # 3. short_wrap_max_dur_ms governs resolve_simultaneous_multiline_cues wrap merging
+    wrap_pair = [
+        LyricCue(start_ms=1000, end_ms=3200, text="In the castle", y_center=0.81, layer_id=1, lang="en"),
+        LyricCue(start_ms=1000, end_ms=3200, text="of the sky", y_center=0.88, layer_id=1, lang="en"),
+    ]
+    assert len(resolve_simultaneous_multiline_cues(wrap_pair)) == 1
+    staggered = resolve_simultaneous_multiline_cues(
+        [
+            LyricCue(start_ms=1000, end_ms=3200, text="In the castle", y_center=0.81, layer_id=1, lang="en"),
+            LyricCue(start_ms=1000, end_ms=3200, text="of the sky", y_center=0.88, layer_id=1, lang="en"),
+        ],
+        thresholds=GroupingThresholds(short_wrap_max_dur_ms=1000),
+    )
+    assert len(staggered) == 2
+
+    # 4. consolidate_overlap_threshold governs complementary vs overlapping merge in consolidate_language_layers
+    dom_cues = [LyricCue(start_ms=i * 4000, end_ms=i * 4000 + 2000, text=f"Primary line {i}", layer_id=1, lang="en", y_center=0.80) for i in range(10)]
+    sec_cues = [
+        LyricCue(start_ms=500, end_ms=1800, text="Unique overlay alpha", layer_id=2, lang="en", y_center=0.20),
+        LyricCue(start_ms=22500, end_ms=23500, text="Unique bridge beta", layer_id=2, lang="en", y_center=0.20),
+    ]
+    # 1 of 2 sec_cues overlaps (overlap_ratio=0.5): dropped under default 0.25, kept under 0.60
+    assert len(consolidate_language_layers(dom_cues + sec_cues)) == 10
+    kept_comp = consolidate_language_layers(
+        [LyricCue(start_ms=i * 4000, end_ms=i * 4000 + 2000, text=f"Primary line {i}", layer_id=1, lang="en", y_center=0.80) for i in range(10)]
+        + [
+            LyricCue(start_ms=500, end_ms=1800, text="Unique overlay alpha", layer_id=2, lang="en", y_center=0.20),
+            LyricCue(start_ms=22500, end_ms=23500, text="Unique bridge beta", layer_id=2, lang="en", y_center=0.20),
+        ],
+        thresholds=GroupingThresholds(consolidate_overlap_threshold=0.60),
+    )
+    assert len(kept_comp) == 12
+
+    # 5. share_min_cue_dur_ms governs share_solitary_cross_layer_cues
+    base = []
+    for idx, (s, e) in enumerate([(5000, 8000), (10000, 13000), (15000, 18000), (25000, 29000), (35000, 38000), (40000, 43000), (45000, 48000), (50000, 53000)]):
+        base.append(LyricCue(start_ms=s, end_ms=e, text=f"日本語ライン{idx}", layer_id=1, lang="ja"))
+        base.append(LyricCue(start_ms=s, end_ms=e, text=f"English line {idx}", layer_id=2, lang="en"))
+    base.append(LyricCue(start_ms=31000, end_ms=33500, text="Fly high tonight", layer_id=2, lang="en"))
+    assert any(c.layer_id == 1 and c.text == "Fly high tonight" for c in share_solitary_cross_layer_cues(base))
+    assert not any(
+        c.layer_id == 1 and c.text == "Fly high tonight"
+        for c in share_solitary_cross_layer_cues(base, thresholds=GroupingThresholds(share_min_cue_dur_ms=4000))
+    )
+
+
+
 

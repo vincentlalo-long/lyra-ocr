@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from lyra_ocr.config import DEFAULT_CLASSIFICATION_THRESHOLDS, ClassificationThresholds
 from lyra_ocr.track import (
     TextTrack,
     compute_track_features,
@@ -100,8 +101,11 @@ def classify_track(
     sample_interval_ms: int = 0,
     vocal_profile: Optional[Any] = None,
     all_tracks: Optional[list[TextTrack]] = None,
+    *,
+    thresholds: Optional[ClassificationThresholds] = None,
 ) -> ClassificationResult:
     """Classify a single TextTrack into lyric vs non-lyric using rule heuristics."""
+    cfg = thresholds or DEFAULT_CLASSIFICATION_THRESHOLDS
     meta = metadata or {}
     v_channel = meta.get("channel", "").strip().lower()
     v_title = meta.get("title", "").strip().lower()
@@ -153,22 +157,22 @@ def classify_track(
     # Spatial prior: active reading zone (center or lower-third), not in extreme corners
     in_reading_zone = in_lyric_layer or (
         not is_corner
-        and 0.10 <= mean_cx <= 0.90
-        and 0.20 <= mean_cy <= 0.95
-        and aspect_ratio >= 1.0
+        and cfg.reading_zone_cx_min <= mean_cx <= cfg.reading_zone_cx_max
+        and cfg.reading_zone_cy_min <= mean_cy <= cfg.reading_zone_cy_max
+        and aspect_ratio >= cfg.reading_zone_min_aspect_ratio
     )
     # Card-shaped text: short overlays strictly bounded to the intro/outro window
     # are typically title cards or credit slides. Casing (uppercase vs lowercase)
     # is never used to judge lyrics, as song lyrics are frequently styled in all-caps.
-    looks_like_card = word_count <= 4 and (
-        (start_time_ratio <= 0.01 and track.start_ms == 0)
-        or mean_cy <= 0.65
-        or (area_ratio >= 0.03 and aspect_ratio <= 3.5)
+    looks_like_card = word_count <= cfg.card_max_words and (
+        (start_time_ratio <= cfg.card_start_ratio_max and track.start_ms == 0)
+        or mean_cy <= cfg.card_cy_max
+        or (area_ratio >= cfg.card_min_area_ratio and aspect_ratio <= cfg.card_max_aspect_ratio)
     )
     end_time_ratio = start_time_ratio + lifetime_ratio
     only_intro_outro = (not in_lyric_layer) and (
-        (end_time_ratio <= 0.08 and looks_like_card)
-        or (start_time_ratio >= 0.95 and looks_like_card)
+        (end_time_ratio <= cfg.intro_end_ratio_max and looks_like_card)
+        or (start_time_ratio >= cfg.outro_start_ratio_min and looks_like_card)
     ) and (video_duration_ms > 0 or lifetime_ratio > 0)
 
     qa_flags: list[str] = []
@@ -199,7 +203,7 @@ def classify_track(
             return res
 
     # Rule 2: Erratic Scene Text (High Spatial Variance)
-    if spatial_variance > 0.04:
+    if spatial_variance > cfg.max_spatial_variance_non_lyric:
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.92,
@@ -214,7 +218,7 @@ def classify_track(
     if v_channel:
         sim_chan = string_similarity(dom_lower, v_channel)
         chan_tokens = set(re.findall(r"\w+", v_channel))
-        sig_chan_tokens = {t for t in chan_tokens if len(t) >= 3}
+        sig_chan_tokens = {t for t in chan_tokens if len(t) >= cfg.channel_token_min_len}
         token_chan_match = bool(
             sig_chan_tokens
             and (
@@ -222,12 +226,16 @@ def classify_track(
                 or (
                     sig_chan_tokens.intersection(dom_tokens)
                     and n_text_changes == 0
-                    and len(dom_tokens) <= 5
+                    and len(dom_tokens) <= cfg.channel_partial_max_dom_tokens
                 )
             )
         )
         chan_len_ratio = len(v_channel) / max(1, len(dom_lower))
-        if sim_chan >= 0.75 or token_chan_match or (v_channel in dom_lower and chan_len_ratio >= 0.4):
+        if (
+            sim_chan >= cfg.channel_min_similarity
+            or token_chan_match
+            or (v_channel in dom_lower and chan_len_ratio >= cfg.channel_substring_min_len_ratio)
+        ):
             res = ClassificationResult(
                 label="non_lyric",
                 confidence=0.98,
@@ -243,10 +251,10 @@ def classify_track(
     # seconds, and are much wider than they are tall. They are not lyrics even
     # though they can fall inside a naive reading-zone test.
     if (
-        mean_cx >= 0.78
-        and area_ratio <= 0.02
-        and duration_ms <= 5000
-        and aspect_ratio >= 3.0
+        mean_cx >= cfg.chat_rail_min_cx
+        and area_ratio <= cfg.chat_rail_max_area_ratio
+        and duration_ms <= cfg.chat_rail_max_dur_ms
+        and aspect_ratio >= cfg.chat_rail_min_aspect_ratio
     ):
         res = ClassificationResult(
             label="non_lyric",
@@ -273,7 +281,10 @@ def classify_track(
         return res
 
     # Persistent invariant text (> 45% of total video)
-    if lifetime_ratio >= 0.45 and n_text_changes <= 1:
+    if (
+        lifetime_ratio >= cfg.persistent_min_lifetime_ratio
+        and n_text_changes <= cfg.persistent_max_text_changes
+    ):
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.95,
@@ -285,7 +296,9 @@ def classify_track(
         return res
 
     # Channel handle symbols (@handle or #handle)
-    if dominant_text.startswith("@") or (dominant_text.startswith("#") and len(dominant_text) > 3):
+    if dominant_text.startswith("@") or (
+        dominant_text.startswith("#") and len(dominant_text) >= cfg.hashtag_min_len
+    ):
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.90,
@@ -300,7 +313,10 @@ def classify_track(
     if vocal_profile is not None and not in_lyric_layer:
         from lyra_ocr.audio.vad import vocal_active_ratio
         vocal_ratio = vocal_active_ratio(vocal_profile, track.start_ms, track.end_ms)
-        if vocal_ratio < 0.05 and (start_time_ratio < 0.20 or start_time_ratio > 0.80):
+        if vocal_ratio < cfg.vad_silent_max_vocal_ratio and (
+            start_time_ratio < cfg.vad_intro_start_ratio_max
+            or start_time_ratio > cfg.vad_outro_start_ratio_min
+        ):
             res = ClassificationResult(
                 label="non_lyric",
                 confidence=0.88,
@@ -312,7 +328,7 @@ def classify_track(
             return res
 
     # Intro Production Credit Prefix Filter
-    if start_time_ratio <= 0.15 and _INTRO_CREDIT_PREFIX_RE.search(dominant_text):
+    if start_time_ratio <= cfg.intro_credit_start_ratio_max and _INTRO_CREDIT_PREFIX_RE.search(dominant_text):
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.95,
@@ -329,19 +345,19 @@ def classify_track(
         title_len_ratio = len(v_title) / max(1, len(dom_lower))
         title_tokens = set(re.findall(r"\w+", v_title))
         sig_title_tokens = {
-            t for t in title_tokens if len(t) >= 3 and t not in {"the", "and", "for", "with", "this"}
+            t for t in title_tokens if len(t) >= cfg.title_token_min_len and t not in {"the", "and", "for", "with", "this"}
         }
         token_title_match = bool(
             sig_title_tokens
             and dom_tokens.issubset(sig_title_tokens)
             and n_text_changes == 0
-            and len(dom_tokens) <= 4
-            and (len(dom_tokens) / len(sig_title_tokens) >= 0.50)
+            and len(dom_tokens) <= cfg.title_token_max_dom_tokens
+            and (len(dom_tokens) / len(sig_title_tokens) >= cfg.title_token_min_coverage)
         )
         is_title_match = (
-            sim_title >= 0.75
+            sim_title >= cfg.title_min_similarity
             or token_title_match
-            or (v_title in dom_lower and title_len_ratio >= 0.6)
+            or (v_title in dom_lower and title_len_ratio >= cfg.title_substring_min_len_ratio)
         )
         if is_title_match:
             layer_id = feat.get("layer_id")
@@ -351,13 +367,14 @@ def classify_track(
                     for t in all_tracks
                     if t is not track
                     and (t.features or {}).get("layer_id") == layer_id
-                    and t.end_ms <= track.start_ms + 500
-                    and effective_duration_ms(t.start_ms, t.end_ms, sample_interval_ms) >= 800
+                    and t.end_ms <= track.start_ms + cfg.chorus_prior_track_end_slack_ms
+                    and effective_duration_ms(t.start_ms, t.end_ms, sample_interval_ms)
+                    >= cfg.chorus_prior_track_min_dur_ms
                 )
                 if (
                     layer_kind == "lyric"
-                    and n_prior_lyric_layer_tracks >= 2
-                    and 500 <= duration_ms <= 16000
+                    and n_prior_lyric_layer_tracks >= cfg.chorus_min_prior_tracks
+                    and cfg.lyric_min_dur_ms <= duration_ms <= cfg.lyric_max_dur_ms
                 ):
                     res = ClassificationResult(
                         label="lyric",
@@ -371,9 +388,12 @@ def classify_track(
                     )
                     track.classification = res
                     return res
-                reject_intro_title = start_time_ratio <= 0.12 or n_prior_lyric_layer_tracks == 0
+                reject_intro_title = (
+                    start_time_ratio <= cfg.title_intro_start_ratio_with_layers
+                    or n_prior_lyric_layer_tracks == 0
+                )
             else:
-                reject_intro_title = start_time_ratio <= 0.25
+                reject_intro_title = start_time_ratio <= cfg.title_intro_start_ratio_fallback
 
             if reject_intro_title:
                 res = ClassificationResult(
@@ -387,7 +407,7 @@ def classify_track(
                 return res
             # Matching the title mid-video is often a repeated hook/chorus, not an
             # intro card: if in reading zone and transient, classify as lyric for review.
-            if in_reading_zone and 500 <= duration_ms <= 16000 and not only_intro_outro:
+            if in_reading_zone and cfg.lyric_min_dur_ms <= duration_ms <= cfg.lyric_max_dur_ms and not only_intro_outro:
                 res = ClassificationResult(
                     label="lyric",
                     confidence=0.75,
@@ -434,9 +454,9 @@ def classify_track(
     if (
         in_lyric_layer
         and has_text
-        and len(dominant_text.strip()) >= 2
+        and len(dominant_text.strip()) >= cfg.lyric_min_chars
         and not only_intro_outro
-        and duration_ms >= 400
+        and duration_ms >= cfg.lyric_layer_min_dur_ms
     ):
         res = ClassificationResult(
             label="lyric",
@@ -449,8 +469,18 @@ def classify_track(
         return res
 
     # Static text strictly in intro (< 10% of duration or <= 12 seconds)
-    if not in_lyric_layer and start_time_ratio <= 0.05 and track.end_ms <= 15000 and n_text_changes <= 1 and duration_ms <= 10000:
-        if 2000 <= duration_ms <= 9000 and not is_corner and looks_like_card:
+    if (
+        not in_lyric_layer
+        and start_time_ratio <= cfg.intro_card_start_ratio_max
+        and track.end_ms <= cfg.intro_card_end_ms_max
+        and n_text_changes <= cfg.intro_card_max_text_changes
+        and duration_ms <= cfg.intro_card_max_dur_ms
+    ):
+        if (
+            cfg.intro_card_strict_min_dur_ms <= duration_ms <= cfg.intro_card_strict_max_dur_ms
+            and not is_corner
+            and looks_like_card
+        ):
             res = ClassificationResult(
                 label="non_lyric",
                 confidence=0.88,
@@ -462,7 +492,11 @@ def classify_track(
             return res
 
     # Rule 5: Lyric Stream (Recurring Distinct Text Changes in Stable Region)
-    if distinct_changes >= 2 and spatial_variance <= 0.02 and layer_kind != "overlay":
+    if (
+        distinct_changes >= cfg.lyric_stream_min_distinct_changes
+        and spatial_variance <= cfg.lyric_stream_max_spatial_variance
+        and layer_kind != "overlay"
+    ):
         if only_intro_outro:
             # Intro/credit carousels also change text; never auto-accept them.
             res = ClassificationResult(
@@ -489,10 +523,10 @@ def classify_track(
     # zone (rather than the corner/side prior) is what separates it from overlay
     # noise; readability is judged later by the OCR/text-quality gates.
     if (
-        500 <= duration_ms <= 16000
+        cfg.lyric_min_dur_ms <= duration_ms <= cfg.lyric_max_dur_ms
         and in_reading_zone
         and not is_corner
-        and word_count >= 2
+        and word_count >= cfg.fluctuation_lyric_min_words
         and n_text_changes >= 1
         and not only_intro_outro
     ):
@@ -514,7 +548,12 @@ def classify_track(
         distinct_changes == 0
         and n_text_changes >= 1
         and not in_reading_zone
-        and (mean_cx < 0.25 or mean_cx > 0.75 or is_corner or mean_cy > 0.95)
+        and (
+            mean_cx < cfg.corner_side_cx_min
+            or mean_cx > cfg.corner_side_cx_max
+            or is_corner
+            or mean_cy > cfg.reading_zone_cy_max
+        )
     ):
         res = ClassificationResult(
             label="non_lyric",
@@ -537,15 +576,15 @@ def classify_track(
         # not tucked into extreme corners
         in_reading_zone = (
             not is_corner
-            and 0.10 <= mean_cx <= 0.90
-            and 0.20 <= mean_cy <= 0.95
-            and aspect_ratio >= 1.0
+            and cfg.reading_zone_cx_min <= mean_cx <= cfg.reading_zone_cx_max
+            and cfg.reading_zone_cy_min <= mean_cy <= cfg.reading_zone_cy_max
+            and aspect_ratio >= cfg.reading_zone_min_aspect_ratio
         )
         if (
-            500 <= duration_ms <= 16000
+            cfg.lyric_min_dur_ms <= duration_ms <= cfg.lyric_max_dur_ms
             and in_reading_zone
             and has_text
-            and len(dominant_text.strip()) >= 2
+            and len(dominant_text.strip()) >= cfg.lyric_min_chars
             and not only_intro_outro
         ):
             res = ClassificationResult(
@@ -564,9 +603,9 @@ def classify_track(
     # it is a full multi-word phrase within the lyric reading zone.
     if len(track.occurrences) <= 1 and n_text_changes == 0 and not is_corner:
         if (
-            len(dominant_text.split()) >= 2
+            len(dominant_text.split()) >= cfg.single_frame_min_words
             and in_reading_zone
-            and aspect_ratio >= 2.0
+            and aspect_ratio >= cfg.single_frame_min_aspect_ratio
             and has_text
             and not only_intro_outro
         ):
@@ -609,6 +648,8 @@ def classify_all_tracks(
     frame_height: int = 720,
     sample_interval_ms: int = 0,
     vocal_profile: Optional[Any] = None,
+    *,
+    thresholds: Optional[ClassificationThresholds] = None,
 ) -> list[ClassificationResult]:
     """Run rule-based classification across all tracks in a pipeline."""
     # Discover spatial text layers across the video timeline if not already assigned
@@ -634,6 +675,7 @@ def classify_all_tracks(
             sample_interval_ms=sample_interval_ms,
             vocal_profile=vocal_profile,
             all_tracks=tracks,
+            thresholds=thresholds,
         )
         results.append(res)
     return results

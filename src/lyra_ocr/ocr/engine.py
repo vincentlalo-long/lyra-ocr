@@ -10,6 +10,8 @@ from typing import Any
 import cv2
 import numpy as np
 
+from lyra_ocr.config import DEFAULT_OCR_PREPROCESS_THRESHOLDS, OcrPreprocessThresholds
+
 from .detect import Detection, crop_quad
 from .runtime import RuntimeConfig, rapidocr_params, resolve_runtime
 
@@ -30,32 +32,37 @@ class TextLine:
         return asdict(self)
 
 
-def preprocess_crop_for_recognition(crop: np.ndarray | None) -> np.ndarray | None:
+def preprocess_crop_for_recognition(
+    crop: np.ndarray | None,
+    *,
+    thresholds: OcrPreprocessThresholds | None = None,
+) -> np.ndarray | None:
     """Upscale tiny text crops, enhance local contrast via CLAHE, and add border padding."""
     if crop is None or getattr(crop, "size", 0) == 0:
         return crop
 
+    cfg = thresholds or DEFAULT_OCR_PREPROCESS_THRESHOLDS
     img = crop
     h, w = img.shape[:2]
-    if h < 36:
-        scale = max(2.0, 56.0 / max(1, h))
+    if h < cfg.upscale_trigger_height_px:
+        scale = max(cfg.upscale_min_scale, cfg.upscale_target_height_px / max(1, h))
         new_w = max(1, int(round(w * scale)))
         new_h = max(1, int(round(h * scale)))
         img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
     # Apply subtle CLAHE only on images with non-trivial texture/contrast to avoid
     # amplifying flat-background noise or distorting uniform synthetic crops.
-    if img.ndim == 3 and img.shape[2] == 3 and float(img.std()) >= 8.0:
+    if img.ndim == 3 and img.shape[2] == 3 and float(img.std()) >= cfg.clahe_min_std:
         lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB)
         l_chan, a_chan, b_chan = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(4, 4))
+        clahe = cv2.createCLAHE(clipLimit=cfg.clahe_clip_limit, tileGridSize=cfg.clahe_tile_grid_size)
         l_enhanced = clahe.apply(l_chan)
         img = cv2.cvtColor(cv2.merge((l_enhanced, a_chan, b_chan)), cv2.COLOR_LAB2BGR)
-    elif img.ndim == 2 and float(img.std()) >= 8.0:
-        clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(4, 4))
+    elif img.ndim == 2 and float(img.std()) >= cfg.clahe_min_std:
+        clahe = cv2.createCLAHE(clipLimit=cfg.clahe_clip_limit, tileGridSize=cfg.clahe_tile_grid_size)
         img = clahe.apply(img)
 
-    pad = 4
+    pad = cfg.border_pad_px
     return cv2.copyMakeBorder(img, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
 
 
@@ -101,7 +108,11 @@ def detect_script(text: str) -> str:
     return "latin"
 
 
-def _compute_border_fg_distance(img: np.ndarray) -> np.ndarray | None:
+def _compute_border_fg_distance(
+    img: np.ndarray,
+    *,
+    thresholds: OcrPreprocessThresholds | None = None,
+) -> np.ndarray | None:
     """Compute per-pixel max-channel color distance from the median border background."""
     if img.ndim not in (2, 3):
         return None
@@ -109,8 +120,9 @@ def _compute_border_fg_distance(img: np.ndarray) -> np.ndarray | None:
     if h < 1 or w < 1:
         return None
 
-    by = max(1, h // 8)
-    bx = max(1, w // 20)
+    cfg = thresholds or DEFAULT_OCR_PREPROCESS_THRESHOLDS
+    by = max(1, h // cfg.border_y_fraction_div)
+    bx = max(1, w // cfg.border_x_fraction_div)
     border_mask = np.zeros((h, w), dtype=bool)
     border_mask[:by, :] = True
     border_mask[-by:, :] = True
@@ -125,36 +137,48 @@ def _compute_border_fg_distance(img: np.ndarray) -> np.ndarray | None:
     return diff
 
 
-def to_soft_bw_stroke_crop(crop: np.ndarray | None) -> np.ndarray | None:
+def to_soft_bw_stroke_crop(
+    crop: np.ndarray | None,
+    *,
+    thresholds: OcrPreprocessThresholds | None = None,
+) -> np.ndarray | None:
     """Normalize a text crop into a color-invariant, anti-aliased B&W stroke image."""
     if crop is None or getattr(crop, "size", 0) == 0:
         return crop
 
+    cfg = thresholds or DEFAULT_OCR_PREPROCESS_THRESHOLDS
     img = crop
     h, w = img.shape[:2]
-    if h < 48:
-        scale = 48.0 / max(1, h)
+    min_h = cfg.soft_bw_min_height_px
+    if h < min_h:
+        scale = float(min_h) / max(1, h)
         new_w = max(1, int(round(w * scale)))
-        new_h = max(48, int(round(h * scale)))
+        new_h = max(min_h, int(round(h * scale)))
         img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
 
-    fg_dist = _compute_border_fg_distance(img)
+    fg_dist = _compute_border_fg_distance(img, thresholds=cfg)
     if fg_dist is None:
         return crop
 
-    p15 = float(np.percentile(fg_dist, 15))
-    p98 = float(np.percentile(fg_dist, 98))
-    hi = p98 if p98 > p15 else float(np.max(fg_dist))
-    if hi <= p15:
+    p_low = float(np.percentile(fg_dist, cfg.soft_bw_low_percentile))
+    p_high = float(np.percentile(fg_dist, cfg.soft_bw_high_percentile))
+    hi = p_high if p_high > p_low else float(np.max(fg_dist))
+    if hi <= p_low:
         norm = np.zeros(fg_dist.shape, dtype=np.uint8)
     else:
-        norm = np.clip((fg_dist - p15) * (255.0 / (hi - p15)), 0.0, 255.0).astype(np.uint8)
+        norm = np.clip((fg_dist - p_low) * (255.0 / (hi - p_low)), 0.0, 255.0).astype(np.uint8)
 
     bgr = cv2.cvtColor(norm, cv2.COLOR_GRAY2BGR)
-    return cv2.copyMakeBorder(bgr, 4, 4, 4, 4, cv2.BORDER_REPLICATE)
+    pad = cfg.border_pad_px
+    return cv2.copyMakeBorder(bgr, pad, pad, pad, pad, cv2.BORDER_REPLICATE)
 
 
-def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
+def reconstruct_visual_word_spaces(
+    crop: np.ndarray,
+    text: str,
+    *,
+    thresholds: OcrPreprocessThresholds | None = None,
+) -> str:
     """Reconstruct missing word spaces in Latin/Romaji text from color-invariant ink valleys."""
     if crop is None or getattr(crop, "size", 0) == 0:
         return text
@@ -163,29 +187,33 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
     if detect_script(text) != "latin":
         return text
 
+    cfg = thresholds or DEFAULT_OCR_PREPROCESS_THRESHOLDS
     stripped = text.strip()
     if " " in stripped:
-        if max(len(tok) for tok in stripped.split()) <= 14:
+        if max(len(tok) for tok in stripped.split()) <= cfg.spaced_max_token_len_guard:
             return text
-    elif len(stripped) < 9:
+    elif len(stripped) < cfg.unspaced_min_len_guard:
         return text
 
     if crop.ndim not in (2, 3):
         return text
     h, w = crop.shape[:2]
-    if h < 4 or w < 8:
+    if h < cfg.whitespace_min_crop_height_px or w < cfg.whitespace_min_crop_width_px:
         return text
 
-    fg_dist = _compute_border_fg_distance(crop)
+    fg_dist = _compute_border_fg_distance(crop, thresholds=cfg)
     if fg_dist is None:
         return text
 
     fg_max = float(np.max(fg_dist))
-    if fg_max < 18.0:
+    if fg_max < cfg.whitespace_min_fg_max:
         return text
 
-    fg_ref = max(float(np.percentile(fg_dist, 98)), 0.5 * fg_max)
-    ink_thresh = max(18.0, 0.25 * fg_ref)
+    fg_ref = max(
+        float(np.percentile(fg_dist, cfg.whitespace_fg_ref_percentile)),
+        cfg.whitespace_fg_ref_max_ratio * fg_max,
+    )
+    ink_thresh = max(cfg.whitespace_ink_thresh_min, cfg.whitespace_ink_thresh_ratio * fg_ref)
     ink = (fg_dist >= ink_thresh).astype(np.float32)
 
     y_coords, x_coords = np.where(ink > 0)
@@ -204,17 +232,18 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
     # Compute column-wise vertical ink density D(x) = (1/H) * sum_y I[ink(y, x)]
     d_x = np.sum(ink, axis=0) / float(h)
 
-    # Smooth D(x) with a 3px box filter
-    kernel = np.ones(3, dtype=np.float32) / 3.0
+    # Smooth D(x) with a box filter
+    k = max(1, cfg.whitespace_smooth_kernel_px)
+    kernel = np.ones(k, dtype=np.float32) / float(k)
     d_smooth = np.convolve(d_x, kernel, mode="same")
 
-    min_gap = max(6, int(0.45 * h_ink))
+    min_gap = max(cfg.whitespace_min_gap_px, int(cfg.whitespace_min_gap_height_ratio * h_ink))
     valleys: list[tuple[float, float]] = []
     in_valley = False
     start_x = 0
 
     for x in range(x_left, x_right + 1):
-        if d_smooth[x] <= 0.04:
+        if d_smooth[x] <= cfg.whitespace_valley_density_max:
             if not in_valley:
                 in_valley = True
                 start_x = x
@@ -226,7 +255,7 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
                 if gap_width >= min_gap:
                     x_mid = (start_x + end_x) / 2.0
                     r_k = (x_mid - x_left) / float(span)
-                    if 0.08 < r_k < 0.92:
+                    if cfg.whitespace_valley_rel_pos_min < r_k < cfg.whitespace_valley_rel_pos_max:
                         valleys.append((r_k, x_mid))
 
     if in_valley:
@@ -235,7 +264,7 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
         if gap_width >= min_gap:
             x_mid = (start_x + end_x) / 2.0
             r_k = (x_mid - x_left) / float(span)
-            if 0.08 < r_k < 0.92:
+            if cfg.whitespace_valley_rel_pos_min < r_k < cfg.whitespace_valley_rel_pos_max:
                 valleys.append((r_k, x_mid))
 
     if not valleys:
@@ -259,17 +288,18 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
     if len(existing_splits) >= len(valleys):
         return text
 
-    total_ink_cols = max(1, int(np.count_nonzero(d_smooth[x_left : x_right + 1] > 0.04)))
+    density_max = cfg.whitespace_valley_density_max
+    total_ink_cols = max(1, int(np.count_nonzero(d_smooth[x_left : x_right + 1] > density_max)))
 
     new_splits = list(existing_splits)
     for r_k, x_mid in valleys:
         # Map valley to character index using cumulative ink columns before valley
-        ink_cols_before = int(np.count_nonzero(d_smooth[x_left : int(round(x_mid)) + 1] > 0.04))
+        ink_cols_before = int(np.count_nonzero(d_smooth[x_left : int(round(x_mid)) + 1] > density_max))
         r_ink = ink_cols_before / float(total_ink_cols) if total_ink_cols > 0 else r_k
         cand_i = int(round(r_ink * total_len))
         if cand_i < 1 or cand_i > total_len - 1:
             continue
-        if any(abs(cand_i - s) < 2 for s in new_splits):
+        if any(abs(cand_i - s) < cfg.whitespace_min_split_char_gap for s in new_splits):
             continue
         new_splits.append(cand_i)
 
@@ -291,6 +321,8 @@ class OCREngine:
         self,
         default_model: str = DEFAULT_MODEL,
         runtime: RuntimeConfig | None = None,
+        *,
+        preprocess_thresholds: OcrPreprocessThresholds | None = None,
     ) -> None:
         try:
             from rapidocr import RapidOCR
@@ -299,6 +331,7 @@ class OCREngine:
 
         self._default_model = default_model
         self._runtime = runtime or resolve_runtime()
+        self._preprocess_thresholds = preprocess_thresholds or DEFAULT_OCR_PREPROCESS_THRESHOLDS
         # Registry mapping model_id -> RapidOCR instance
         self._models: dict[str, Any] = {}
 
@@ -367,7 +400,7 @@ class OCREngine:
         chosen_model = model_id or self._default_model
         engine = self._get_model(chosen_model)
 
-        proc_crop = preprocess_crop_for_recognition(crop)
+        proc_crop = preprocess_crop_for_recognition(crop, thresholds=self._preprocess_thresholds)
         out = engine(proc_crop)
         txts = getattr(out, "txts", None)
         scores = getattr(out, "scores", None)
@@ -402,7 +435,7 @@ class OCREngine:
         results: list[tuple[str, float, str]] = [("", 0.0, chosen_model) for _ in crops]
 
         valid: list[tuple[int, np.ndarray]] = [
-            (i, preprocess_crop_for_recognition(crop))
+            (i, preprocess_crop_for_recognition(crop, thresholds=self._preprocess_thresholds))
             for i, crop in enumerate(crops)
             if crop is not None and getattr(crop, "size", 0) > 0
         ]
@@ -446,13 +479,16 @@ class OCREngine:
         crops = [crop_quad(img_bgr, det.polygon) for det in detections]
         recognized = self.recognize_crops(crops, model_id=model_id)
 
+        cfg = self._preprocess_thresholds
         lines: list[TextLine] = []
         for det, crop, (text_raw, conf, used_model) in zip(detections, crops, recognized):
             text_norm = normalize_text(text_raw, form="NFC")
             script = detect_script(text_norm)
 
             if script == "latin":
-                needs_alt = (len(text_norm) >= 8 and " " not in text_norm) or (conf < 0.88)
+                needs_alt = (
+                    len(text_norm) >= cfg.latin_alt_min_unspaced_len and " " not in text_norm
+                ) or (conf < cfg.fallback_min_confidence)
                 if needs_alt and used_model != "latin_PP-OCRv5_rec_mobile":
                     try:
                         alt_raw, alt_conf, alt_model = self.recognize_crop(
@@ -470,9 +506,9 @@ class OCREngine:
                     except Exception:
                         pass
 
-            if conf < 0.88 and crop is not None and getattr(crop, "size", 0) > 0:
+            if conf < cfg.fallback_min_confidence and crop is not None and getattr(crop, "size", 0) > 0:
                 try:
-                    bw_crop = to_soft_bw_stroke_crop(crop)
+                    bw_crop = to_soft_bw_stroke_crop(crop, thresholds=cfg)
                     bw_raw, bw_conf, bw_model = self.recognize_crop(
                         bw_crop,
                         model_id=used_model or model_id,
@@ -487,7 +523,7 @@ class OCREngine:
                     pass
 
             if script == "latin":
-                spaced = reconstruct_visual_word_spaces(crop, text_norm)
+                spaced = reconstruct_visual_word_spaces(crop, text_norm, thresholds=cfg)
                 if spaced != text_norm:
                     text_norm = spaced
                     text_raw = spaced

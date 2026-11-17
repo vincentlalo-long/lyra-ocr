@@ -7,6 +7,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Sequence
 
+from lyra_ocr.config import DEFAULT_LAYER_DISCOVERY_THRESHOLDS, LayerDiscoveryThresholds
 from lyra_ocr.lang import detect_line_lang, vote_layer_lang
 from lyra_ocr.track import DetectionOccurrence, TextSegment, TextTrack, string_similarity
 
@@ -23,7 +24,10 @@ class TextLayer:
     n_distinct_texts: int
 
 
-def _count_distinct_texts(texts: Sequence[str], sim_threshold: float = 0.70) -> int:
+def _count_distinct_texts(
+    texts: Sequence[str],
+    sim_threshold: float = DEFAULT_LAYER_DISCOVERY_THRESHOLDS.text_similarity_threshold,
+) -> int:
     """Count distinct texts using string similarity clustering."""
     cleaned = [re.sub(r"\s+", " ", t.lower().strip()) for t in texts if t and t.strip()]
     if not cleaned:
@@ -46,6 +50,8 @@ def discover_layers(
     frame_w: int = 1280,
     frame_h: int = 720,
     video_duration_ms: int = 0,
+    *,
+    thresholds: LayerDiscoveryThresholds | None = None,
 ) -> list[TextLayer]:
     """Discover spatial text layers and classify them into dynamic lyrics vs overlays.
 
@@ -57,6 +63,8 @@ def discover_layers(
     """
     if not tracks:
         return []
+
+    cfg = thresholds or DEFAULT_LAYER_DISCOVERY_THRESHOLDS
 
     # 1. Extract spatial centroids and dominant text per track
     track_info = []
@@ -85,7 +93,6 @@ def discover_layers(
         track_info.append({"track": tr, "cx": cx, "cy": cy, "text": dom_text, "line_lang": line_lang})
 
     # 2. Cluster tracks into 2D spatial groups (primarily by Y band, secondarily by horizontal span)
-    # Band tolerance: cy delta <= 0.030, cx delta <= 0.25
     clusters: list[list[dict]] = []
     for info in track_info:
         best_cluster = None
@@ -95,8 +102,8 @@ def discover_layers(
             avg_cx = sum(item["cx"] for item in cl) / len(cl)
             cy_diff = abs(info["cy"] - avg_cy)
             cx_diff = abs(info["cx"] - avg_cx)
-            if cy_diff <= 0.030 and cx_diff <= 0.25:
-                dist = cy_diff * 4.0 + cx_diff
+            if cy_diff <= cfg.cluster_cy_tolerance and cx_diff <= cfg.cluster_cx_tolerance:
+                dist = cy_diff * cfg.cluster_cy_weight + cx_diff
                 if dist < best_dist:
                     best_dist = dist
                     best_cluster = cl
@@ -126,32 +133,43 @@ def discover_layers(
         std_cx = statistics.pstdev(cxs) if len(cxs) > 1 else 0.0
 
         texts = [item["text"] for item in cl if item["text"]]
-        n_distinct = _count_distinct_texts(texts)
+        n_distinct = _count_distinct_texts(texts, sim_threshold=cfg.text_similarity_threshold)
         total_tracks = len(cl)
 
-        # Off-center check: lyrics are horizontally centered (0.30 <= avg_cx <= 0.70)
-        # Left-aligned anime staff credits have avg_cx < 0.30; right credits have avg_cx > 0.70.
-        # Scattered HUD overlays have wide spread (std_cx > 0.14).
-        is_off_center = avg_cx < 0.30 or avg_cx > 0.70 or std_cx > 0.14
+        # Off-center check: lyrics are horizontally centered (center_cx_min <= avg_cx <= center_cx_max)
+        # Left-aligned anime staff credits have avg_cx < center_cx_min; right credits have avg_cx > center_cx_max.
+        # Scattered HUD overlays have wide spread (std_cx > max_cx_stddev).
+        is_off_center = (
+            avg_cx < cfg.center_cx_min
+            or avg_cx > cfg.center_cx_max
+            or std_cx > cfg.max_cx_stddev
+        )
 
         # Reject clusters dominated by short uppercase/digit HUD codes (e.g. '00A01', 'CODE-3')
         n_code_noise = sum(
-            1 for t in texts if len(t) <= 6 and bool(re.match(r"^[A-Z0-9_\-\.:# ]+$", t))
+            1
+            for t in texts
+            if len(t) <= cfg.hud_code_max_len and bool(re.match(r"^[A-Z0-9_\-\.:# ]+$", t))
         )
-        is_code_dominated = len(texts) > 0 and (n_code_noise / len(texts)) >= 0.60
+        is_code_dominated = len(texts) > 0 and (n_code_noise / len(texts)) >= cfg.hud_code_min_ratio
 
         # Distinguish dynamic lyric stream vs static watermark overlay
         # Dynamic lyric: multiple distinct lines appearing over time, centered, reasonable duration
         if (
-            total_tracks >= 4
+            total_tracks >= cfg.lyric_min_tracks
             and not is_off_center
             and not is_code_dominated
-            and (n_distinct >= 4 or total_tracks >= 8)
-            and (n_distinct / max(1, total_tracks)) >= 0.30
-            and med_dur >= 500
+            and (n_distinct >= cfg.lyric_min_distinct_texts or total_tracks >= cfg.lyric_alt_min_tracks)
+            and (n_distinct / max(1, total_tracks)) >= cfg.lyric_min_distinct_ratio
+            and med_dur >= cfg.lyric_min_median_dur_ms
         ):
             kind = "lyric"
-        elif total_tracks >= 3 and (n_distinct <= 2 or is_off_center or is_code_dominated or med_dur < 500):
+        elif total_tracks >= cfg.overlay_min_tracks and (
+            n_distinct <= cfg.overlay_max_distinct_texts
+            or is_off_center
+            or is_code_dominated
+            or med_dur < cfg.lyric_min_median_dur_ms
+        ):
             kind = "overlay"
         else:
             kind = "sparse"
@@ -190,7 +208,7 @@ def discover_layers(
         s_layer = s_meta["layer"]
         if s_layer.kind != "sparse":
             continue
-        if not (0.30 <= s_meta["avg_cx"] <= 0.70) or s_meta["is_code_dominated"]:
+        if not (cfg.center_cx_min <= s_meta["avg_cx"] <= cfg.center_cx_max) or s_meta["is_code_dominated"]:
             continue
 
         for l_meta in lyric_metas:
@@ -198,7 +216,7 @@ def discover_layers(
             if s_layer.lang != l_layer.lang and "und" not in (s_layer.lang, l_layer.lang):
                 continue
             y_dist = abs(s_meta["avg_cy"] - l_meta["avg_cy"])
-            if not (0.025 <= y_dist <= 0.16):
+            if not (cfg.companion_y_dist_min <= y_dist <= cfg.companion_y_dist_max):
                 continue
 
             has_overlap = False
@@ -207,7 +225,7 @@ def discover_layers(
                 for tl in l_meta["tracks"]:
                     l_dur = max(1, tl.end_ms - tl.start_ms)
                     ov = min(ts.end_ms, tl.end_ms) - max(ts.start_ms, tl.start_ms)
-                    if ov > 0 and (ov / min(s_dur, l_dur)) >= 0.50:
+                    if ov > 0 and (ov / min(s_dur, l_dur)) >= cfg.companion_min_time_overlap_ratio:
                         has_overlap = True
                         break
                 if has_overlap:
@@ -230,6 +248,8 @@ def refresh_dict_tracks_layers(
     frame_w: int = 1280,
     frame_h: int = 720,
     duration_ms: int = 0,
+    *,
+    thresholds: LayerDiscoveryThresholds | None = None,
 ) -> None:
     """Re-run line language detection and spatial layer voting on dict tracks in-place.
 
@@ -322,6 +342,7 @@ def refresh_dict_tracks_layers(
         frame_w=eff_w,
         frame_h=eff_h,
         video_duration_ms=eff_dur,
+        thresholds=thresholds,
     )
 
     if not all_have_layer_id:
