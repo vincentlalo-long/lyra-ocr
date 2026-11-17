@@ -269,6 +269,41 @@ def resolve_simultaneous_multiline_cues(
     return resolved
 
 
+def _shared_affix_len(a: str, b: str, *, from_end: bool = False) -> int:
+    limit = min(len(a), len(b))
+    count = 0
+    for i in range(limit):
+        ca = a[-1 - i] if from_end else a[i]
+        cb = b[-1 - i] if from_end else b[i]
+        if ca != cb:
+            break
+        count += 1
+    return count
+
+
+def _fade_text_matches(a: str, b: str, sim: float, cfg: GroupingThresholds) -> bool:
+    """Return True when two same-Y cues are strong or affix/substring fade-transition variants."""
+    if sim < cfg.fade_min_similarity:
+        return False
+    if sim >= cfg.fade_strong_similarity:
+        return True
+    a_compact = re.sub(r"\s+", "", (a or "").lower())
+    b_compact = re.sub(r"\s+", "", (b or "").lower())
+    if not a_compact or not b_compact:
+        return False
+    shorter, longer = (
+        (a_compact, b_compact) if len(a_compact) <= len(b_compact) else (b_compact, a_compact)
+    )
+    if len(shorter) <= cfg.fade_short_text_max_chars or shorter in longer:
+        return True
+    prefix_len = _shared_affix_len(a_compact, b_compact, from_end=False)
+    suffix_len = _shared_affix_len(a_compact, b_compact, from_end=True)
+    best_affix = max(prefix_len, suffix_len)
+    return best_affix >= cfg.fade_affix_min_chars and (
+        best_affix >= len(shorter) - 1 or (best_affix / len(shorter)) >= 0.75
+    )
+
+
 def _should_merge_duplicate_cue(
     existing: LyricCue,
     cue: LyricCue,
@@ -304,8 +339,18 @@ def _should_merge_duplicate_cue(
         y_diff < cfg.same_y_band_tolerance
         and gap_ms <= cfg.fade_max_gap_ms
         and min_dur <= cfg.fade_max_dur_ms
-        and sim >= cfg.fade_min_similarity
+        and _fade_text_matches(existing.text, cue.text, sim, cfg)
     )
+    if fade_transition_match and asr_transcript is not None and gap_ms > 0:
+        from lyra_ocr.audio.asr import asr_has_new_prefix_onset
+
+        if asr_has_new_prefix_onset(
+            cue.text,
+            cue.start_ms,
+            asr_transcript,
+            first_start_ms=existing.start_ms,
+        ):
+            fade_transition_match = False
     if not text_match and not fade_transition_match:
         return False
     if fade_transition_match:

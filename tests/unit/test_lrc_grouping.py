@@ -842,6 +842,149 @@ def test_dedupe_and_group_merges_same_y_fade_transition():
     assert res2[0].end_ms == 15200
 
 
+def test_dedupe_and_group_fade_transition_preserves_distinct_short_lines_and_respects_asr():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+
+    # Distinct short consecutive lines ("I see you" -> "I love you", sim=0.737, min_dur<=1400, gap=400)
+    # must stay separate WITHOUT ASR and WITH ASR.
+    c1 = LyricCue(
+        start_ms=1000,
+        end_ms=2200,
+        text="I see you",
+        confidence=0.92,
+        y_center=0.85,
+        layer_id=1,
+        lang="en",
+        source_track_ids=[1],
+    )
+    c2 = LyricCue(
+        start_ms=2600,
+        end_ms=3800,
+        text="I love you",
+        confidence=0.94,
+        y_center=0.85,
+        layer_id=1,
+        lang="en",
+        source_track_ids=[2],
+    )
+    res_no_asr = dedupe_and_group([c1, c2])
+    assert [c.text for c in res_no_asr] == ["I see you", "I love you"]
+
+    asr = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="I see you I love you",
+                start_ms=1000,
+                end_ms=3900,
+                words=[
+                    ASRWord("I", 1020, 1180),
+                    ASRWord("see", 1200, 1500),
+                    ASRWord("you", 1520, 1900),
+                    ASRWord("I", 2600, 2750),
+                    ASRWord("love", 2760, 3100),
+                    ASRWord("you", 3120, 3600),
+                ],
+            )
+        ],
+    )
+    c1_asr = LyricCue(
+        start_ms=1000,
+        end_ms=2200,
+        text="I see you",
+        confidence=0.92,
+        y_center=0.85,
+        layer_id=1,
+        lang="en",
+        source_track_ids=[1],
+    )
+    c2_asr = LyricCue(
+        start_ms=2600,
+        end_ms=3800,
+        text="I love you",
+        confidence=0.94,
+        y_center=0.85,
+        layer_id=1,
+        lang="en",
+        source_track_ids=[2],
+    )
+    res_with_asr = dedupe_and_group([c1_asr, c2_asr], asr_transcript=asr)
+    assert [c.text for c in res_with_asr] == ["I see you", "I love you"]
+
+    # Even when sim >= 0.75 ("I need you" -> "I feel you", sim=0.80), ASR new onset must block fade merge
+    asr_need_feel = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="I need you I feel you",
+                start_ms=1000,
+                end_ms=3900,
+                words=[
+                    ASRWord("I", 1020, 1180),
+                    ASRWord("need", 1200, 1500),
+                    ASRWord("you", 1520, 1900),
+                    ASRWord("I", 2600, 2750),
+                    ASRWord("feel", 2760, 3100),
+                    ASRWord("you", 3120, 3600),
+                ],
+            )
+        ],
+    )
+    res_need_feel = dedupe_and_group(
+        [
+            LyricCue(start_ms=1000, end_ms=2200, text="I need you", confidence=0.92, y_center=0.85, layer_id=1, lang="en", source_track_ids=[1]),
+            LyricCue(start_ms=2600, end_ms=3800, text="I feel you", confidence=0.94, y_center=0.85, layer_id=1, lang="en", source_track_ids=[2]),
+        ],
+        asr_transcript=asr_need_feel,
+    )
+    assert [c.text for c in res_need_feel] == ["I need you", "I feel you"]
+
+    # True CJK/Latin fade-in/fade-out OCR flickers still collapse to 1 cue
+    cjk_fade = dedupe_and_group([
+        LyricCue(start_ms=1000, end_ms=1800, text="此処は宴の", confidence=0.85, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[10]),
+        LyricCue(start_ms=2100, end_ms=5500, text="此処は宴 鋼の檻", confidence=0.93, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[11]),
+    ])
+    assert len(cjk_fade) == 1
+    assert cjk_fade[0].text == "此処は宴 鋼の檻"
+
+    cjk_variant_fade = dedupe_and_group([
+        LyricCue(start_ms=6000, end_ms=6900, text="少年少女戦国無双", confidence=0.88, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[12]),
+        LyricCue(start_ms=7200, end_ms=10500, text="少年少女戰国無双", confidence=0.94, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[13]),
+    ])
+    assert len(cjk_variant_fade) == 1
+
+    # Substring containment / >=4-char prefix flicker with sim in [0.62, 0.75) still collapses
+    suffix_fade = dedupe_and_group([
+        LyricCue(start_ms=11000, end_ms=11800, text="鋼の檻だよ", confidence=0.85, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[14]),
+        LyricCue(start_ms=12100, end_ms=15500, text="此処は宴 鋼の檻だよ", confidence=0.94, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[15]),
+    ])
+    assert len(suffix_fade) == 1
+    assert suffix_fade[0].text == "此処は宴 鋼の檻だよ"
+
+    # When ASR only has the first cue's onset (no new onset at second cue), fade-in still collapses
+    asr_single_line = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="此処は宴鋼の檻",
+                start_ms=1000,
+                end_ms=4500,
+                words=[ASRWord("此処", 1020, 1400), ASRWord("は", 1400, 1600)],
+            )
+        ],
+    )
+    cjk_fade_asr = dedupe_and_group(
+        [
+            LyricCue(start_ms=1000, end_ms=1500, text="此処は宴の", confidence=0.85, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[16]),
+            LyricCue(start_ms=1700, end_ms=5000, text="此処は宴 鋼の檻", confidence=0.93, y_center=0.85, layer_id=1, lang="ja", source_track_ids=[17]),
+        ],
+        asr_transcript=asr_single_line,
+    )
+    assert len(cjk_fade_asr) == 1
+    assert cjk_fade_asr[0].text == "此処は宴 鋼の檻"
+
+
+
 def test_share_solitary_cross_layer_cues_strict_global_check():
     from lyra_ocr.lyric.grouping import share_solitary_cross_layer_cues
 

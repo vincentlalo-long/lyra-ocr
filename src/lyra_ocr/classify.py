@@ -53,9 +53,18 @@ CHAT_CONTENT_RE = re.compile(
 )
 
 _INTRO_CREDIT_PREFIX_RE = re.compile(
-    r"^(?:(?:music|lyrics?|vocal(?:s)?|illust(?:ration)?|movie|video|animation|compilation|arranged?|arrangement|mix(?:ed)?|master(?:ing|ed)?|encoded|subtitles?|translated|sub(?:bed)?|edit(?:ed)?)\s*[:\-]|by\s+[A-Za-z0-9_\-]+)",
+    r"^(?:(?:music|lyrics?|vocal(?:s)?|illust(?:ration)?|movie|video|animation|compilation|arranged?|arrangement|mix(?:ed)?|master(?:ing|ed)?|encoded|subtitles?|translated|sub(?:bed)?|edit(?:ed)?)\s*[:\-]|by\s+(?!(?:the|a|an|my|your|our|his|her|their|this|that|all|now|far)\b)[A-Za-z0-9_\-]+)",
     re.IGNORECASE,
 )
+
+
+def _is_intro_credit_text(text: str, *, in_lyric_layer: bool, word_count: int) -> bool:
+    """Return True when ``text`` matches an intro production-credit prefix."""
+    if not _INTRO_CREDIT_PREFIX_RE.search(text):
+        return False
+    if in_lyric_layer and word_count >= 5 and re.match(r"by\s+", text, re.IGNORECASE):
+        return False
+    return True
 
 
 SUPPLEMENTARY_KEYWORDS = [
@@ -328,7 +337,11 @@ def classify_track(
             return res
 
     # Intro Production Credit Prefix Filter
-    if start_time_ratio <= cfg.intro_credit_start_ratio_max and _INTRO_CREDIT_PREFIX_RE.search(dominant_text):
+    if (
+        (video_duration_ms > 0 or feat.get("start_time_ratio") is not None)
+        and start_time_ratio <= cfg.intro_credit_start_ratio_max
+        and _is_intro_credit_text(dominant_text, in_lyric_layer=in_lyric_layer, word_count=word_count)
+    ):
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.95,

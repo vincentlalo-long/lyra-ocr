@@ -134,4 +134,44 @@ def test_detect_line_lang_unaccented_spanish_and_romaji_disambiguation():
     assert detect_line_lang("kimi ni todoke yo kono omoi no mama de") == "ja-Latn"
     assert detect_line_lang("se no ni de koete yuku mirai e") == "ja-Latn"
 
+    # Additional unaccented Spanish lines
+    assert detect_line_lang("Aunque llore ya nada volvera a ser como antes") == "es"
+    assert detect_line_lang("para siempre contigo") == "es"
+    assert detect_line_lang("tu amor sera mi luz") == "es"
+
+
+def test_detect_line_lang_english_vl_and_en_es_homographs():
+    from lyra_ocr.lang import _normalize_romaji_ocr_token
+
+    # English -Vl words must NOT rewrite trailing l->i
+    for word in ("feel", "real", "soul", "heal", "deal", "goal", "fail", "sail"):
+        assert _normalize_romaji_ocr_token(word) == word
+    assert _normalize_romaji_ocr_token("nal") == "nai"
+    assert _normalize_romaji_ocr_token("ital") == "itai"
+    assert _normalize_romaji_ocr_token("ille") == "itte"
+    assert _normalize_romaji_ocr_token("kcko") == "koko"
+
+    # English -Vl lines must stay English with romaji_score == 0.0
+    for en_vl in (
+        "I feel my soul",
+        "feel my soul",
+        "you feel so real",
+        "heal my soul",
+        "real deal",
+    ):
+        assert romaji_score(en_vl) == 0.0
+        assert detect_line_lang(en_vl) == "en"
+
+    # Common English words hello/hero/zero and EN/ES homographs must stay English
+    for en_line in (
+        "a solo for me",
+        "son of a gun",
+        "hello my hero",
+        "zero to hero",
+        "the era of light",
+        "my fatal angel",
+    ):
+        assert detect_line_lang(en_line) == "en"
+
+
 

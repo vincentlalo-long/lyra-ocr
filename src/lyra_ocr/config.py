@@ -86,6 +86,9 @@ class GroupingThresholds:
     fade_max_gap_ms: int = 800
     fade_max_dur_ms: int = 1400
     fade_min_similarity: float = 0.62
+    fade_strong_similarity: float = 0.75
+    fade_affix_min_chars: int = 4
+    fade_short_text_max_chars: int = 3
     merge_max_start_delta_ms: int = 1500
     merge_overlap_gap_ms: int = 200
     merge_split_max_gap_ms: int = 2500

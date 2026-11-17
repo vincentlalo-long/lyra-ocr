@@ -35,7 +35,7 @@ uv pip install -e ".[dev,eval]"
 
 ```bash
 pip uninstall -y onnxruntime
-pip install "onnxruntime-gpu[cuda,cudnn]==1.31.1"
+pip install "onnxruntime-gpu[cuda,cudnn]>=1.17.0"
 ```
 
 Verify the installation:

@@ -615,6 +615,7 @@ def test_classify_all_tracks_rescues_chorus_title_hook_and_rejects_intro_card():
     "credit_text",
     [
         "by Producer-X",
+        "by Kurousa-P",
         "Compilation: Track Anthology",
         "Animation: Studio Alpha",
         "Music: Composer Name",
@@ -665,6 +666,58 @@ def test_classify_credit_like_prefix_outside_intro_window_not_rejected():
     assert result.label == "lyric"
     assert result.decision == "accept"
     assert "intro_credit_pattern" not in result.qa_flags
+
+
+@pytest.mark.parametrize(
+    ("phrase", "layer_kind"),
+    [
+        ("by your side I stay", "sparse"),
+        ("by your side I stay", "lyric"),
+        ("by the riverside we wait", "sparse"),
+        ("by the riverside we wait", "lyric"),
+        ("by starlight we keep running on", "lyric"),
+    ],
+)
+def test_classify_early_english_by_verse_phrases_not_rejected(phrase: str, layer_kind: str):
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=102,
+        start_ms=2000,
+        end_ms=5500,
+        texts=[phrase],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=200000,
+    )
+    track.features["layer_id"] = 1
+    track.features["layer_kind"] = layer_kind
+
+    result = classify_track(track, video_duration_ms=200000)
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+    assert "intro_credit_pattern" not in result.qa_flags
+
+
+def test_classify_intro_credit_zero_video_duration_without_start_ratio_not_rejected():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=103,
+        start_ms=50000,
+        end_ms=53500,
+        texts=["by Kurousa-P"],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=100000,
+    )
+    # Remove start_time_ratio to simulate caller invoking classify_track with video_duration_ms=0
+    track.features.pop("start_time_ratio", None)
+    track.features["lifetime_ratio"] = 0.02
+
+    result = classify_track(track, video_duration_ms=0)
+    assert "intro_credit_pattern" not in result.qa_flags
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+
 
 
 

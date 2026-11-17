@@ -28,6 +28,7 @@ _ENGLISH_STOPWORDS = {
     "away", "again", "into", "onto", "upon", "over", "ever", "never", "under",
     "eyes", "open", "baby", "nite", "night", "sky", "fly", "cry", "try",
     "been", "seen", "she", "too",
+    "feel", "real", "soul", "heal", "deal", "hello", "hero", "zero",
 }
 _AMBIGUOUS_ENGLISH_SHORT_WORDS = _ENGLISH_STOPWORDS
 
@@ -58,17 +59,17 @@ _ROMAJI_MORPHOLOGICAL_SUBSTRINGS = (
 
 # Spanish unambiguous words (not Japanese Romaji particles) and ambiguous short tokens
 _SPANISH_UNAMBIGUOUS_WORDS = {
-    "el", "los", "las", "del", "una", "uno", "con", "por", "para", "como",
+    "el", "los", "las", "del", "una", "uno", "por", "para", "como",
     "más", "mas", "está", "esta", "están", "estan", "estoy", "estuve",
-    "son", "ser", "era", "fue", "sido", "ha", "han",
+    "ser", "fue", "sido", "han",
     "ese", "esa", "esos", "esas", "este", "estos", "estas",
     "todo", "toda", "todos", "todas", "día", "dias", "días",
     "siempre", "nunca", "corazón", "corazon", "tiempo", "vida",
-    "sueño", "sueno", "mundo", "cielo", "luz", "sin", "nos", "les",
+    "sueño", "sueno", "mundo", "cielo", "luz", "nos", "les",
     "qué", "que", "quien", "cual", "cuando", "donde", "porque",
-    "aunque", "aumque", "pero", "sino", "muy", "tan", "tanto", "tanta",
+    "aunque", "aumque", "pero", "sino", "muy", "tanto", "tanta",
     "poco", "poca", "mucho", "mucha", "muchos", "muchas", "vez", "veces",
-    "nada", "algo", "alguien", "nadie", "solo", "sola", "mismo", "misma",
+    "nada", "algo", "alguien", "nadie", "sola", "mismo", "misma",
     "otro", "otra", "hacia", "hasta", "desde", "entre", "sobre", "contra",
     "contigo", "conmigo", "futuro", "destino", "dolor", "doloroso",
     "felicidad", "adios", "adiós", "volverá", "volvera",
@@ -77,6 +78,7 @@ _SPANISH_UNAMBIGUOUS_WORDS = {
 _SPANISH_AMBIGUOUS_SHORT = {
     "la", "mi", "tu", "su", "me", "te", "se", "lo", "le",
     "ya", "si", "no", "ni", "de", "y", "o", "a", "en",
+    "son", "era", "sin", "tan", "ha", "solo", "con",
 }
 _SPANISH_STOPWORDS = _SPANISH_UNAMBIGUOUS_WORDS
 _SPANISH_CHARS_RE = re.compile(r"[ñ¿¡]", re.IGNORECASE)
@@ -98,7 +100,7 @@ def _normalize_romaji_ocr_token(tok: str) -> str:
     t = tok.lower()
     t = re.sub(r"(?<=[aeiouāīūēōâîûêô])ll(?=[aeiouāīūēōâîûêô])", "tt", t)
     t = re.sub(r"(?<=[aeiouāīūēōâîûêô])l(?=[aeiouāīūēōâîûêô])", "t", t)
-    t = re.sub(r"(?<=[auoeāūōēâûôê])l$", "i", t)
+    t = re.sub(r"(^|[^aeiouāīūēōâîûêô])([auoeāūōēâûôê])l$", r"\1\2i", t)
     t = re.sub(r"c(?=k)", "o", t)
     t = re.sub(r"(?<=[bcdfghjklmnpqrstvwxyz])c(?=[aou])", "o", t)
     return t
@@ -134,7 +136,7 @@ def romaji_score(text: str) -> float:
 
         norm_tok = (
             tok_lower
-            if _ROMAJI_TOKEN_RE.fullmatch(tok_lower)
+            if (tok_is_english or _ROMAJI_TOKEN_RE.fullmatch(tok_lower))
             else _normalize_romaji_ocr_token(tok_lower)
         )
         if _ROMAJI_TOKEN_RE.fullmatch(norm_tok):
@@ -152,8 +154,11 @@ def romaji_score(text: str) -> float:
                 unambiguous_romaji_tokens += 1
 
             if (
-                norm_tok in _ROMAJI_PARTICLES_AND_FUNCTION
-                or any(sub in norm_tok for sub in _ROMAJI_MORPHOLOGICAL_SUBSTRINGS)
+                norm_tok == tok_lower
+                and (
+                    norm_tok in _ROMAJI_PARTICLES_AND_FUNCTION
+                    or any(sub in norm_tok for sub in _ROMAJI_MORPHOLOGICAL_SUBSTRINGS)
+                )
             ):
                 positive_ja_hits += 1
 

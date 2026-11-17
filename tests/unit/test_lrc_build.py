@@ -1188,4 +1188,177 @@ def test_build_lrc_dedupes_per_layer_after_reference_alignment(tmp_path: Path):
     assert observed_pre_consolidate_counts == [1]
 
 
+def test_refresh_dict_tracks_layers_when_all_have_layer_id(tmp_path: Path):
+    from lyra_ocr.layers import refresh_dict_tracks_layers
+
+    romaji_lines = [
+        "ille kcko ni nal kaze wo kanjite",
+        "walashi no kolae wo kikoe nal yo",
+        "fulari de tckiakasu ycake no sora",
+        "kono mune ni hikari wo tomoshite",
+    ]
+    spanish_lines = [
+        "Aunque llore ya nada volvera a ser como antes",
+        "el futuro contigo siempre sera mejor",
+        "solo quiero olvidar este dolor",
+        "para siempre contigo",
+    ]
+    companion_lines = [
+        "sono kodou wa toki wo koete",
+        "mirai no hikari wo sagashite",
+    ]
+
+    raw_tracks: list[dict[str, object]] = []
+    # Primary Romaji layer with custom pre-existing layer_id=42 and stale lang="en"
+    for i, text in enumerate(romaji_lines):
+        raw_tracks.append(
+            {
+                "track_id": i + 1,
+                "start_ms": i * 3000 + 1000,
+                "end_ms": i * 3000 + 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.92,
+                "features": {
+                    "dominant_text": text,
+                    "mean_centroid": [0.5, 0.85],
+                    "layer_id": 42,
+                    "layer_kind": "lyric",
+                    "lang": "en",
+                    "line_lang": "en",
+                    "custom_tag": f"primary-{i}",
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": i * 3000 + 1000,
+                        "end_ms": i * 3000 + 3000,
+                        "text": text,
+                        "confidence": 0.92,
+                    }
+                ],
+            }
+        )
+
+    # Companion sparse band at y=0.78 (within [0.025, 0.16] of y=0.85) overlapping primary layer in time,
+    # carrying pre-existing layer_id=99, layer_kind="sparse", and stale lang="en".
+    for k, text in enumerate(companion_lines):
+        raw_tracks.append(
+            {
+                "track_id": 20 + k,
+                "start_ms": k * 3000 + 1000,
+                "end_ms": k * 3000 + 2800,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.90,
+                "features": {
+                    "dominant_text": text,
+                    "mean_centroid": [0.5, 0.78],
+                    "layer_id": 99,
+                    "layer_kind": "sparse",
+                    "lang": "en",
+                    "line_lang": "en",
+                    "custom_tag": f"companion-{k}",
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": k * 3000 + 1000,
+                        "end_ms": k * 3000 + 2800,
+                        "text": text,
+                        "confidence": 0.90,
+                    }
+                ],
+            }
+        )
+
+    # Spanish layer at y=0.12 with pre-existing layer_id=77 and stale lang="en"
+    for j, text in enumerate(spanish_lines):
+        raw_tracks.append(
+            {
+                "track_id": 40 + j,
+                "start_ms": j * 3000 + 1000,
+                "end_ms": j * 3000 + 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.91,
+                "features": {
+                    "dominant_text": text,
+                    "mean_centroid": [0.5, 0.12],
+                    "layer_id": 77,
+                    "layer_kind": "lyric",
+                    "lang": "en",
+                    "line_lang": "en",
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": j * 3000 + 1000,
+                        "end_ms": j * 3000 + 3000,
+                        "text": text,
+                        "confidence": 0.91,
+                    }
+                ],
+            }
+        )
+
+    # 1. Direct refresh_dict_tracks_layers() check when all_have_layer_id == True
+    import copy
+
+    tracks_copy = copy.deepcopy(raw_tracks)
+    refresh_dict_tracks_layers(tracks_copy, frame_w=1280, frame_h=720, duration_ms=30000)
+
+    # Existing layer_ids must be preserved (not overwritten with 1/2/3 from discover_layers)
+    assert [t["features"]["layer_id"] for t in tracks_copy[:4]] == [42, 42, 42, 42]
+    assert [t["features"]["layer_id"] for t in tracks_copy[4:6]] == [99, 99]
+    assert [t["features"]["layer_id"] for t in tracks_copy[6:]] == [77, 77, 77, 77]
+
+    # Stale lang="en" refreshed dynamically to "ja-Latn" / "es"
+    assert all(t["features"]["lang"] == "ja-Latn" for t in tracks_copy[:6])
+    assert all(t["features"]["lang"] == "es" for t in tracks_copy[6:])
+    # Companion "sparse" band promoted to "lyric"
+    assert all(t["features"]["layer_kind"] == "lyric" for t in tracks_copy[4:6])
+    # Unrelated custom feature keys preserved
+    assert tracks_copy[0]["features"]["custom_tag"] == "primary-0"
+    assert tracks_copy[4]["features"]["custom_tag"] == "companion-0"
+
+    # 2. End-to-end build_lrc_from_artifacts() check with all_have_layer_id == True
+    artifacts_dir = tmp_path / "all_layer_id_art"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "vid_all_layer_id",
+        "probe": {"duration": 30.0, "width": 1280, "height": 720},
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(
+        json.dumps({"total_tracks": len(raw_tracks), "tracks": raw_tracks}),
+        encoding="utf-8",
+    )
+
+    observed_select_layers: list[tuple[int, int, str, str]] = []
+    from lyra_ocr.lyric import select as real_select
+
+    def spy_select_cues(tracks_in, human_labels, **kwargs):
+        for tr in tracks_in:
+            f = tr.get("features") or {}
+            observed_select_layers.append(
+                (tr["track_id"], f.get("layer_id"), f.get("layer_kind"), f.get("lang"))
+            )
+        return real_select.select_cues(tracks_in, human_labels, **kwargs)
+
+    out_lrc = tmp_path / "all_layer_id.lrc"
+    with patch("lyra_ocr.lyric.build.select_cues", side_effect=spy_select_cues):
+        build_lrc_from_artifacts(artifacts_dir, out_lrc, force=True)
+
+    assert (20, 99, "lyric", "ja-Latn") in observed_select_layers
+    assert (21, 99, "lyric", "ja-Latn") in observed_select_layers
+    assert (1, 42, "lyric", "ja-Latn") in observed_select_layers
+    assert (40, 77, "lyric", "es") in observed_select_layers
+
+    cues_data = json.loads((tmp_path / "all_layer_id.cues.json").read_text(encoding="utf-8"))
+    cue_langs = {c["lang"] for c in cues_data["cues"]}
+    assert cue_langs == {"ja-Latn", "es"}
+
+
+
 
