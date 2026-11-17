@@ -1,4 +1,5 @@
 import math
+import shutil
 import struct
 import wave
 from pathlib import Path
@@ -6,6 +7,8 @@ import numpy as np
 import pytest
 
 from lyra_ocr.audio.extract import extract_audio_16k, separate_vocals_demucs
+
+requires_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
 
 def _create_test_wav(path: Path, duration_sec: float = 1.0, freq: float = 440.0, sr: int = 16000) -> Path:
@@ -20,6 +23,7 @@ def _create_test_wav(path: Path, duration_sec: float = 1.0, freq: float = 440.0,
     return path
 
 
+@requires_ffmpeg
 def test_extract_audio_16k_valid_audio(tmp_path: Path):
     audio_file = tmp_path / "test_16k.wav"
     _create_test_wav(audio_file, duration_sec=1.0, freq=440.0, sr=16000)
@@ -33,6 +37,7 @@ def test_extract_audio_16k_valid_audio(tmp_path: Path):
     assert 0.0 <= np.max(audio) <= 1.0
 
 
+@requires_ffmpeg
 def test_extract_audio_16k_caching(tmp_path: Path):
     audio_file = tmp_path / "test_cache.wav"
     _create_test_wav(audio_file, duration_sec=0.5, freq=440.0, sr=16000)
