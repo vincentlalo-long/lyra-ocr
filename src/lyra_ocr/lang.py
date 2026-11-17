@@ -27,6 +27,7 @@ _ENGLISH_STOPWORDS = {
     "none", "bone", "tone", "zone", "alone", "before", "above", "alive",
     "away", "again", "into", "onto", "upon", "over", "ever", "never", "under",
     "eyes", "open", "baby", "nite", "night", "sky", "fly", "cry", "try",
+    "been", "seen", "she", "too",
 }
 _AMBIGUOUS_ENGLISH_SHORT_WORDS = _ENGLISH_STOPWORDS
 
@@ -55,14 +56,31 @@ _ROMAJI_MORPHOLOGICAL_SUBSTRINGS = (
     "shi", "chi", "tsu", "ky", "gy", "ny", "hy", "my", "ry", "ou", "uu", "ai", "oi", "ei",
 )
 
-# Spanish stopwords and distinct characters
-_SPANISH_STOPWORDS = {
-    "el", "la", "los", "las", "del", "una", "uno", "con", "por", "para", "como",
-    "más", "mas", "está", "esta", "son", "ese", "esa", "todo", "toda",
-    "día", "dias", "días", "siempre", "nunca", "corazón", "tiempo", "vida",
-    "sueño", "mundo", "cielo", "luz", "sin", "mi", "tu", "su", "nos", "qué", "que", "y",
+# Spanish unambiguous words (not Japanese Romaji particles) and ambiguous short tokens
+_SPANISH_UNAMBIGUOUS_WORDS = {
+    "el", "los", "las", "del", "una", "uno", "con", "por", "para", "como",
+    "más", "mas", "está", "esta", "están", "estan", "estoy", "estuve",
+    "son", "ser", "era", "fue", "sido", "ha", "han",
+    "ese", "esa", "esos", "esas", "este", "estos", "estas",
+    "todo", "toda", "todos", "todas", "día", "dias", "días",
+    "siempre", "nunca", "corazón", "corazon", "tiempo", "vida",
+    "sueño", "sueno", "mundo", "cielo", "luz", "sin", "nos", "les",
+    "qué", "que", "quien", "cual", "cuando", "donde", "porque",
+    "aunque", "aumque", "pero", "sino", "muy", "tan", "tanto", "tanta",
+    "poco", "poca", "mucho", "mucha", "muchos", "muchas", "vez", "veces",
+    "nada", "algo", "alguien", "nadie", "solo", "sola", "mismo", "misma",
+    "otro", "otra", "hacia", "hasta", "desde", "entre", "sobre", "contra",
+    "contigo", "conmigo", "futuro", "destino", "dolor", "doloroso",
+    "felicidad", "adios", "adiós", "volverá", "volvera",
+    "entenderá", "entendera", "quería", "queria", "olvidar", "respuesta",
 }
+_SPANISH_AMBIGUOUS_SHORT = {
+    "la", "mi", "tu", "su", "me", "te", "se", "lo", "le",
+    "ya", "si", "no", "ni", "de", "y", "o", "a", "en",
+}
+_SPANISH_STOPWORDS = _SPANISH_UNAMBIGUOUS_WORDS
 _SPANISH_CHARS_RE = re.compile(r"[ñ¿¡]", re.IGNORECASE)
+_SPANISH_ACCENTED_VOWEL_RE = re.compile(r"[áéíóúü]", re.IGNORECASE)
 
 # Vietnamese-specific vowels with diacritics / consonants
 _VIETNAMESE_UNIQUE_RE = re.compile(
@@ -75,61 +93,81 @@ _VIETNAMESE_RE = re.compile(
 )
 
 
+def _normalize_romaji_ocr_token(tok: str) -> str:
+    """Normalize common Latin OCR confusables in lowercase Romaji tokens for scoring."""
+    t = tok.lower()
+    t = re.sub(r"(?<=[aeiouāīūēōâîûêô])ll(?=[aeiouāīūēōâîûêô])", "tt", t)
+    t = re.sub(r"(?<=[aeiouāīūēōâîûêô])l(?=[aeiouāīūēōâîûêô])", "t", t)
+    t = re.sub(r"(?<=[auoeāūōēâûôê])l$", "i", t)
+    t = re.sub(r"c(?=k)", "o", t)
+    t = re.sub(r"(?<=[bcdfghjklmnpqrstvwxyz])c(?=[aou])", "o", t)
+    return t
+
+
 def romaji_score(text: str) -> float:
     """Calculate the romaji confidence score of a Latin text string in [0.0, 1.0]."""
     if not text or not text.strip():
         return 0.0
 
-    # Extract alphabetic words
-    tokens = re.findall(r"[A-Za-zāīūēōâîûêô]+", text)
+    # Extract alphabetic words (keeping apostrophe contractions intact so 've/'re don't score as morae)
+    tokens = re.findall(r"[A-Za-zāīūēōâîûêô]+(?:'[A-Za-z]+)*", text)
     if not tokens:
         return 0.0
 
     total_tokens = len(tokens)
     romaji_tokens = 0
     unambiguous_romaji_tokens = 0
-    non_romaji_tokens = 0
+    positive_ja_hits = 0
+    has_english = False
 
     for tok in tokens:
         tok_lower = tok.lower()
-        if _ROMAJI_TOKEN_RE.fullmatch(tok_lower):
+        tok_is_english = (
+            tok_lower in _ENGLISH_STOPWORDS
+            or (
+                bool(_ENGLISH_SILENT_E_RE.fullmatch(tok_lower))
+                and tok_lower not in _GENUINE_2MORA_ROMAJI_E
+            )
+        )
+        if tok_is_english:
+            has_english = True
+
+        norm_tok = (
+            tok_lower
+            if _ROMAJI_TOKEN_RE.fullmatch(tok_lower)
+            else _normalize_romaji_ocr_token(tok_lower)
+        )
+        if _ROMAJI_TOKEN_RE.fullmatch(norm_tok):
             romaji_tokens += 1
-            is_english = (
-                tok_lower in _ENGLISH_STOPWORDS
+            norm_is_english = tok_is_english or (
+                norm_tok in _ENGLISH_STOPWORDS
                 or (
-                    bool(_ENGLISH_SILENT_E_RE.fullmatch(tok_lower))
-                    and tok_lower not in _GENUINE_2MORA_ROMAJI_E
+                    bool(_ENGLISH_SILENT_E_RE.fullmatch(norm_tok))
+                    and norm_tok not in _GENUINE_2MORA_ROMAJI_E
                 )
             )
-            if not is_english:
+            if norm_is_english:
+                has_english = True
+            else:
                 unambiguous_romaji_tokens += 1
-        else:
-            non_romaji_tokens += 1
 
-    # If there are any clearly non-romaji Latin tokens, heavily penalize
-    if non_romaji_tokens > 0:
+            if (
+                norm_tok in _ROMAJI_PARTICLES_AND_FUNCTION
+                or any(sub in norm_tok for sub in _ROMAJI_MORPHOLOGICAL_SUBSTRINGS)
+            ):
+                positive_ja_hits += 1
+
+    valid_ratio = romaji_tokens / total_tokens
+    if valid_ratio < 0.50:
         return 0.0
 
     # Line with <= 4 tokens that contains zero positive Japanese Romaji indicators/morphology
-    # and >= 1 silent-e or English word must score < 0.50 so it never triggers ja-Latn
-    has_positive = any(
-        tok.lower() in _ROMAJI_PARTICLES_AND_FUNCTION
-        or any(sub in tok.lower() for sub in _ROMAJI_MORPHOLOGICAL_SUBSTRINGS)
-        for tok in tokens
-    )
-    has_english = any(
-        tok.lower() in _ENGLISH_STOPWORDS
-        or (
-            bool(_ENGLISH_SILENT_E_RE.fullmatch(tok.lower()))
-            and tok.lower() not in _GENUINE_2MORA_ROMAJI_E
-        )
-        for tok in tokens
-    )
-    if total_tokens <= 4 and not has_positive and has_english:
+    # and >= 1 silent-e or English word must not trigger ja-Latn
+    if total_tokens <= 4 and positive_ja_hits == 0 and has_english:
         return 0.0
 
-    # Fraction of unambiguous romaji words among all tokens
-    return unambiguous_romaji_tokens / total_tokens
+    unambiguous_ratio = unambiguous_romaji_tokens / total_tokens
+    return min(1.0, unambiguous_ratio + (0.15 if positive_ja_hits >= 2 else 0.0))
 
 
 def detect_line_lang(text: str) -> str:
@@ -140,6 +178,7 @@ def detect_line_lang(text: str) -> str:
         'ko'      : Korean containing Hangul
         'vi'      : Vietnamese containing Vietnamese diacritics/characters
         'zh'      : Chinese / CJK Unified Ideographs without Kana/Hangul
+        'es'      : Spanish
         'ja-Latn' : Japanese written in Romaji (Latin script)
         'en'      : English or generic Latin text
         'und'     : Undetermined (empty, digits, punctuation only)
@@ -176,29 +215,34 @@ def detect_line_lang(text: str) -> str:
     if has_cjk and not has_latin:
         return "zh"
 
-    # 2. Romance / Spanish Stopwords & Distinct Characters
+    # 2. Romance / Spanish Disambiguation & Distinct Characters
     lower_norm = norm.lower()
     words = re.findall(r"[\w]+", lower_norm)
-    n_es_stops = sum(1 for w in words if w in _SPANISH_STOPWORDS)
+    n_es_unambiguous = sum(1 for w in words if w in _SPANISH_UNAMBIGUOUS_WORDS)
+    n_es_ambiguous = sum(1 for w in words if w in _SPANISH_AMBIGUOUS_SHORT)
     has_es_char = bool(_SPANISH_CHARS_RE.search(norm))
+    has_accented_vowel = bool(_SPANISH_ACCENTED_VOWEL_RE.search(norm))
     has_vi_unique = bool(_VIETNAMESE_UNIQUE_RE.search(norm))
 
-    if has_es_char or (n_es_stops >= 2 and not has_vi_unique):
+    is_spanish = has_es_char or (
+        not has_vi_unique
+        and (
+            n_es_unambiguous >= 2
+            or (n_es_unambiguous >= 1 and (n_es_ambiguous >= 1 or has_accented_vowel))
+        )
+    )
+    if is_spanish:
         return "es"
 
     # 3. Vietnamese Diacritics
     if _VIETNAMESE_RE.search(norm):
-        if n_es_stops >= 1 and not has_vi_unique:
-            return "es"
         return "vi"
 
     # 4. Latin Script (Romaji vs English/Spanish/Latin)
     if has_latin:
-        if n_es_stops >= 2:
-            return "es"
         score = romaji_score(norm)
         # Require score >= 0.6 and at least 2 tokens, or single high-confidence token
-        tokens = re.findall(r"[A-Za-zāīūēōâîûêô]+", norm)
+        tokens = re.findall(r"[A-Za-zāīūēōâîûêô]+(?:'[A-Za-z]+)*", norm)
         if score >= 0.6 and len(tokens) >= 2:
             return "ja-Latn"
         return "en"

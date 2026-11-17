@@ -1018,3 +1018,107 @@ def test_build_lrc_from_video_channel_not_leaked_as_artist(tmp_path: Path):
     # Channel MUST NOT be leaked into artist tag
     assert "[ar:" not in content
 
+
+def test_build_lrc_refreshes_stale_cached_layer_lang(tmp_path: Path):
+    # Cached tracks.json from an older run with stale lang="en" on Romaji and unaccented Spanish
+    # lines, plus missing layer_id/layer_kind on one track. build_lrc_from_artifacts() must
+    # refresh layer discovery and language voting without dropping existing features.
+    artifacts_dir = tmp_path / "stale_lang_art"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "vid_stale_lang",
+        "probe": {"duration": 30.0, "width": 1280, "height": 720},
+    }
+    romaji_lines = [
+        "ille kcko ni nal kaze wo kanjite",
+        "walashi no kolae wo kikoe nal yo",
+        "fulari de tckiakasu ycake no sora",
+        "kono mune ni hikari wo tomoshite",
+    ]
+    spanish_lines = [
+        "Aumque llore ya nada volvera a ser como antes",
+        "el futuro contigo siempre sera mejor",
+        "solo quiero olvidar este dolor",
+        "nunca voy a olvidar tu voz",
+    ]
+    raw_tracks = []
+    for i, text in enumerate(romaji_lines):
+        raw_tracks.append(
+            {
+                "track_id": i + 1,
+                "start_ms": i * 3000 + 1000,
+                "end_ms": i * 3000 + 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.90,
+                "features": {
+                    "dominant_text": text,
+                    "mean_centroid": [0.5, 0.85],
+                    "lang": "en",
+                    "line_lang": "en",
+                    "custom_tag": f"ro-{i}",
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": i * 3000 + 1000,
+                        "end_ms": i * 3000 + 3000,
+                        "text": text,
+                        "confidence": 0.90,
+                    }
+                ],
+            }
+        )
+    for j, text in enumerate(spanish_lines):
+        raw_tracks.append(
+            {
+                "track_id": 10 + j,
+                "start_ms": j * 3000 + 1000,
+                "end_ms": j * 3000 + 3000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.90,
+                "features": {
+                    "dominant_text": text,
+                    "mean_centroid": [0.5, 0.12],
+                    "lang": "en",
+                    "line_lang": "en",
+                },
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": j * 3000 + 1000,
+                        "end_ms": j * 3000 + 3000,
+                        "text": text,
+                        "confidence": 0.90,
+                    }
+                ],
+            }
+        )
+
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(
+        json.dumps({"total_tracks": len(raw_tracks), "tracks": raw_tracks}),
+        encoding="utf-8",
+    )
+
+    out_lrc = tmp_path / "stale_lang.lrc"
+    res = build_lrc_from_artifacts(artifacts_dir, out_lrc, force=True)
+
+    cues_data = json.loads((tmp_path / "stale_lang.cues.json").read_text(encoding="utf-8"))
+    langs = {c["lang"] for c in cues_data["cues"]}
+    assert "ja-Latn" in langs
+    assert "es" in langs
+    assert res["n_cues"] == 8
+    assert res["n_skipped"] == 0
+
+    from lyra_ocr.layers import refresh_dict_tracks_layers
+
+    refresh_dict_tracks_layers(raw_tracks, frame_w=1280, frame_h=720, duration_ms=30000)
+    assert raw_tracks[0]["features"]["custom_tag"] == "ro-0"
+    assert raw_tracks[0]["features"]["lang"] == "ja-Latn"
+    assert raw_tracks[0]["features"]["layer_kind"] == "lyric"
+    assert raw_tracks[4]["features"]["lang"] == "es"
+    assert raw_tracks[4]["features"]["layer_kind"] == "lyric"
+
+

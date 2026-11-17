@@ -325,8 +325,15 @@ def select_cues(
             # when the garbled spelling trips the quality gate.
             reference_match = best_reference_similarity(final_text, eff_ref_lines)
             is_non_en = bool(track_lang and track_lang not in ("en", "und"))
-            gate_reason = "" if (seg_human_text or reference_match >= 0.55 or is_non_en) else _quality_gate(
-                seg_conf, quality, n_words, oov, cfg
+            is_trusted_lyric_layer = (
+                features.get("layer_kind") == "lyric"
+                and (seg_conf is None or seg_conf >= 0.70)
+                and quality >= cfg.min_text_quality_hard
+            )
+            gate_reason = (
+                ""
+                if (seg_human_text or reference_match >= 0.55 or is_non_en or is_trusted_lyric_layer)
+                else _quality_gate(seg_conf, quality, n_words, oov, cfg)
             )
             if gate_reason and not include_review:
                 skipped_records.append({

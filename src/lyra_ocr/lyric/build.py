@@ -17,6 +17,7 @@ from lyra_ocr.audio import (
     transcribe_audio_words,
 )
 from lyra_ocr.lang import vote_layer_lang
+from lyra_ocr.layers import refresh_dict_tracks_layers
 from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
 from lyra_ocr.lyric.grouping import (
     consolidate_language_layers,
@@ -189,6 +190,9 @@ def build_lrc_from_artifacts(
         duration_ms = int(float(probe.get("duration") or 0.0) * 1000)
     except (TypeError, ValueError):
         duration_ms = 0
+    frame_width = probe.get("width") or 1280
+    frame_height = probe.get("height") or 720
+    refresh_dict_tracks_layers(tracks, frame_width, frame_height, duration_ms)
 
     tracker_raw = manifest.get("tracker")
     tracker_name = tracker_raw.get("name", "bytetrack") if isinstance(tracker_raw, dict) else (tracker_raw or "bytetrack")
@@ -280,8 +284,6 @@ def build_lrc_from_artifacts(
             reference_lines = [l.text for l in ref_bundle.lines]
             reference_source = ref_bundle.source or ("lrclib" if reference_lines else "")
 
-    frame_width = probe.get("width") or 1280
-    frame_height = probe.get("height") or 720
     cues, skipped = select_cues(
         tracks,
         human_labels,

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Any, Sequence
 
 from lyra_ocr.lang import detect_line_lang, vote_layer_lang
-from lyra_ocr.track import TextTrack, string_similarity
+from lyra_ocr.track import DetectionOccurrence, TextSegment, TextTrack, string_similarity
 
 
 @dataclass
@@ -222,3 +223,126 @@ def discover_layers(
                 break
 
     return layers
+
+
+def refresh_dict_tracks_layers(
+    tracks: list[dict[str, Any]],
+    frame_w: int = 1280,
+    frame_h: int = 720,
+    duration_ms: int = 0,
+) -> None:
+    """Re-run line language detection and spatial layer voting on dict tracks in-place.
+
+    Updates ``layer_id``, ``layer_kind``, ``lang``, and ``line_lang`` inside each
+    track's ``features`` dict without dropping any existing feature keys.
+    When every track already carries an explicit ``layer_id`` (e.g. from prior
+    layering or hand-crafted fixtures), existing ``layer_id`` values are preserved
+    and ``lang`` is re-voted per existing layer.
+    """
+    if not tracks:
+        return
+
+    valid_pairs: list[tuple[dict[str, Any], TextTrack]] = []
+    for idx, d in enumerate(tracks):
+        if not isinstance(d, dict):
+            continue
+        features = d.get("features")
+        if not isinstance(features, dict):
+            features = {}
+            d["features"] = features
+
+        raw_bbox = d.get("bbox")
+        bbox = (
+            [int(x) for x in raw_bbox[:4]]
+            if isinstance(raw_bbox, list) and len(raw_bbox) >= 4
+            else [0, 0, 0, 0]
+        )
+
+        segments: list[TextSegment] = []
+        for s_idx, seg in enumerate(d.get("segments") or []):
+            if not isinstance(seg, dict):
+                continue
+            seg_text = str(seg.get("text") or "")
+            if seg_text:
+                segments.append(
+                    TextSegment(
+                        segment_id=int(seg.get("segment_id") if seg.get("segment_id") is not None else s_idx),
+                        start_ms=int(seg.get("start_ms") or d.get("start_ms") or 0),
+                        end_ms=int(seg.get("end_ms") or d.get("end_ms") or 0),
+                        text=seg_text,
+                        confidence=float(seg.get("confidence") or 0.0),
+                        num_occurrences=int(seg.get("num_occurrences") or 1),
+                    )
+                )
+                break
+
+        occurrences: list[DetectionOccurrence] = []
+        for occ in d.get("occurrences") or []:
+            if not isinstance(occ, dict):
+                continue
+            occ_text = str(occ.get("text_norm") or occ.get("text_raw") or "")
+            if occ_text:
+                occurrences.append(
+                    DetectionOccurrence(
+                        frame_id=int(occ.get("frame_id") or 0),
+                        timestamp_ms=int(occ.get("timestamp_ms") or 0),
+                        polygon=occ.get("polygon") or [],
+                        bbox=occ.get("bbox") or bbox,
+                        text_raw=str(occ.get("text_raw") or occ_text),
+                        text_norm=occ_text,
+                        confidence=float(occ.get("confidence") or 0.0),
+                        model_id=str(occ.get("model_id") or ""),
+                        script=str(occ.get("script") or ""),
+                    )
+                )
+                break
+
+        tid = d.get("track_id") if d.get("track_id") is not None else idx
+        proxy = TextTrack(
+            track_id=tid,
+            start_ms=int(d.get("start_ms") or 0),
+            end_ms=int(d.get("end_ms") or 0),
+            bbox=bbox,
+            occurrences=occurrences,
+            segments=segments,
+            features=dict(features),
+        )
+        valid_pairs.append((d, proxy))
+
+    if not valid_pairs:
+        return
+
+    eff_w = max(1, int(frame_w or 1280))
+    eff_h = max(1, int(frame_h or 720))
+    eff_dur = max(0, int(duration_ms or 0))
+    all_have_layer_id = all(d["features"].get("layer_id") is not None for d, _ in valid_pairs)
+
+    discover_layers(
+        [proxy for _, proxy in valid_pairs],
+        frame_w=eff_w,
+        frame_h=eff_h,
+        video_duration_ms=eff_dur,
+    )
+
+    if not all_have_layer_id:
+        for d, proxy in valid_pairs:
+            feat = d["features"]
+            for key in ("layer_id", "layer_kind", "lang", "line_lang"):
+                if key in proxy.features:
+                    feat[key] = proxy.features[key]
+        return
+
+    by_layer: dict[Any, list[tuple[dict[str, Any], TextTrack]]] = defaultdict(list)
+    for d, proxy in valid_pairs:
+        feat = d["features"]
+        feat["line_lang"] = proxy.features.get("line_lang", "und")
+        if feat.get("layer_kind") is None and "layer_kind" in proxy.features:
+            feat["layer_kind"] = proxy.features["layer_kind"]
+        elif feat.get("layer_kind") == "sparse" and proxy.features.get("layer_kind") == "lyric":
+            feat["layer_kind"] = "lyric"
+        by_layer[feat["layer_id"]].append((d, proxy))
+
+    for items in by_layer.values():
+        voted_lang = vote_layer_lang([d["features"]["line_lang"] for d, _ in items])
+        for d, _ in items:
+            d["features"]["lang"] = voted_lang

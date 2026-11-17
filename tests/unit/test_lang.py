@@ -99,3 +99,39 @@ def test_dare_romaji_and_english():
     # English phrase containing "dare"
     assert detect_line_lang("I dare you") == "en"
 
+
+def test_romaji_score_tolerates_ocr_confusables():
+    # Common Latin OCR confusables: ll->tt, vowel-l-vowel->t, trailing l->i, ck/c->o
+    assert detect_line_lang("ille kcko ni nal kaze wo kanjite") == "ja-Latn"
+    assert detect_line_lang("walashi no kolae wo kikoe nal yo") == "ja-Latn"
+    assert detect_line_lang("fulari de tckiakasu ycake no sora") == "ja-Latn"
+    assert detect_line_lang("ital hodo dckedo kokoro wa hitotsu") == "ja-Latn"
+    assert romaji_score("walashi no kokoro") >= 0.6
+
+
+def test_romaji_score_tolerates_single_english_loanword():
+    # Mixed English loanword + strong Romaji morphology must not collapse to 0.0
+    line = "Believe in starlight unmei sae uchinuite"
+    assert romaji_score(line) >= 0.6
+    assert detect_line_lang(line) == "ja-Latn"
+
+    # Predominantly English lines with one non-romaji word or contractions must still stay English
+    assert detect_line_lang("Running through the darkness tonight") == "en"
+    assert romaji_score("Running through the darkness tonight") < 0.5
+    assert detect_line_lang("You've been runnin' round") == "en"
+    assert romaji_score("You've been runnin' round") < 0.5
+
+
+def test_detect_line_lang_unaccented_spanish_and_romaji_disambiguation():
+    # Unaccented Spanish (including common OCR typo "aumque")
+    assert detect_line_lang("Aumque llore ya nada volvera a ser como antes") == "es"
+    assert detect_line_lang("el futuro contigo siempre sera mejor") == "es"
+    assert detect_line_lang("solo quiero olvidar este dolor") == "es"
+
+    # Romaji lines containing particles that overlap _SPANISH_AMBIGUOUS_SHORT
+    # (mi, te, se, ya, no, ni, de, o, a) must NOT be misclassified as Spanish
+    assert detect_line_lang("mi te ya no ni de a kimi no sora") == "ja-Latn"
+    assert detect_line_lang("kimi ni todoke yo kono omoi no mama de") == "ja-Latn"
+    assert detect_line_lang("se no ni de koete yuku mirai e") == "ja-Latn"
+
+

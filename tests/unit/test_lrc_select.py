@@ -585,6 +585,95 @@ def test_select_cues_romaji_rescue_preserves_ocr_text():
     assert cues[0].text == "nagekuluta mo kikoe nalyo"
 
 
+def test_select_cues_lyric_layer_bypasses_english_oov_gate():
+    # Even if a lyric-layer line is tagged "en" and contains non-English / OOV tokens
+    # (e.g. unaccented Spanish or stylized Romaji), high-confidence lyric-layer lines
+    # above min_text_quality_hard must NOT be dropped by the English SymSpell OOV gate.
+    tracks = [
+        {
+            "track_id": 101,
+            "start_ms": 1000,
+            "end_ms": 4000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.91,
+            "features": {
+                "dominant_text": "zutto soba ni itte kcko kara",
+                "layer_id": 1,
+                "layer_kind": "lyric",
+                "lang": "en",
+                "mean_centroid": [0.5, 0.85],
+            },
+            "segments": [
+                {
+                    "segment_id": 0,
+                    "start_ms": 1000,
+                    "end_ms": 4000,
+                    "text": "zutto soba ni itte kcko kara",
+                    "confidence": 0.91,
+                }
+            ],
+        },
+        {
+            # Low confidence (< 0.70) inside a lyric layer MUST still be gated
+            "track_id": 102,
+            "start_ms": 5000,
+            "end_ms": 8000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.58,
+            "features": {
+                "dominant_text": "xzqwk plmvrt bndfgh",
+                "layer_id": 1,
+                "layer_kind": "lyric",
+                "lang": "en",
+                "mean_centroid": [0.5, 0.85],
+            },
+            "segments": [
+                {
+                    "segment_id": 0,
+                    "start_ms": 5000,
+                    "end_ms": 8000,
+                    "text": "xzqwk plmvrt bndfgh",
+                    "confidence": 0.58,
+                }
+            ],
+        },
+        {
+            # Non-lyric / sparse layer garbled OOV text MUST still be gated
+            "track_id": 103,
+            "start_ms": 9000,
+            "end_ms": 12000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.93,
+            "features": {
+                "dominant_text": "Wntctomeyatot ine now and",
+                "layer_id": 2,
+                "layer_kind": "sparse",
+                "lang": "en",
+                "mean_centroid": [0.5, 0.20],
+            },
+            "segments": [
+                {
+                    "segment_id": 0,
+                    "start_ms": 9000,
+                    "end_ms": 12000,
+                    "text": "Wntctomeyatot ine now and",
+                    "confidence": 0.93,
+                }
+            ],
+        },
+    ]
+
+    cues, skipped = select_cues(tracks, human_labels={}, include_review=False)
+    assert [c.source_track_ids[0] for c in cues] == [101]
+    skipped_by_tid = {s["track_id"]: s["reason"] for s in skipped}
+    assert skipped_by_tid[102] in {"low_ocr_confidence", "low_text_quality"}
+    assert skipped_by_tid[103] == "low_text_quality"
+
+
+
 
 
 
