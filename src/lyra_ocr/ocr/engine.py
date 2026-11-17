@@ -101,28 +101,14 @@ def detect_script(text: str) -> str:
     return "latin"
 
 
-def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
-    """Reconstruct missing word spaces in Latin/Romaji text from vertical ink projection valleys."""
-    if crop is None or getattr(crop, "size", 0) == 0:
-        return text
-    if not text or not text.strip():
-        return text
-    if detect_script(text) != "latin":
-        return text
+def _compute_border_fg_distance(img: np.ndarray) -> np.ndarray | None:
+    """Compute per-pixel max-channel color distance from the median border background."""
+    if img.ndim not in (2, 3):
+        return None
+    h, w = img.shape[:2]
+    if h < 1 or w < 1:
+        return None
 
-    # Compute grayscale luminance L
-    if crop.ndim == 3:
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-    elif crop.ndim == 2:
-        gray = crop.copy()
-    else:
-        return text
-
-    h, w = gray.shape[:2]
-    if h < 4 or w < 8:
-        return text
-
-    # Estimate bright-on-dark vs dark-on-bright by comparing border vs center
     by = max(1, h // 8)
     bx = max(1, w // 20)
     border_mask = np.zeros((h, w), dtype=bool)
@@ -130,19 +116,78 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
     border_mask[-by:, :] = True
     border_mask[:, :bx] = True
     border_mask[:, -bx:] = True
-    center_mask = ~border_mask
 
-    border_mean = float(np.mean(gray[border_mask]))
-    center_mean = float(np.mean(gray[center_mask])) if np.any(center_mask) else float(np.mean(gray))
+    border_pixels = img[border_mask]
+    bg = np.median(border_pixels, axis=0).astype(np.float32)
+    diff = np.abs(img.astype(np.float32) - bg)
+    if img.ndim == 3:
+        return np.max(diff, axis=2)
+    return diff
 
-    if border_mean <= center_mean:
-        # Bright text on dark background
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+def to_soft_bw_stroke_crop(crop: np.ndarray | None) -> np.ndarray | None:
+    """Normalize a text crop into a color-invariant, anti-aliased B&W stroke image."""
+    if crop is None or getattr(crop, "size", 0) == 0:
+        return crop
+
+    img = crop
+    h, w = img.shape[:2]
+    if h < 48:
+        scale = 48.0 / max(1, h)
+        new_w = max(1, int(round(w * scale)))
+        new_h = max(48, int(round(h * scale)))
+        img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_CUBIC)
+
+    fg_dist = _compute_border_fg_distance(img)
+    if fg_dist is None:
+        return crop
+
+    p15 = float(np.percentile(fg_dist, 15))
+    p98 = float(np.percentile(fg_dist, 98))
+    hi = p98 if p98 > p15 else float(np.max(fg_dist))
+    if hi <= p15:
+        norm = np.zeros(fg_dist.shape, dtype=np.uint8)
     else:
-        # Dark text on bright background
-        _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        norm = np.clip((fg_dist - p15) * (255.0 / (hi - p15)), 0.0, 255.0).astype(np.uint8)
 
-    ink = (binary == 255).astype(np.float32)
+    bgr = cv2.cvtColor(norm, cv2.COLOR_GRAY2BGR)
+    return cv2.copyMakeBorder(bgr, 4, 4, 4, 4, cv2.BORDER_REPLICATE)
+
+
+def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
+    """Reconstruct missing word spaces in Latin/Romaji text from color-invariant ink valleys."""
+    if crop is None or getattr(crop, "size", 0) == 0:
+        return text
+    if not text or not text.strip():
+        return text
+    if detect_script(text) != "latin":
+        return text
+
+    stripped = text.strip()
+    if " " in stripped:
+        if max(len(tok) for tok in stripped.split()) <= 14:
+            return text
+    elif len(stripped) < 9:
+        return text
+
+    if crop.ndim not in (2, 3):
+        return text
+    h, w = crop.shape[:2]
+    if h < 4 or w < 8:
+        return text
+
+    fg_dist = _compute_border_fg_distance(crop)
+    if fg_dist is None:
+        return text
+
+    fg_max = float(np.max(fg_dist))
+    if fg_max < 18.0:
+        return text
+
+    fg_ref = max(float(np.percentile(fg_dist, 98)), 0.5 * fg_max)
+    ink_thresh = max(18.0, 0.25 * fg_ref)
+    ink = (fg_dist >= ink_thresh).astype(np.float32)
+
     y_coords, x_coords = np.where(ink > 0)
     if len(x_coords) == 0:
         return text
@@ -163,7 +208,7 @@ def reconstruct_visual_word_spaces(crop: np.ndarray, text: str) -> str:
     kernel = np.ones(3, dtype=np.float32) / 3.0
     d_smooth = np.convolve(d_x, kernel, mode="same")
 
-    min_gap = max(4, int(0.26 * h_ink))
+    min_gap = max(6, int(0.45 * h_ink))
     valleys: list[tuple[float, float]] = []
     in_valley = False
     start_x = 0
@@ -425,6 +470,23 @@ class OCREngine:
                     except Exception:
                         pass
 
+            if conf < 0.88 and crop is not None and getattr(crop, "size", 0) > 0:
+                try:
+                    bw_crop = to_soft_bw_stroke_crop(crop)
+                    bw_raw, bw_conf, bw_model = self.recognize_crop(
+                        bw_crop,
+                        model_id=used_model or model_id,
+                    )
+                    if bw_raw and bw_conf > conf:
+                        text_raw = bw_raw
+                        text_norm = normalize_text(bw_raw, form="NFC")
+                        conf = bw_conf
+                        used_model = bw_model
+                        script = detect_script(text_norm)
+                except Exception:
+                    pass
+
+            if script == "latin":
                 spaced = reconstruct_visual_word_spaces(crop, text_norm)
                 if spaced != text_norm:
                     text_norm = spaced
