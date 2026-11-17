@@ -366,7 +366,7 @@ def run_lrc(args: argparse.Namespace) -> int:
         artifacts_dir = args.artifacts
 
         if not artifacts_dir and not video_path:
-            logger.error("Either a video positional argument or --artifacts must be provided.")
+            print("Error: Either a video positional argument or --artifacts must be provided.", file=sys.stderr)
             return 2
 
         artist_arg = getattr(args, "artist", None) or None

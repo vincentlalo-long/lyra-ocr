@@ -154,3 +154,10 @@ def test_cli_lrc_enhanced_and_artist_flags(tmp_path: Path, monkeypatch):
     assert call_kwargs["artist"] == "Queen"
     assert call_kwargs["enhanced"] is True
 
+
+def test_cli_lrc_requires_video_or_artifacts(capsys: pytest.CaptureFixture[str]):
+    exit_code = main(["lrc"])
+    assert exit_code == 2
+    err = capsys.readouterr().err
+    assert "Either a video positional argument or --artifacts must be provided." in err
+
