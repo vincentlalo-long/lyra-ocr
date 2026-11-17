@@ -51,6 +51,11 @@ CHAT_CONTENT_RE = re.compile(
     re.IGNORECASE,
 )
 
+_INTRO_CREDIT_PREFIX_RE = re.compile(
+    r"^(?:(?:music|lyrics?|vocal(?:s)?|illust(?:ration)?|movie|video|animation|compilation|arranged?|arrangement|mix(?:ed)?|master(?:ing|ed)?|encoded|subtitles?|translated|sub(?:bed)?|edit(?:ed)?)\s*[:\-]|by\s+[A-Za-z0-9_\-]+)",
+    re.IGNORECASE,
+)
+
 
 SUPPLEMENTARY_KEYWORDS = [
     "subscribe",
@@ -94,6 +99,7 @@ def classify_track(
     frame_height: int = 720,
     sample_interval_ms: int = 0,
     vocal_profile: Optional[Any] = None,
+    all_tracks: Optional[list[TextTrack]] = None,
 ) -> ClassificationResult:
     """Classify a single TextTrack into lyric vs non-lyric using rule heuristics."""
     meta = metadata or {}
@@ -305,6 +311,18 @@ def classify_track(
             track.classification = res
             return res
 
+    # Intro Production Credit Prefix Filter
+    if start_time_ratio <= 0.15 and _INTRO_CREDIT_PREFIX_RE.search(dominant_text):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.95,
+            reason="Intro production credit prefix pattern",
+            decision="reject",
+            qa_flags=["intro_credit_pattern"],
+        )
+        track.classification = res
+        return res
+
     # Rule 4: Intro Title Card / Song Title
     if v_title:
         sim_title = string_similarity(dom_lower, v_title)
@@ -325,17 +343,48 @@ def classify_track(
             or token_title_match
             or (v_title in dom_lower and title_len_ratio >= 0.6)
         )
-        if is_title_match and start_time_ratio <= 0.25:
-            res = ClassificationResult(
-                label="non_lyric",
-                confidence=0.98,
-                reason=f"Title text matching video title metadata '{v_title}'",
-                decision="reject",
-                qa_flags=["metadata_title_match"],
-            )
-            track.classification = res
-            return res
         if is_title_match:
+            layer_id = feat.get("layer_id")
+            if all_tracks is not None and layer_id is not None:
+                n_prior_lyric_layer_tracks = sum(
+                    1
+                    for t in all_tracks
+                    if t is not track
+                    and (t.features or {}).get("layer_id") == layer_id
+                    and t.end_ms <= track.start_ms + 500
+                    and effective_duration_ms(t.start_ms, t.end_ms, sample_interval_ms) >= 800
+                )
+                if (
+                    layer_kind == "lyric"
+                    and n_prior_lyric_layer_tracks >= 2
+                    and 500 <= duration_ms <= 16000
+                ):
+                    res = ClassificationResult(
+                        label="lyric",
+                        confidence=0.88,
+                        reason=(
+                            f"Chorus/hook matching video title metadata '{v_title}' "
+                            f"inside active lyric layer (id={layer_id}, prior={n_prior_lyric_layer_tracks})"
+                        ),
+                        decision="accept",
+                        qa_flags=["title_hook_in_lyric_layer", "potential_chorus"],
+                    )
+                    track.classification = res
+                    return res
+                reject_intro_title = start_time_ratio <= 0.12 or n_prior_lyric_layer_tracks == 0
+            else:
+                reject_intro_title = start_time_ratio <= 0.25
+
+            if reject_intro_title:
+                res = ClassificationResult(
+                    label="non_lyric",
+                    confidence=0.98,
+                    reason=f"Title text matching video title metadata '{v_title}'",
+                    decision="reject",
+                    qa_flags=["metadata_title_match"],
+                )
+                track.classification = res
+                return res
             # Matching the title mid-video is often a repeated hook/chorus, not an
             # intro card: if in reading zone and transient, classify as lyric for review.
             if in_reading_zone and 500 <= duration_ms <= 16000 and not only_intro_outro:
@@ -584,6 +633,7 @@ def classify_all_tracks(
             frame_height=frame_height,
             sample_interval_ms=sample_interval_ms,
             vocal_profile=vocal_profile,
+            all_tracks=tracks,
         )
         results.append(res)
     return results

@@ -467,3 +467,204 @@ def test_classify_one_frame_lyric_with_sample_interval():
     assert result.decision == "accept"
 
 
+def test_classify_chorus_title_hook_in_active_lyric_layer_is_accepted():
+    from lyra_ocr.classify import classify_track
+
+    v_dur = 240000
+    meta = {"title": "Echoes in the Rain", "channel": "Studio Band"}
+    p1 = create_mock_track(
+        track_id=70,
+        start_ms=15000,
+        end_ms=18500,
+        texts=["Opening line of the verse"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=v_dur,
+    )
+    p2 = create_mock_track(
+        track_id=71,
+        start_ms=20000,
+        end_ms=23500,
+        texts=["Second line of the verse"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=v_dur,
+    )
+    # 59s / 240s = 0.2458 <= 0.25, previously deleted by the flat 25% intro cutoff
+    hook = create_mock_track(
+        track_id=72,
+        start_ms=59000,
+        end_ms=62500,
+        texts=["Echoes in the Rain"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=v_dur,
+    )
+    for t in (p1, p2, hook):
+        t.features["layer_id"] = 1
+        t.features["layer_kind"] = "lyric"
+
+    result = classify_track(
+        hook,
+        metadata=meta,
+        video_duration_ms=v_dur,
+        all_tracks=[p1, p2, hook],
+    )
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+    assert result.confidence == pytest.approx(0.88)
+    assert "title_hook_in_lyric_layer" in result.qa_flags
+    assert "potential_chorus" in result.qa_flags
+
+
+def test_classify_title_card_without_prior_lyric_tracks_is_rejected():
+    from lyra_ocr.classify import classify_track
+
+    v_dur = 240000
+    meta = {"title": "Echoes in the Rain", "channel": "Studio Band"}
+    # Short (<800ms) prior flashes must not qualify as established lyric lines
+    flash1 = create_mock_track(
+        track_id=80,
+        start_ms=5000,
+        end_ms=5500,
+        texts=["Flash text one"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=v_dur,
+    )
+    flash2 = create_mock_track(
+        track_id=81,
+        start_ms=10000,
+        end_ms=10500,
+        texts=["Flash text two"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=v_dur,
+    )
+    # Delayed title card at 15% with 0 valid prior >=800ms lyric tracks
+    title_card = create_mock_track(
+        track_id=82,
+        start_ms=36000,
+        end_ms=40000,
+        texts=["Echoes in the Rain"],
+        bbox=[300, 600, 980, 650],
+        video_duration_ms=v_dur,
+    )
+    for t in (flash1, flash2, title_card):
+        t.features["layer_id"] = 1
+        t.features["layer_kind"] = "lyric"
+
+    result = classify_track(
+        title_card,
+        metadata=meta,
+        video_duration_ms=v_dur,
+        all_tracks=[flash1, flash2, title_card],
+    )
+    assert result.label == "non_lyric"
+    assert result.decision == "reject"
+    assert "metadata_title_match" in result.qa_flags
+
+
+def test_classify_all_tracks_rescues_chorus_title_hook_and_rejects_intro_card():
+    from lyra_ocr.classify import classify_all_tracks
+
+    v_dur = 240000
+    meta = {"title": "Echoes in the Rain", "channel": "Studio Band"}
+    intro_card = create_mock_track(
+        track_id=90,
+        start_ms=1000,
+        end_ms=5000,
+        texts=["Echoes in the Rain"],
+        bbox=[440, 200, 840, 260],
+        video_duration_ms=v_dur,
+    )
+    verse_lines = [
+        (91, 15000, 18500, "Walking down the empty street"),
+        (92, 20000, 23500, "Neon lights beneath my feet"),
+        (93, 25000, 28500, "Waiting for the storm to clear"),
+        (94, 30000, 33500, "Every whisper drawing near"),
+    ]
+    lyric_tracks = [
+        create_mock_track(
+            track_id=tid,
+            start_ms=s,
+            end_ms=e,
+            texts=[txt],
+            bbox=[320, 580, 960, 620],
+            video_duration_ms=v_dur,
+        )
+        for tid, s, e, txt in verse_lines
+    ]
+    chorus_hook = create_mock_track(
+        track_id=95,
+        start_ms=58000,
+        end_ms=61500,
+        texts=["Echoes in the Rain"],
+        bbox=[320, 580, 960, 620],
+        video_duration_ms=v_dur,
+    )
+    all_tracks = [intro_card, *lyric_tracks, chorus_hook]
+    results = classify_all_tracks(all_tracks, metadata=meta, video_duration_ms=v_dur)
+
+    assert results[0].label == "non_lyric"
+    assert results[0].decision == "reject"
+    assert "metadata_title_match" in results[0].qa_flags
+
+    assert results[-1].label == "lyric"
+    assert results[-1].decision == "accept"
+    assert "title_hook_in_lyric_layer" in results[-1].qa_flags
+    assert "potential_chorus" in results[-1].qa_flags
+
+
+@pytest.mark.parametrize(
+    "credit_text",
+    [
+        "by Producer-X",
+        "Compilation: Track Anthology",
+        "Animation: Studio Alpha",
+        "Music: Composer Name",
+        "Lyrics: Writer Name",
+        "Vocal: Singer Name",
+        "Illust - Artist Name",
+        "Arranged: Arranger",
+        "Mix: Audio Engineer",
+        "Mastered: Mastering Lab",
+        "Subtitles: Fan Sub",
+        "Edit: Video Editor",
+    ],
+)
+def test_classify_intro_production_credit_prefixes_rejected(credit_text: str):
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=100,
+        start_ms=2000,
+        end_ms=6000,
+        texts=[credit_text],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=200000,
+    )
+    # Even if clustered into a lyric layer, intro credit prefix must reject it
+    track.features["layer_id"] = 1
+    track.features["layer_kind"] = "lyric"
+
+    result = classify_track(track, video_duration_ms=200000)
+    assert result.label == "non_lyric"
+    assert result.decision == "reject"
+    assert result.confidence == pytest.approx(0.95)
+    assert "intro_credit_pattern" in result.qa_flags
+
+
+def test_classify_credit_like_prefix_outside_intro_window_not_rejected():
+    from lyra_ocr.classify import classify_track
+
+    track = create_mock_track(
+        track_id=101,
+        start_ms=50000,
+        end_ms=53500,
+        texts=["by the riverside we wait"],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=100000,
+    )
+    result = classify_track(track, video_duration_ms=100000)
+    assert result.label == "lyric"
+    assert result.decision == "accept"
+    assert "intro_credit_pattern" not in result.qa_flags
+
+
+
