@@ -124,7 +124,7 @@ def test_grouping_mixed_int_and_str_track_ids():
         end_ms=2000,
         text="OTHER TEXT",
         source_track_ids=[],
-        y_center=0.5,
+        y_center=0.8,
     )
     # Should not raise TypeError: '<' not supported between instances of 'int' and 'str'
     result = dedupe_and_group([cue1, cue2, cue3])
@@ -622,5 +622,270 @@ def test_dedupe_and_group_merges_dedupes_and_sorts_cue_words():
     assert len(res[0].words) == 5
     assert [w["word"] for w in res[0].words] == ["I", "will", "always", "love", "you"]
     assert [w["start_ms"] for w in res[0].words] == [10000, 10500, 11000, 12000, 13500]
+
+
+def test_consolidate_language_layers_separates_parallel_bilingual_misvoted_layers():
+    # Case 1: Stale lang='en' on both Romaji and Spanish layers -> fresh detect_line_lang separates them
+    ro_lines = [
+        "Yoru ni magirete kaze wo kanjite",
+        "Kimi no koe ga kikoeru kara",
+        "Hikari no saki he hashiridasu yo",
+        "Sono te wo tsuyoku nigirishimete",
+        "Kawaranai yume wo mitsumete iru",
+        "Ashita no sora he habataku tame ni",
+        "Namida wo fuite waratte misete",
+        "Bokura no mirai ga kagayaku made",
+    ]
+    es_lines = [
+        "Aunque llore ya nada volvera como antes",
+        "El futuro contigo siempre sera mejor",
+        "Solo quiero olvidar este gran dolor",
+        "Nunca voy a olvidar tu dulce voz",
+        "Aunque pase el tiempo seguire aqui",
+        "Buscando la luz en este mundo gris",
+        "Siempre estaras dentro de mi corazon",
+        "Hasta que podamos volver a vernos hoy",
+    ]
+    cues_case1 = [
+        LyricCue(
+            start_ms=i * 3000 + 1000,
+            end_ms=i * 3000 + 3500,
+            text=txt,
+            layer_id=1,
+            lang="en",
+            y_center=0.85,
+        )
+        for i, txt in enumerate(ro_lines)
+    ] + [
+        LyricCue(
+            start_ms=i * 3000 + 1000,
+            end_ms=i * 3000 + 3500,
+            text=txt,
+            layer_id=2,
+            lang="en",
+            y_center=0.15,
+        )
+        for i, txt in enumerate(es_lines)
+    ]
+    res1 = consolidate_language_layers(cues_case1)
+    assert {c.layer_id for c in res1} == {1, 2}
+    assert {c.lang for c in res1 if c.layer_id == 1} == {"ja-Latn"}
+    assert {c.lang for c in res1 if c.layer_id == 2} == {"es"}
+
+    # Case 2: Borderline Romaji layer (both layers vote 'en' under detect_line_lang) vs English layer
+    borderline_ro = [
+        f"kaze no naka de we rise {i}" for i in range(8)
+    ]
+    en_lines = [
+        f"Walking through the dark shadows tonight {i}" for i in range(8)
+    ]
+    cues_case2 = [
+        LyricCue(
+            start_ms=i * 3000 + 1000,
+            end_ms=i * 3000 + 3500,
+            text=txt,
+            layer_id=1,
+            lang="en",
+            y_center=0.85,
+        )
+        for i, txt in enumerate(borderline_ro)
+    ] + [
+        LyricCue(
+            start_ms=i * 3000 + 1000,
+            end_ms=i * 3000 + 3500,
+            text=txt,
+            layer_id=2,
+            lang="en",
+            y_center=0.15,
+        )
+        for i, txt in enumerate(en_lines)
+    ]
+    res2 = consolidate_language_layers(cues_case2)
+    assert {c.layer_id for c in res2} == {1, 2}
+    assert {c.lang for c in res2 if c.layer_id == 1} == {"ja-Latn"}
+    assert {c.lang for c in res2 if c.layer_id == 2} == {"en"}
+
+    # Case 3: Borderline unaccented Spanish layer (both vote 'en' under detect_line_lang) vs English layer
+    borderline_es = [
+        f"el mundo fades away forever {i}" for i in range(8)
+    ]
+    cues_case3 = [
+        LyricCue(
+            start_ms=i * 3000 + 1000,
+            end_ms=i * 3000 + 3500,
+            text=txt,
+            layer_id=1,
+            lang="en",
+            y_center=0.15,
+        )
+        for i, txt in enumerate(borderline_es)
+    ] + [
+        LyricCue(
+            start_ms=i * 3000 + 1000,
+            end_ms=i * 3000 + 3500,
+            text=txt,
+            layer_id=2,
+            lang="en",
+            y_center=0.85,
+        )
+        for i, txt in enumerate(en_lines)
+    ]
+    res3 = consolidate_language_layers(cues_case3)
+    assert {c.layer_id for c in res3} == {1, 2}
+    assert {c.lang for c in res3 if c.layer_id == 1} == {"es"}
+    assert {c.lang for c in res3 if c.layer_id == 2} == {"en"}
+
+
+def test_resolve_simultaneous_multiline_cues_collapses_same_y_flicker():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    cues = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=1600,
+            text="Dai",
+            y_center=0.85,
+            confidence=0.99,
+            layer_id=1,
+            lang="ja-Latn",
+            source_track_ids=[1],
+            source_segment_ids=[0],
+        ),
+        LyricCue(
+            start_ms=1000,
+            end_ms=3200,
+            text="Daitan futeki",
+            y_center=0.86,
+            confidence=0.88,
+            layer_id=1,
+            lang="ja-Latn",
+            source_track_ids=[2],
+            source_segment_ids=[1],
+            words=[{"word": "Daitan", "start_ms": 1000, "end_ms": 2000}],
+        ),
+        LyricCue(
+            start_ms=1100,
+            end_ms=4000,
+            text="Daitan futeki ni haikara",
+            y_center=0.855,
+            confidence=0.95,
+            layer_id=1,
+            lang="ja-Latn",
+            source_track_ids=[3],
+            source_segment_ids=[2],
+            words=[{"word": "haikara", "start_ms": 2500, "end_ms": 4000}],
+        ),
+    ]
+    resolved = resolve_simultaneous_multiline_cues(cues)
+    assert len(resolved) == 1
+    assert resolved[0].text == "Daitan futeki ni haikara"
+    assert resolved[0].start_ms == 1000
+    assert resolved[0].end_ms == 4000
+    assert resolved[0].source_track_ids == [1, 2, 3]
+    assert resolved[0].source_segment_ids == [0, 1, 2]
+    assert "multiline_staggered" not in resolved[0].qa_flags
+    assert [w["word"] for w in resolved[0].words] == ["Daitan", "haikara"]
+
+
+def test_dedupe_and_group_merges_same_y_fade_transition():
+    # Fade-in short partial read followed within 800ms by full stable line at same y_center
+    fade_in = LyricCue(
+        start_ms=1000,
+        end_ms=1800,  # 800ms <= 1400ms
+        text="Senbonzakura yoru",
+        confidence=0.96,
+        y_center=0.85,
+        bbox=[100, 600, 500, 640],
+        layer_id=1,
+        source_track_ids=[1],
+    )
+    stable = LyricCue(
+        start_ms=2200,  # gap_ms = 400 <= 800
+        end_ms=6000,
+        text="Senbonzakura yoru ni magire",
+        confidence=0.90,
+        y_center=0.86,  # |Δy| = 0.01 < 0.032
+        bbox=[100, 600, 700, 640],
+        layer_id=1,
+        source_track_ids=[2],
+    )
+    res = dedupe_and_group([fade_in, stable])
+    assert len(res) == 1
+    assert res[0].text == "Senbonzakura yoru ni magire"
+    assert res[0].start_ms == 1000
+    assert res[0].end_ms == 6000
+    assert res[0].source_track_ids == [1, 2]
+
+    # Fade-out short read after stable line
+    stable2 = LyricCue(
+        start_ms=10000,
+        end_ms=13800,
+        text="Kimi no koe mo todokanai yo",
+        confidence=0.92,
+        y_center=0.85,
+        layer_id=1,
+        source_track_ids=[3],
+    )
+    fade_out = LyricCue(
+        start_ms=14300,  # gap_ms = 500 <= 800
+        end_ms=15200,  # 900ms <= 1400ms
+        text="Kimi no koe mo todok",
+        confidence=0.95,
+        y_center=0.85,
+        layer_id=1,
+        source_track_ids=[4],
+    )
+    res2 = dedupe_and_group([stable2, fade_out])
+    assert len(res2) == 1
+    assert res2[0].text == "Kimi no koe mo todokanai yo"
+    assert res2[0].start_ms == 10000
+    assert res2[0].end_ms == 15200
+
+
+def test_share_solitary_cross_layer_cues_strict_global_check():
+    from lyra_ocr.lyric.grouping import share_solitary_cross_layer_cues
+
+    cues: list[LyricCue] = []
+    # 3 major layers: ja (1), es (2), en (3)
+    timestamps = [
+        (5000, 8000),
+        (10000, 13000),
+        (15000, 18000),
+        (25000, 29000),
+        (35000, 38000),
+        (40000, 43000),
+        (45000, 48000),
+        (50000, 53000),
+    ]
+    for idx, (s, e) in enumerate(timestamps):
+        cues.append(LyricCue(start_ms=s, end_ms=e, text=f"日本語ライン{idx}", layer_id=1, lang="ja"))
+        cues.append(LyricCue(start_ms=s, end_ms=e, text=f"Linea en espanol {idx}", layer_id=2, lang="es"))
+        cues.append(LyricCue(start_ms=s, end_ms=e, text=f"English line {idx}", layer_id=3, lang="en"))
+
+    # 1. Offset English cue in layer 3 that overlaps layer 1 (ja) within +-800ms (even though es has a gap 19000..24000)
+    cues.append(LyricCue(start_ms=20000, end_ms=22500, text="Offset translation line", layer_id=3, lang="en"))
+    cues.append(LyricCue(start_ms=21500, end_ms=24500, text="日本語の重複ライン", layer_id=1, lang="ja"))
+
+    # 2. Non-English (Spanish) solitary cue in layer 2 during global silence -> must NOT be shared
+    cues.append(LyricCue(start_ms=55000, end_ms=57500, text="Aunque llore siempre", layer_id=2, lang="es"))
+
+    # 3. Genuine 1.6s English hook during global silence [29000..35000] (no layer overlaps [31000-800, 32600+800] = [30200, 33400])
+    cues.append(LyricCue(start_ms=31000, end_ms=32600, text="Hacking to the Gate", layer_id=3, lang="en"))
+
+    # Extend spans past 58000 so 55000..57500 is inside span_min..span_max
+    cues.append(LyricCue(start_ms=59000, end_ms=61000, text="日本語ラスト", layer_id=1, lang="ja"))
+    cues.append(LyricCue(start_ms=59000, end_ms=61000, text="Ultima linea", layer_id=2, lang="es"))
+    cues.append(LyricCue(start_ms=59000, end_ms=61000, text="Last English line", layer_id=3, lang="en"))
+
+    res = share_solitary_cross_layer_cues(cues)
+
+    # Offset English cue was NOT copied to es
+    assert not any(c.layer_id == 2 and c.text == "Offset translation line" for c in res)
+    # Spanish cue was NOT copied to ja or en
+    assert not any(c.layer_id in (1, 3) and c.text == "Aunque llore siempre" for c in res)
+    # 1.6s English hook WAS inherited into both ja (1) and es (2)
+    assert any(c.layer_id == 1 and c.text == "Hacking to the Gate" and "cross_layer_inherited" in c.qa_flags for c in res)
+    assert any(c.layer_id == 2 and c.text == "Hacking to the Gate" and "cross_layer_inherited" in c.qa_flags for c in res)
+
 
 

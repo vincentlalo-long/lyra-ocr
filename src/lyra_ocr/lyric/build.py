@@ -50,7 +50,7 @@ from lyra_ocr.lyric.select import load_artifacts, select_cues
 
 logger = logging.getLogger(__name__)
 CAPTION_CACHE_TTL_SECONDS = 3600.0
-BUILD_CACHE_VERSION = 6
+BUILD_CACHE_VERSION = 7
 
 
 def _reference_signature(
@@ -425,6 +425,7 @@ def build_lrc_from_artifacts(
                 n_reference_gap_fills += int(gap_res.n_filled)
                 reference_warnings.extend(overlap_warnings)
                 reference_warnings.extend(gap_res.warnings)
+                layer_cues = dedupe_and_group(layer_cues, asr_transcript=asr_transcript)
 
             processed_cues.extend(layer_cues)
 

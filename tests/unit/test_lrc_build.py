@@ -1122,3 +1122,70 @@ def test_build_lrc_refreshes_stale_cached_layer_lang(tmp_path: Path):
     assert raw_tracks[4]["features"]["layer_kind"] == "lyric"
 
 
+def test_build_lrc_dedupes_per_layer_after_reference_alignment(tmp_path: Path):
+    from unittest.mock import patch
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    artifacts_dir = tmp_path / "post_ref_dedupe"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "vid_post_ref",
+        "probe": {"duration": 20.0, "width": 1280, "height": 720},
+    }
+    # Two adjacent tracks at the same Y; OCR texts differ enough that pre-reference dedupe keeps both,
+    # then reference alignment repairs both to the identical text and per-layer dedupe collapses them
+    # BEFORE consolidate_language_layers runs.
+    tracks = {
+        "total_tracks": 2,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 2600,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.90,
+                "features": {"dominant_text": "I feel the night", "mean_centroid": [0.5, 0.85]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 1000, "end_ms": 2600, "text": "I feel the night", "confidence": 0.90}
+                ],
+            },
+            {
+                "track_id": 2,
+                "start_ms": 2700,
+                "end_ms": 4300,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.92,
+                "features": {"dominant_text": "I feel the dark night", "mean_centroid": [0.5, 0.85]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 2700, "end_ms": 4300, "text": "I feel the dark night", "confidence": 0.92}
+                ],
+            },
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    observed_pre_consolidate_counts: list[int] = []
+    from lyra_ocr.lyric import grouping as real_grouping
+
+    def spy_consolidate(cues_in, **kwargs):
+        observed_pre_consolidate_counts.append(len(cues_in))
+        return real_grouping.consolidate_language_layers(cues_in, **kwargs)
+
+    out_lrc = tmp_path / "post_ref.lrc"
+    with patch("lyra_ocr.lyric.build.consolidate_language_layers", side_effect=spy_consolidate):
+        res = build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            force=True,
+            reference_text="[00:01.00]I feel the night\n[00:02.70]I feel the night\n",
+            reference_config=ReferenceConfig(replace_similarity=0.85, enable_gap_fill=False),
+        )
+
+    assert res["n_cues"] == 1
+    assert observed_pre_consolidate_counts == [1]
+
+
+

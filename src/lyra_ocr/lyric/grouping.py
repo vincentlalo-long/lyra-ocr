@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections import Counter, defaultdict
+from dataclasses import replace
 from typing import Any
 
+from lyra_ocr.lang import (
+    _SPANISH_ACCENTED_VOWEL_RE,
+    _SPANISH_CHARS_RE,
+    _SPANISH_UNAMBIGUOUS_WORDS,
+    _VIETNAMESE_UNIQUE_RE,
+    detect_line_lang,
+    romaji_score,
+    vote_layer_lang,
+)
 from lyra_ocr.lyric.models import LyricCue
 from lyra_ocr.track import string_similarity
 
@@ -182,6 +193,60 @@ def merge_duplicate_layers(
     return [c for c in cues if id(c) not in dropped]
 
 
+def _layer_spanish_rate(lcues: list[LyricCue]) -> float:
+    """Estimate Spanish lexical/orthographic signal rate across a layer's cues."""
+    if not lcues:
+        return 0.0
+    es_hits = 0
+    total_words = 0
+    accent_hits = 0
+    for c in lcues:
+        norm = unicodedata.normalize("NFC", (c.text or "").strip())
+        words = re.findall(r"[\w]+", norm.lower())
+        total_words += len(words)
+        es_hits += sum(1 for w in words if w in _SPANISH_UNAMBIGUOUS_WORDS)
+        if _SPANISH_CHARS_RE.search(norm) or (
+            _SPANISH_ACCENTED_VOWEL_RE.search(norm) and not _VIETNAMESE_UNIQUE_RE.search(norm)
+        ):
+            accent_hits += 1
+    word_rate = es_hits / max(1, total_words)
+    accent_rate = accent_hits / len(lcues)
+    return max(word_rate, accent_rate)
+
+
+def _detect_parallel_bilingual_langs(
+    dom_cues: list[LyricCue],
+    sec_cues: list[LyricCue],
+    dom_y: float,
+    sec_y: float,
+    overlap_ratio: float,
+) -> tuple[str, str] | None:
+    """Return distinct (dom_lang, sec_lang) when two overlapping bands are bilingual streams."""
+    if overlap_ratio < 0.45 or len(dom_cues) < 8 or len(sec_cues) < 8:
+        return None
+    min_len = min(len(dom_cues), len(sec_cues))
+    max_len = max(len(dom_cues), len(sec_cues))
+    if min_len / max_len < 0.45 or abs(sec_y - dom_y) < 0.035:
+        return None
+
+    dom_ro = sum(romaji_score(c.text) for c in dom_cues) / len(dom_cues)
+    sec_ro = sum(romaji_score(c.text) for c in sec_cues) / len(sec_cues)
+    dom_es = _layer_spanish_rate(dom_cues)
+    sec_es = _layer_spanish_rate(sec_cues)
+
+    if dom_ro >= 0.30 and dom_ro >= 2.0 * sec_ro:
+        other_lang = "es" if (sec_es >= 0.10 and sec_es >= 2.0 * dom_es) else "en"
+        return ("ja-Latn", other_lang)
+    if sec_ro >= 0.30 and sec_ro >= 2.0 * dom_ro:
+        other_lang = "es" if (dom_es >= 0.10 and dom_es >= 2.0 * sec_es) else "en"
+        return (other_lang, "ja-Latn")
+    if dom_es >= 0.10 and dom_es >= 2.0 * sec_es:
+        return ("es", "en")
+    if sec_es >= 0.10 and sec_es >= 2.0 * dom_es:
+        return ("en", "es")
+    return None
+
+
 def consolidate_language_layers(
     cues: list[LyricCue],
     *,
@@ -210,10 +275,30 @@ def consolidate_language_layers(
     if len(by_layer) < 2:
         return resolve_simultaneous_multiline_cues(cues, asr_transcript=asr_transcript)
 
-    # Group layers by voted language
+    # Re-vote each layer's language from fresh detect_line_lang(c.text) across its cues
     layers_by_lang: dict[str, list[Any]] = defaultdict(list)
     for lid, lcues in by_layer.items():
-        lang = _layer_lang(lcues)
+        stored_lang = _layer_lang(lcues)
+        fresh_lang = vote_layer_lang([detect_line_lang(c.text) for c in lcues])
+        if fresh_lang == "und":
+            lang = stored_lang
+        elif fresh_lang == "zh" and stored_lang == "ja":
+            lang = "ja"
+        elif fresh_lang == "en" and stored_lang not in ("und", "en"):
+            # 'en' is the generic Latin fallback in detect_line_lang; do not downgrade
+            # an already-classified layer (e.g. 'ja-Latn' after user edit) to 'en'.
+            lang = stored_lang
+        else:
+            lang = fresh_lang
+        if lang != "und" and lang != stored_lang:
+            for c in lcues:
+                if (
+                    lang in ("ja", "zh", "ko", "vi")
+                    and c.lang == "en"
+                    and detect_line_lang(c.text) == "en"
+                ):
+                    continue
+                c.lang = lang
         layers_by_lang[lang].append(lid)
 
     dropped_cues: set[int] = set()
@@ -240,6 +325,20 @@ def consolidate_language_layers(
                         n_overlapping += 1
                         break
             overlap_ratio = n_overlapping / len(sec_cues)
+            sec_y = sum(c.y_center for c in sec_cues) / len(sec_cues)
+            dom_y = sum(c.y_center for c in dom_cues) / len(dom_cues)
+
+            bilingual_langs = _detect_parallel_bilingual_langs(
+                dom_cues, sec_cues, dom_y, sec_y, overlap_ratio
+            )
+            if bilingual_langs is not None:
+                dom_lang, sec_lang = bilingual_langs
+                for dc in dom_cues:
+                    dc.lang = dom_lang
+                for sc in sec_cues:
+                    sc.lang = sec_lang
+                continue
+
             dom_texts = [_normalize_text(c.text) for c in dom_cues]
 
             if overlap_ratio <= overlap_threshold:
@@ -249,8 +348,6 @@ def consolidate_language_layers(
                     sc.lang = lang
                 dom_cues.extend(sec_cues)
             else:
-                sec_y = sum(c.y_center for c in sec_cues) / len(sec_cues)
-                dom_y = sum(c.y_center for c in dom_cues) / len(dom_cues)
                 sec_x = sum(c.x_center for c in sec_cues) / len(sec_cues)
                 is_companion_band = (
                     0.02 <= abs(sec_y - dom_y) <= 0.18 and 0.28 <= sec_x <= 0.72
@@ -318,7 +415,14 @@ def resolve_simultaneous_multiline_cues(
                 ov = min(cue.end_ms, g_end) - max(cue.start_ms, g_start)
                 union = g_dur + c_dur - ov if ov > 0 else 0
                 iou = ov / union if union > 0 else 0.0
-                if abs(cue.start_ms - g_start) <= 600 and iou >= 0.60:
+                same_y_contained = any(
+                    abs(cue.y_center - gc.y_center) < 0.032
+                    and (min(cue.end_ms, gc.end_ms) - max(cue.start_ms, gc.start_ms))
+                    / max(1, min(max(1, cue.end_ms - cue.start_ms), max(1, gc.end_ms - gc.start_ms)))
+                    >= 0.70
+                    for gc in grp
+                )
+                if (abs(cue.start_ms - g_start) <= 600 and iou >= 0.60) or same_y_contained:
                     grp.append(cue)
                     placed = True
                     break
@@ -331,6 +435,66 @@ def resolve_simultaneous_multiline_cues(
                 continue
 
             grp.sort(key=lambda c: (c.y_center, c.start_ms))
+
+            # Collapse same-Y overlapping reads (|Δy| < 0.032) into one stable cue
+            y_bands: list[list[LyricCue]] = []
+            for cue in grp:
+                if y_bands and abs(cue.y_center - y_bands[-1][0].y_center) < 0.032:
+                    y_bands[-1].append(cue)
+                else:
+                    y_bands.append([cue])
+
+            collapsed_grp: list[LyricCue] = []
+            for band in y_bands:
+                if len(band) == 1:
+                    collapsed_grp.append(band[0])
+                    continue
+                best = max(
+                    band,
+                    key=lambda c: (
+                        len(c.text.strip()) >= 4,
+                        c.confidence * len(c.text.strip()),
+                        c.confidence,
+                        len(c.text.strip()),
+                    ),
+                )
+                tids = sorted(
+                    {tid for c in band for tid in c.source_track_ids},
+                    key=_track_sort_key,
+                )
+                sids = sorted(
+                    {sid for c in band for sid in c.source_segment_ids},
+                    key=_track_sort_key,
+                )
+                merged_words: list[dict[str, Any]] = []
+                for bc in band:
+                    if bc.words:
+                        merged_words = _merge_cue_words(merged_words, bc.words)
+                lang = best.lang
+                if not lang or lang == "und":
+                    lang = next((c.lang for c in band if c.lang and c.lang != "und"), "und")
+                layer_id = best.layer_id
+                if layer_id is None:
+                    layer_id = next((c.layer_id for c in band if c.layer_id is not None), None)
+                collapsed_grp.append(
+                    replace(
+                        best,
+                        start_ms=min(c.start_ms for c in band),
+                        end_ms=max(c.end_ms for c in band),
+                        source_track_ids=tids,
+                        source_segment_ids=sids,
+                        qa_flags=list(best.qa_flags),
+                        words=merged_words,
+                        lang=lang,
+                        layer_id=layer_id,
+                    )
+                )
+
+            grp = collapsed_grp
+            if len(grp) < 2:
+                resolved.extend(grp)
+                continue
+
             t_start = min(c.start_ms for c in grp)
             t_end = max(c.end_ms for c in grp)
             delta_t = max(0, t_end - t_start)
@@ -472,14 +636,26 @@ def dedupe_and_group(
                     ):
                         text_match = True
 
-            if not text_match:
-                continue
-
             start_delta = abs(existing.start_ms - cue.start_ms)
             gap_ms = cue.start_ms - existing.end_ms
+            min_dur = min(
+                max(0, existing.end_ms - existing.start_ms),
+                max(0, cue.end_ms - cue.start_ms),
+            )
+            fade_transition_match = (
+                y_diff < 0.032
+                and gap_ms <= 800
+                and min_dur <= 1400
+                and sim >= 0.62
+            )
+
+            if not text_match and not fade_transition_match:
+                continue
 
             should_merge = False
-            if start_delta <= 1500 or gap_ms <= 200:
+            if fade_transition_match:
+                should_merge = True
+            elif start_delta <= 1500 or gap_ms <= 200:
                 # Case 1: Overlapping or Simultaneous Duplicate
                 if gap_ms > 0:
                     from lyra_ocr.audio.asr import asr_has_new_prefix_onset
@@ -513,9 +689,26 @@ def dedupe_and_group(
 
         if matched_idx >= 0:
             target = merged[matched_idx]
+            target_dur = max(0, target.end_ms - target.start_ms)
+            cue_dur = max(0, cue.end_ms - cue.start_ms)
+            prefer_longer_stable = (
+                target_dur <= 1400 < cue_dur
+                and len(cue.text.strip()) >= len(target.text.strip())
+            )
+            avoid_shorter_fade = (
+                cue_dur <= 1400 < target_dur
+                and len(cue.text.strip()) < len(target.text.strip())
+            )
             # Decide whether to upgrade target with cue's text/confidence
-            if cue.confidence > target.confidence or (
-                len(cue.text) >= len(target.text) + 3 and cue.confidence >= target.confidence - 0.05
+            if prefer_longer_stable or (
+                not avoid_shorter_fade
+                and (
+                    cue.confidence > target.confidence
+                    or (
+                        len(cue.text) >= len(target.text) + 3
+                        and cue.confidence >= target.confidence - 0.05
+                    )
+                )
             ):
                 target.text = cue.text
                 target.raw_text = cue.raw_text
@@ -570,10 +763,10 @@ def dedupe_and_group(
 def share_solitary_cross_layer_cues(
     cues: list[LyricCue],
     *,
-    min_gap_ms: int = 2500,
+    min_gap_ms: int = 1200,
     min_cue_dur_ms: int = 900,
 ) -> list[LyricCue]:
-    """Clone solitary cues from one major layer into silence gaps of other major layers."""
+    """Clone solitary English cues from one major layer into global silence gaps of other major layers."""
     if not cues:
         return []
 
@@ -601,7 +794,6 @@ def share_solitary_cross_layer_cues(
         layer_spans[lid] = (min(c.start_ms for c in lc), max(c.end_ms for c in lc))
         layer_langs[lid] = _layer_lang(lc)
 
-    latin_only_langs = {"en", "ja-Latn", "es", "fr", "de", "vi", "pt", "it", "id"}
     added: list[LyricCue] = []
 
     for src_lid in major_lids:
@@ -610,34 +802,34 @@ def share_solitary_cross_layer_cues(
                 continue
             if "cross_layer_inherited" in cue.qa_flags:
                 continue
+            if cue.lang != "en" or detect_line_lang(cue.text) != "en":
+                continue
 
-            cue_is_cjk = _is_cjk_heavy(cue.text)
+            # Strict global-frame solitary check across every other major layer
+            if any(
+                oc.start_ms < (cue.end_ms + 800) and oc.end_ms > (cue.start_ms - 800)
+                for other_lid in major_lids
+                if other_lid != src_lid
+                for oc in by_layer[other_lid]
+            ):
+                continue
 
             for dst_lid in major_lids:
                 if dst_lid == src_lid:
                     continue
 
                 dst_lang = layer_langs[dst_lid]
-                if cue_is_cjk and dst_lang in latin_only_langs:
-                    continue
 
                 span_min, span_max = layer_spans[dst_lid]
                 if cue.start_ms < span_min - 5000 or cue.end_ms > span_max + 5000:
                     continue
 
                 dst_cues = by_layer[dst_lid]
-                # Check zero overlapping cues inside [cue.start_ms + 200, cue.end_ms - 200]
-                if any(
-                    dc.start_ms < (cue.end_ms - 200) and dc.end_ms > (cue.start_ms + 200)
-                    for dc in dst_cues
-                ):
-                    continue
-
                 # Also avoid duplicating with already queued additions for this dst_lid
                 if any(
                     ac.layer_id == dst_lid
-                    and ac.start_ms < (cue.end_ms - 200)
-                    and ac.end_ms > (cue.start_ms + 200)
+                    and ac.start_ms < (cue.end_ms + 800)
+                    and ac.end_ms > (cue.start_ms - 800)
                     for ac in added
                 ):
                     continue
@@ -648,8 +840,6 @@ def share_solitary_cross_layer_cues(
                 right_bound = min(next_starts) if next_starts else (span_max + 5000)
                 if (right_bound - left_bound) < min_gap_ms:
                     continue
-
-                from dataclasses import replace
 
                 cloned = replace(
                     cue,

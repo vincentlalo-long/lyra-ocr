@@ -864,6 +864,37 @@ def test_align_reference_multi_cue_to_one_ref_review_count():
     assert all("reference_uncertain" in c.qa_flags for c in cues)
 
 
+def test_select_reference_lines_ja_latn_bundle_respects_repair_romaji():
+    from lyra_ocr.lyric.reference import ReferenceBundle, ReferenceLine, select_reference_lines
+
+    romaji_bundle = ReferenceBundle(
+        lines=[
+            ReferenceLine(text="Daitan-futeki ni haikara kakumei", start_ms=1000, language="ja-Latn"),
+            ReferenceLine(text="Senbon-zakura yoru ni magire", start_ms=5000, language="ja-Latn"),
+        ],
+        source="lrclib_synced",
+        provider="lrclib",
+        language="ja-Latn",
+    )
+    unlabeled_romaji_bundle = ReferenceBundle(
+        lines=[
+            ReferenceLine(text="Daitan-futeki ni haikara kakumei", start_ms=1000),
+            ReferenceLine(text="Senbon-zakura yoru ni magire", start_ms=5000),
+        ],
+        source="lrclib_synced",
+        provider="lrclib",
+        language="",
+    )
+
+    assert select_reference_lines(romaji_bundle, "ja-Latn") is None
+    assert select_reference_lines(romaji_bundle, "ja-Latn", repair_romaji=False) is None
+    assert select_reference_lines(unlabeled_romaji_bundle, "ja-Latn", repair_romaji=False) is None
+
+    selected = select_reference_lines(romaji_bundle, "ja-Latn", repair_romaji=True)
+    assert selected is romaji_bundle
+
+
+
 
 
 
