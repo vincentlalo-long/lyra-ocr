@@ -218,13 +218,27 @@ class OcrPreprocessThresholds:
     fallback_min_confidence: float = 0.88
 
 
+@dataclass(frozen=True)
+class ASRAlignmentThresholds:
+    """Vocal language routing and word-level ASR alignment thresholds for ``asr.py``."""
+
+    non_en_min_cues: int = 5
+    word_window_pad_ms: int = 400
+    fuzzy_token_similarity_min: float = 0.70
+    word_match_ratio_min: float = 0.50
+    total_similarity_min: float = 0.55
+
+
 DEFAULT_LAYER_DISCOVERY_THRESHOLDS = LayerDiscoveryThresholds()
 DEFAULT_GROUPING_THRESHOLDS = GroupingThresholds()
 DEFAULT_CLASSIFICATION_THRESHOLDS = ClassificationThresholds()
 DEFAULT_OCR_PREPROCESS_THRESHOLDS = OcrPreprocessThresholds()
+DEFAULT_ASR_ALIGNMENT_THRESHOLDS = ASRAlignmentThresholds()
 
 __all__ = [
+    "ASRAlignmentThresholds",
     "ClassificationThresholds",
+    "DEFAULT_ASR_ALIGNMENT_THRESHOLDS",
     "DEFAULT_CLASSIFICATION_THRESHOLDS",
     "DEFAULT_GROUPING_THRESHOLDS",
     "DEFAULT_LAYER_DISCOVERY_THRESHOLDS",

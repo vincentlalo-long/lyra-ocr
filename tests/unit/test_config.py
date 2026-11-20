@@ -8,17 +8,22 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
+from lyra_ocr.audio.asr import align_cues_words_with_asr, infer_vocal_language_from_cues
+from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
 from lyra_ocr.classify import classify_track
 from lyra_ocr.config import (
+    DEFAULT_ASR_ALIGNMENT_THRESHOLDS,
     DEFAULT_CLASSIFICATION_THRESHOLDS,
     DEFAULT_GROUPING_THRESHOLDS,
     DEFAULT_LAYER_DISCOVERY_THRESHOLDS,
     DEFAULT_OCR_PREPROCESS_THRESHOLDS,
+    ASRAlignmentThresholds,
     ClassificationThresholds,
     GroupingThresholds,
     LayerDiscoveryThresholds,
     OcrPreprocessThresholds,
 )
+from lyra_ocr.lyric.models import LyricCue
 from lyra_ocr.layers import discover_layers
 from lyra_ocr.ocr.detect import Detection
 from lyra_ocr.ocr.engine import (
@@ -76,6 +81,15 @@ def test_config_dataclasses_are_frozen_with_production_defaults():
     assert DEFAULT_OCR_PREPROCESS_THRESHOLDS.spaced_max_token_len_guard == 14
     assert DEFAULT_OCR_PREPROCESS_THRESHOLDS.unspaced_min_len_guard == 9
     assert DEFAULT_OCR_PREPROCESS_THRESHOLDS.fallback_min_confidence == 0.88
+
+    assert isinstance(DEFAULT_ASR_ALIGNMENT_THRESHOLDS, ASRAlignmentThresholds)
+    with pytest.raises(FrozenInstanceError):
+        DEFAULT_ASR_ALIGNMENT_THRESHOLDS.non_en_min_cues = 9  # type: ignore[misc]
+    assert DEFAULT_ASR_ALIGNMENT_THRESHOLDS.non_en_min_cues == 5
+    assert DEFAULT_ASR_ALIGNMENT_THRESHOLDS.word_window_pad_ms == 400
+    assert DEFAULT_ASR_ALIGNMENT_THRESHOLDS.fuzzy_token_similarity_min == 0.70
+    assert DEFAULT_ASR_ALIGNMENT_THRESHOLDS.word_match_ratio_min == 0.50
+    assert DEFAULT_ASR_ALIGNMENT_THRESHOLDS.total_similarity_min == 0.55
 
 
 def _make_track(track_id: int, start_ms: int, end_ms: int, text: str, cx: float, cy: float) -> TextTrack:
@@ -209,3 +223,45 @@ def test_ocr_preprocess_thresholds_wired_into_helpers_and_engine():
         lines = engine.process_detections(img, [det])
     assert mock_retry.call_count == 1
     assert lines[0].text_norm == "千本桜"
+
+
+def test_asr_alignment_thresholds_wired_into_asr_helpers():
+    cues = [
+        LyricCue(start_ms=i * 1000, end_ms=i * 1000 + 800, text="Ngày hôm qua", lang="vi")
+        for i in range(3)
+    ] + [
+        LyricCue(start_ms=i * 1000, end_ms=i * 1000 + 800, text="Yesterday", lang="en")
+        for i in range(5)
+    ]
+    assert infer_vocal_language_from_cues(cues) == "en"
+    assert infer_vocal_language_from_cues(cues, thresholds=ASRAlignmentThresholds(non_en_min_cues=3)) == "vi"
+
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="fly away",
+                start_ms=500,
+                end_ms=2500,
+                words=[ASRWord("fly", 520, 900), ASRWord("away", 1500, 2000)],
+            )
+        ],
+    )
+    cue_default = LyricCue(start_ms=1000, end_ms=2200, text="fly away", lang="en")
+    cue_tight = LyricCue(start_ms=1000, end_ms=2200, text="fly away", lang="en")
+    # Default pad 400ms misses "fly" at 520..900? Wait: 900 >= 1000 - 400 = 600, so both match.
+    # Tight pad 50ms excludes "fly" (end=900 < 950) leaving only 1/2=0.50; raising word_match_ratio_min=0.80 skips it.
+    assert align_cues_words_with_asr([cue_default], transcript) == 1
+    assert (
+        align_cues_words_with_asr(
+            [cue_tight],
+            transcript,
+            thresholds=ASRAlignmentThresholds(
+                word_window_pad_ms=50,
+                word_match_ratio_min=0.80,
+                total_similarity_min=0.90,
+            ),
+        )
+        == 0
+    )
+

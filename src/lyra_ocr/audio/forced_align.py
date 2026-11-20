@@ -53,6 +53,17 @@ def _tokenize_words(text: str) -> list[str]:
     )
 
 
+def _clamp_cue_words(cue: LyricCue) -> None:
+    """Clamp cue.words timestamps into [cue.start_ms, cue.end_ms] preserving order."""
+    c_start = int(cue.start_ms)
+    c_end = max(c_start, int(cue.end_ms))
+    for w in cue.words:
+        w_start = min(c_end, max(c_start, int(w.get("start_ms", c_start))))
+        w_end = min(c_end, max(w_start, int(w.get("end_ms", w_start))))
+        w["start_ms"] = w_start
+        w["end_ms"] = w_end
+
+
 def align_cues_with_audio(
     cues: list[LyricCue],
     audio_16k: np.ndarray,
@@ -101,11 +112,7 @@ def align_cues_with_audio(
 
         # Word-level proportional allocation (preserve ASR-aligned word timings if present)
         if cue.words and ("asr_aligned" in cue.qa_flags or "asr_word_aligned" in cue.qa_flags):
-            for w in cue.words:
-                w_start = min(int(cue.end_ms), max(int(cue.start_ms), int(w.get("start_ms", cue.start_ms))))
-                w_end = min(int(cue.end_ms), max(w_start, int(w.get("end_ms", w_start))))
-                w["start_ms"] = w_start
-                w["end_ms"] = w_end
+            _clamp_cue_words(cue)
         else:
             words = _tokenize_words(cue.text)
             if words:
@@ -135,5 +142,7 @@ def align_cues_with_audio(
         for i in range(len(lcues) - 1):
             if lcues[i].end_ms > lcues[i + 1].start_ms:
                 lcues[i].end_ms = max(lcues[i].start_ms + 100, lcues[i + 1].start_ms)
+                if lcues[i].words:
+                    _clamp_cue_words(lcues[i])
 
     return cues

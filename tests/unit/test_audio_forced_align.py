@@ -97,3 +97,39 @@ def test_align_cues_words_with_asr_and_forced_align_preserves_asr_words():
     assert out_words[0]["start_ms"] >= aligned[0].start_ms
     assert out_words[-1]["end_ms"] <= aligned[0].end_ms
 
+
+def test_align_cues_with_audio_reclamps_asr_words_after_layer_monotonicity_trim():
+    sr = 16000
+    audio = np.zeros(sr * 6, dtype=np.float32)
+
+    cue1 = LyricCue(
+        start_ms=1000,
+        end_ms=3500,
+        text="first line",
+        layer_id=1,
+        qa_flags=["asr_word_aligned"],
+        words=[
+            {"word": "first", "start_ms": 1100, "end_ms": 1800},
+            {"word": "line", "start_ms": 2200, "end_ms": 3400},
+        ],
+    )
+    cue2 = LyricCue(
+        start_ms=2600,
+        end_ms=4800,
+        text="second line",
+        layer_id=1,
+        qa_flags=["asr_word_aligned"],
+        words=[
+            {"word": "second", "start_ms": 2700, "end_ms": 3500},
+            {"word": "line", "start_ms": 3600, "end_ms": 4700},
+        ],
+    )
+
+    aligned = align_cues_with_audio([cue1, cue2], audio, sample_rate=sr)
+    assert aligned[0].end_ms == 2600
+    for w in aligned[0].words:
+        assert aligned[0].start_ms <= w["start_ms"] <= w["end_ms"] <= aligned[0].end_ms
+    assert aligned[0].words[1]["start_ms"] == 2200
+    assert aligned[0].words[1]["end_ms"] == 2600
+
+

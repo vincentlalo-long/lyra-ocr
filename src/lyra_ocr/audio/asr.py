@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from lyra_ocr.audio.forced_align import _tokenize_words
+from lyra_ocr.config import ASRAlignmentThresholds, DEFAULT_ASR_ALIGNMENT_THRESHOLDS
 
 if TYPE_CHECKING:
     from lyra_ocr.lyric.models import LyricCue
@@ -124,13 +125,18 @@ def _asr_cache_matches_language(cached: ASRTranscript, language: str | None) -> 
     return True
 
 
-def infer_vocal_language_from_cues(cues: list[LyricCue]) -> str | None:
+def infer_vocal_language_from_cues(
+    cues: list[LyricCue],
+    *,
+    thresholds: ASRAlignmentThresholds | None = None,
+) -> str | None:
     """Infer the dominant sung vocal language from lyric cues for Whisper ASR routing."""
     if not cues:
         return None
     if any((c.lang or "").strip() in ("ja", "ja-Latn") for c in cues):
         return "ja"
 
+    cfg = thresholds or DEFAULT_ASR_ALIGNMENT_THRESHOLDS
     counts = Counter(
         c.lang.strip()
         for c in cues
@@ -140,7 +146,7 @@ def infer_vocal_language_from_cues(cues: list[LyricCue]) -> str | None:
         return None
 
     for lang, cnt in counts.most_common():
-        if lang != "en" and cnt >= 5:
+        if lang != "en" and cnt >= cfg.non_en_min_cues:
             return lang
 
     return counts.most_common(1)[0][0]
@@ -791,11 +797,14 @@ def _split_asr_word_tokens(
 def align_cues_words_with_asr(
     cues: list[LyricCue],
     transcript: ASRTranscript | None,
+    *,
+    thresholds: ASRAlignmentThresholds | None = None,
 ) -> int:
     """Populate cue.words with real ASR word timings (interpolating unmatched words)."""
     if not cues or transcript is None or not transcript.segments:
         return 0
 
+    cfg = thresholds or DEFAULT_ASR_ALIGNMENT_THRESHOLDS
     transcript_lang = _normalize_whisper_lang(transcript.language)
     aligned_count = 0
 
@@ -806,8 +815,8 @@ def align_cues_words_with_asr(
         if not cue_tokens:
             continue
 
-        win_start = int(cue.start_ms) - 400
-        win_end = int(cue.end_ms) + 400
+        win_start = int(cue.start_ms) - cfg.word_window_pad_ms
+        win_end = int(cue.end_ms) + cfg.word_window_pad_ms
         need_romanize = (cue.lang == "ja-Latn") and (transcript_lang == "ja")
 
         asr_tokens: list[tuple[str, int, int]] = []
@@ -842,7 +851,7 @@ def align_cues_words_with_asr(
                     for aj in range(j_cursor, j2):
                         if not asr_norms[aj]:
                             continue
-                        if SequenceMatcher(None, cue_norms[ci], asr_norms[aj]).ratio() >= 0.70:
+                        if SequenceMatcher(None, cue_norms[ci], asr_norms[aj]).ratio() >= cfg.fuzzy_token_similarity_min:
                             matched_spans[ci] = (asr_tokens[aj][1], asr_tokens[aj][2])
                             j_cursor = aj + 1
                             break
@@ -854,7 +863,7 @@ def align_cues_words_with_asr(
         str_sim = SequenceMatcher(None, cue_str, asr_str).ratio() if (cue_str and asr_str) else 0.0
         total_sim = max(matcher.ratio(), str_sim)
 
-        if match_ratio < 0.50 and total_sim < 0.55:
+        if match_ratio < cfg.word_match_ratio_min and total_sim < cfg.total_similarity_min:
             continue
 
         cue_start = int(cue.start_ms)
