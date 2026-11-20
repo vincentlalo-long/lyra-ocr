@@ -1,6 +1,14 @@
 import pytest
 
-from lyra_ocr.lang import detect_line_lang, romaji_score, vote_layer_lang
+from lyra_ocr.lang import (
+    LANGUAGE_PROFILES,
+    LanguageProfile,
+    detect_line_lang,
+    get_language_profile,
+    register_language_profile,
+    romaji_score,
+    vote_layer_lang,
+)
 
 
 def test_detect_line_lang_japanese_kana():
@@ -172,6 +180,34 @@ def test_detect_line_lang_english_vl_and_en_es_homographs():
         "my fatal angel",
     ):
         assert detect_line_lang(en_line) == "en"
+
+
+def test_language_profile_registry_and_unaccented_vietnamese_detection():
+    for code in ("en", "ja", "ja-Latn", "es", "vi", "zh", "ko", "und"):
+        assert code in LANGUAGE_PROFILES
+
+    vi_profile = get_language_profile("vi")
+    assert vi_profile.code == "vi"
+    assert vi_profile.bypass_en_oov_gate is True
+    assert get_language_profile("en").bypass_en_oov_gate is False
+    assert get_language_profile("en").allow_symspell_repair is True
+    assert get_language_profile("ja").is_cjk_unspaced is True
+
+    custom = LanguageProfile(
+        code="fr",
+        name="French",
+        ocr_model_id="latin_PP-OCRv5_rec_mobile",
+        whisper_lang="fr",
+        bypass_en_oov_gate=True,
+    )
+    try:
+        register_language_profile(custom)
+        assert get_language_profile("fr") == custom
+    finally:
+        LANGUAGE_PROFILES.pop("fr", None)
+
+    assert detect_line_lang("Nhung ngay thang khong co anh trong tim") == "vi"
+
 
 
 

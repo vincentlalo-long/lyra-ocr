@@ -5,7 +5,90 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from dataclasses import dataclass
 from typing import Sequence
+
+
+@dataclass(frozen=True)
+class LanguageProfile:
+    """Declarative per-language OCR, ASR, and post-processing profile."""
+
+    code: str
+    name: str
+    ocr_model_id: str = "PP-OCRv6_rec_small"
+    fallback_ocr_model_id: str | None = None
+    whisper_lang: str | None = None
+    allow_symspell_repair: bool = False
+    bypass_en_oov_gate: bool = True
+    is_cjk_unspaced: bool = False
+
+
+LANGUAGE_PROFILES: dict[str, LanguageProfile] = {
+    "en": LanguageProfile(
+        code="en",
+        name="English",
+        fallback_ocr_model_id="latin_PP-OCRv5_rec_mobile",
+        whisper_lang="en",
+        allow_symspell_repair=True,
+        bypass_en_oov_gate=False,
+        is_cjk_unspaced=False,
+    ),
+    "ja": LanguageProfile(
+        code="ja",
+        name="Japanese",
+        whisper_lang="ja",
+        is_cjk_unspaced=True,
+    ),
+    "ja-Latn": LanguageProfile(
+        code="ja-Latn",
+        name="Japanese (Romaji)",
+        fallback_ocr_model_id="latin_PP-OCRv5_rec_mobile",
+        whisper_lang="ja",
+    ),
+    "es": LanguageProfile(
+        code="es",
+        name="Spanish",
+        fallback_ocr_model_id="latin_PP-OCRv5_rec_mobile",
+        whisper_lang="es",
+    ),
+    "vi": LanguageProfile(
+        code="vi",
+        name="Vietnamese",
+        fallback_ocr_model_id="latin_PP-OCRv5_rec_mobile",
+        whisper_lang="vi",
+    ),
+    "zh": LanguageProfile(
+        code="zh",
+        name="Chinese",
+        whisper_lang="zh",
+        is_cjk_unspaced=True,
+    ),
+    "ko": LanguageProfile(
+        code="ko",
+        name="Korean",
+        whisper_lang="ko",
+    ),
+    "und": LanguageProfile(
+        code="und",
+        name="Undetermined",
+    ),
+}
+
+
+def get_language_profile(code: str) -> LanguageProfile:
+    """Look up a registered LanguageProfile by code, falling back to base tag or 'und'."""
+    if code in LANGUAGE_PROFILES:
+        return LANGUAGE_PROFILES[code]
+    if "-" in code:
+        base = code.split("-", 1)[0]
+        if base in LANGUAGE_PROFILES:
+            return LANGUAGE_PROFILES[base]
+    return LANGUAGE_PROFILES["und"]
+
+
+def register_language_profile(profile: LanguageProfile) -> None:
+    """Register or override a LanguageProfile in the global registry."""
+    LANGUAGE_PROFILES[profile.code] = profile
 
 # Regex matching valid Japanese Romanization (Hepburn / Kunrei-shiki) mora sequences
 _ROMAJI_TOKEN_RE = re.compile(
@@ -93,6 +176,14 @@ _VIETNAMESE_RE = re.compile(
     r"[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]",
     re.IGNORECASE,
 )
+_VIETNAMESE_UNAMBIGUOUS_WORDS = {
+    "nhung", "trong", "khong", "nguoi", "duoc", "chang", "cung", "minh",
+    "nho", "thuong", "buon", "ngay", "thang", "nam", "troi", "dem",
+    "mat", "long", "biet", "yeu", "anh", "em",
+}
+_VIETNAMESE_DISTINCTIVE_WORDS = {
+    "nhung", "trong", "khong", "nguoi", "duoc", "chang", "thuong", "thang",
+}
 
 
 def _normalize_romaji_ocr_token(tok: str) -> str:
@@ -239,8 +330,12 @@ def detect_line_lang(text: str) -> str:
     if is_spanish:
         return "es"
 
-    # 3. Vietnamese Diacritics
+    # 3. Vietnamese Diacritics & Unaccented Vietnamese Tokens
     if _VIETNAMESE_RE.search(norm):
+        return "vi"
+    n_vi_unambiguous = sum(1 for w in words if w in _VIETNAMESE_UNAMBIGUOUS_WORDS)
+    n_vi_distinctive = sum(1 for w in words if w in _VIETNAMESE_DISTINCTIVE_WORDS)
+    if n_vi_unambiguous >= 3 and n_vi_distinctive >= 2:
         return "vi"
 
     # 4. Latin Script (Romaji vs English/Spanish/Latin)

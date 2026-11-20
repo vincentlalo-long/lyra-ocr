@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from lyra_ocr.ocr.detect import Detection
 from lyra_ocr.ocr.engine import (
     OCREngine,
+    has_multicolor_strokes,
     reconstruct_visual_word_spaces,
     to_soft_bw_stroke_crop,
 )
@@ -315,4 +316,86 @@ def test_process_detections_skips_soft_bw_when_conf_already_high_or_bw_worse():
     assert lines[0].text_norm == "千本桜"
     assert lines[0].confidence == 0.82
     assert lines[0].script == "japan"
+
+
+def test_to_soft_bw_stroke_crop_peels_dark_outline_on_bright_background():
+    # 48x160 BGR crop with bright gray background (180,180,180),
+    # 3px black outline (10,10,10), and white inner stroke (250,250,250).
+    crop = np.full((48, 160, 3), (180, 180, 180), dtype=np.uint8)
+    crop[10:38, 20:140] = (10, 10, 10)
+    crop[13:35, 23:137] = (250, 250, 250)
+
+    out = to_soft_bw_stroke_crop(crop)
+    assert out is not None
+    assert out.shape == (56, 168, 3)  # 4px padding on all sides
+
+    pad = 4
+    gray = out[:, :, 0]
+    # Bright gray background maps to dark values (<= 45)
+    assert int(gray[pad + 2, pad + 2]) <= 45
+    assert int(gray[pad + 42, pad + 150]) <= 45
+    # 3px black outline maps to dark values (<= 45)
+    assert int(gray[pad + 11, pad + 25 : pad + 135].max()) <= 45
+    assert int(gray[pad + 36, pad + 25 : pad + 135].max()) <= 45
+    assert int(gray[pad + 14 : pad + 34, pad + 21].max()) <= 45
+    # White inner glyph stroke maps to bright values (>= 200)
+    assert int(gray[pad + 15 : pad + 33, pad + 25 : pad + 135].min()) >= 200
+
+
+def test_has_multicolor_strokes_detects_dual_color_karaoke_line():
+    # Dual-color karaoke stroke on black background: cyan left half, white right half
+    crop_cyan_white = np.zeros((48, 160, 3), dtype=np.uint8)
+    crop_cyan_white[14:34, 20:80] = (255, 180, 0)
+    crop_cyan_white[14:34, 80:140] = (255, 255, 255)
+
+    assert has_multicolor_strokes(crop_cyan_white) is True
+    out = to_soft_bw_stroke_crop(crop_cyan_white)
+    assert out is not None
+    pad = 4
+    assert int(out[pad + 16 : pad + 32, pad + 22 : pad + 78, 0].min()) >= 200
+    assert int(out[pad + 16 : pad + 32, pad + 82 : pad + 138, 0].min()) >= 200
+
+    # Dual-color karaoke stroke: cyan left half, red right half
+    crop_cyan_red = np.zeros((48, 160, 3), dtype=np.uint8)
+    crop_cyan_red[14:34, 20:80] = (255, 180, 0)
+    crop_cyan_red[14:34, 80:140] = (0, 0, 255)
+    assert has_multicolor_strokes(crop_cyan_red) is True
+
+    # Monocolor stroke must return False
+    crop_mono = np.zeros((48, 160, 3), dtype=np.uint8)
+    crop_mono[14:34, 20:140] = (255, 180, 0)
+    assert has_multicolor_strokes(crop_mono) is False
+    assert has_multicolor_strokes(None) is False
+
+
+def test_process_detections_triggers_soft_bw_proactively_on_multicolor_strokes():
+    engine = OCREngine(default_model="PP-OCRv6_rec_small")
+    img = np.zeros((80, 240, 3), dtype=np.uint8)
+    # Dual-color karaoke stroke inside the detection bbox [10, 10, 190, 60]
+    img[22:48, 20:100] = (255, 180, 0)
+    img[22:48, 100:180] = (255, 255, 255)
+    det = Detection(
+        polygon=[[10, 10], [190, 10], [190, 60], [10, 60]],
+        bbox=[10, 10, 190, 60],
+        score=0.95,
+    )
+
+    # Raw pass has high confidence (>= 0.88) so normal fallback would NOT fire,
+    # but it dropped 5 chars ("桜夜ニ紛レ"). Soft B&W triggers proactively and recovers >= 4 extra chars at bw_conf >= 0.78.
+    with patch.object(
+        engine,
+        "recognize_crops",
+        return_value=[("千本", 0.92, "PP-OCRv6_rec_small")],
+    ), patch.object(
+        engine,
+        "recognize_crop",
+        return_value=("千本桜夜ニ紛レ", 0.81, "PP-OCRv6_rec_small"),
+    ) as mock_rec_crop:
+        lines = engine.process_detections(img, [det])
+
+    assert mock_rec_crop.call_count == 1
+    assert len(lines) == 1
+    assert lines[0].text_norm == "千本桜夜ニ紛レ"
+    assert lines[0].confidence == 0.81
+
 

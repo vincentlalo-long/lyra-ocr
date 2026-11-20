@@ -217,6 +217,22 @@ class OcrPreprocessThresholds:
     latin_alt_min_unspaced_len: int = 8
     fallback_min_confidence: float = 0.88
 
+    # DecompST outline peeling & multicolor karaoke stroke detection
+    outline_peel_min_bg_l: float = 85.0
+    outline_peel_fill_percentile: float = 90.0
+    outline_peel_bright_fill_delta_l: float = 20.0
+    outline_peel_dark_outline_delta_l: float = 35.0
+    outline_peel_dark_pixel_delta_l: float = 20.0
+    outline_peel_max_chroma: float = 25.0
+    multicolor_fg_dist_min: float = 25.0
+    multicolor_fg_percentile: float = 75.0
+    multicolor_min_fg_pixels: int = 16
+    multicolor_band_y_min: float = 0.20
+    multicolor_band_y_max: float = 0.80
+    multicolor_chroma_std_min: float = 10.0
+    multicolor_min_extra_chars: int = 4
+    multicolor_min_bw_confidence: float = 0.78
+
 
 @dataclass(frozen=True)
 class ASRAlignmentThresholds:

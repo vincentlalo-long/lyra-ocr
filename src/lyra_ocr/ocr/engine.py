@@ -113,7 +113,7 @@ def _compute_border_fg_distance(
     *,
     thresholds: OcrPreprocessThresholds | None = None,
 ) -> np.ndarray | None:
-    """Compute per-pixel max-channel color distance from the median border background."""
+    """Compute per-pixel foreground distance from the border background with outline peeling."""
     if img.ndim not in (2, 3):
         return None
     h, w = img.shape[:2]
@@ -129,12 +129,76 @@ def _compute_border_fg_distance(
     border_mask[:, :bx] = True
     border_mask[:, -bx:] = True
 
-    border_pixels = img[border_mask]
-    bg = np.median(border_pixels, axis=0).astype(np.float32)
-    diff = np.abs(img.astype(np.float32) - bg)
-    if img.ndim == 3:
-        return np.max(diff, axis=2)
-    return diff
+    if img.ndim == 2:
+        bg = np.median(img[border_mask]).astype(np.float32)
+        return np.abs(img.astype(np.float32) - bg)
+
+    if img.shape[2] != 3:
+        bg = np.median(img[border_mask], axis=0).astype(np.float32)
+        return np.max(np.abs(img.astype(np.float32) - bg), axis=2)
+
+    lab = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
+    bg_lab = np.median(lab[border_mask], axis=0)
+    bg_bgr = np.median(img[border_mask], axis=0).astype(np.float32)
+    dist_bgr = np.max(np.abs(img.astype(np.float32) - bg_bgr), axis=2)
+
+    bg_l = float(bg_lab[0])
+    if bg_l >= cfg.outline_peel_min_bg_l:
+        l_chan = lab[:, :, 0]
+        chroma = np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0)
+        has_bright_or_chroma_fill = (
+            float(np.percentile(l_chan, cfg.outline_peel_fill_percentile))
+            > bg_l + cfg.outline_peel_bright_fill_delta_l
+            or float(np.percentile(chroma, cfg.outline_peel_fill_percentile))
+            > cfg.outline_peel_max_chroma
+        )
+        has_dark_outline = bool(np.any(l_chan < bg_l - cfg.outline_peel_dark_outline_delta_l))
+        if has_bright_or_chroma_fill and has_dark_outline:
+            # Peel low-chroma dark outlines/shadows around bright/colored glyphs into background.
+            outline_mask = (
+                (l_chan < bg_l - cfg.outline_peel_dark_pixel_delta_l)
+                & (chroma < cfg.outline_peel_max_chroma)
+            )
+            dist_bgr = np.where(outline_mask, 0.0, dist_bgr)
+
+    return dist_bgr
+
+
+def has_multicolor_strokes(
+    crop: np.ndarray | None,
+    *,
+    thresholds: OcrPreprocessThresholds | None = None,
+) -> bool:
+    """Return True when foreground glyph strokes contain multi-hue karaoke highlights."""
+    if crop is None or getattr(crop, "ndim", 0) != 3 or getattr(crop, "size", 0) == 0:
+        return False
+    if crop.shape[2] != 3:
+        return False
+
+    cfg = thresholds or DEFAULT_OCR_PREPROCESS_THRESHOLDS
+    fg_dist = _compute_border_fg_distance(crop, thresholds=cfg)
+    if fg_dist is None:
+        return False
+
+    h = crop.shape[0]
+    y0 = max(0, min(h - 1, int(round(cfg.multicolor_band_y_min * h))))
+    y1 = max(y0 + 1, min(h, int(round(cfg.multicolor_band_y_max * h))))
+    band_crop = crop[y0:y1]
+    band_fg = fg_dist[y0:y1]
+
+    fg_thresh = max(
+        cfg.multicolor_fg_dist_min,
+        float(np.percentile(fg_dist, cfg.multicolor_fg_percentile)),
+    )
+    fg_mask = band_fg >= fg_thresh
+    if int(np.count_nonzero(fg_mask)) < cfg.multicolor_min_fg_pixels:
+        return False
+
+    lab = cv2.cvtColor(band_crop, cv2.COLOR_BGR2LAB).astype(np.float32)
+    a_fg = lab[:, :, 1][fg_mask]
+    b_fg = lab[:, :, 2][fg_mask]
+    sigma_ab = float(np.sqrt(np.var(a_fg) + np.var(b_fg)))
+    return bool(sigma_ab >= cfg.multicolor_chroma_std_min)
 
 
 def to_soft_bw_stroke_crop(
@@ -506,16 +570,24 @@ class OCREngine:
                     except Exception:
                         pass
 
-            if conf < cfg.fallback_min_confidence and crop is not None and getattr(crop, "size", 0) > 0:
+            has_crop = crop is not None and getattr(crop, "size", 0) > 0
+            is_multicolor = has_crop and has_multicolor_strokes(crop, thresholds=cfg)
+            if has_crop and (conf < cfg.fallback_min_confidence or is_multicolor):
                 try:
                     bw_crop = to_soft_bw_stroke_crop(crop, thresholds=cfg)
                     bw_raw, bw_conf, bw_model = self.recognize_crop(
                         bw_crop,
                         model_id=used_model or model_id,
                     )
-                    if bw_raw and bw_conf > conf:
+                    bw_norm = normalize_text(bw_raw, form="NFC") if bw_raw else ""
+                    recovers_extra_chars = (
+                        len(bw_norm.replace(" ", ""))
+                        >= len(text_norm.replace(" ", "")) + cfg.multicolor_min_extra_chars
+                        and bw_conf >= cfg.multicolor_min_bw_confidence
+                    )
+                    if bw_raw and (bw_conf > conf or recovers_extra_chars):
                         text_raw = bw_raw
-                        text_norm = normalize_text(bw_raw, form="NFC")
+                        text_norm = bw_norm
                         conf = bw_conf
                         used_model = bw_model
                         script = detect_script(text_norm)
