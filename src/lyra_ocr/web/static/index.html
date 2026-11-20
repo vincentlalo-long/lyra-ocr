@@ -3,160 +3,224 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Lyra OCR - Track Review & Ground Truth Tool</title>
+  <title>Lyra OCR — LRC Studio</title>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>
 
   <!-- Top Header -->
-  <header>
+  <header class="studio-header">
     <div class="brand">
-      <span>✦</span> LYRA OCR <span style="font-weight:400;color:var(--text-muted)">| LRC Studio & Track Review</span>
+      <svg class="brand-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M9 18V5l12-2v13"></path>
+        <circle cx="6" cy="18" r="3"></circle>
+        <circle cx="18" cy="16" r="3"></circle>
+      </svg>
+      <span class="brand-title">LYRA OCR</span>
+      <span class="brand-divider" aria-hidden="true">/</span>
+      <span class="brand-subtitle">LRC Studio</span>
     </div>
     <div class="header-controls" id="reviewHeaderControls" style="display:none">
       <label for="artifactSelect" style="color:var(--text-muted);font-size:12px">Artifact:</label>
       <select id="artifactSelect"></select>
-      <button id="reviewHideArtifactBtn" class="mini-btn" title="Hide this artifact from web dropdown (keeps files on disk)">✕ Hide</button>
-      <button id="reviewDeleteArtifactBtn" class="mini-btn danger" title="Delete this artifact directory and all its files from disk">🗑 Delete</button>
+      <button id="reviewHideArtifactBtn" class="mini-btn" title="Hide this artifact from web dropdown (keeps files on disk)">Hide</button>
+      <button id="reviewDeleteArtifactBtn" class="mini-btn danger" title="Delete this artifact directory and all its files from disk">Delete</button>
       <div id="coveragePill" class="badge badge-lyric">100% Labeled</div>
-      <button id="refreshBtn" title="Reload state">↻ Refresh</button>
+      <button id="refreshBtn" title="Reload state">Refresh</button>
     </div>
   </header>
 
-  <!-- Tab Navigation -->
-  <nav class="tabbar">
-    <button class="tab-btn active" data-tab="lrc">✦ LRC Studio</button>
+  <!-- Hidden Legacy Tab Navigation (preserved for router.js compatibility) -->
+  <nav class="tabbar" style="display:none" aria-hidden="true">
+    <button class="tab-btn active" data-tab="lrc">LRC Studio</button>
     <button class="tab-btn" data-tab="review">Review Tracks</button>
     <button class="tab-btn" data-tab="datasets">Datasets</button>
     <button class="tab-btn" data-tab="runs">Runs</button>
     <button class="tab-btn" data-tab="eval">Eval</button>
-    <a href="/labeling.html" target="_blank" class="tab-external-link" title="Open dedicated ground truth annotation tool">Labeling Tool ↗</a>
+    <a href="/labeling.html" target="_blank" class="tab-external-link">Labeling Tool</a>
   </nav>
 
   <!-- LRC Studio View -->
   <div class="view active" id="view-lrc">
     <div class="studio-layout">
 
-      <!-- Pipeline Configuration Card -->
+      <!-- Command Bar & Collapsible Advanced Options -->
       <div class="studio-config-card">
-        <div class="config-section-title">
-          <span>⚙ Pipeline Configuration</span>
-          <span style="font-size:12px;color:var(--text-muted)">Extract synchronized lyrics directly from video or inspect existing OCR artifacts</span>
+        <div class="studio-command-bar">
+          <div class="command-field command-video">
+            <label for="lrcVideoInput">Video File Path / YouTube URL</label>
+            <div class="input-with-icon">
+              <svg class="field-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+              </svg>
+              <input type="text" id="lrcVideoInput" placeholder="https://www.youtube.com/watch?v=... or local video path">
+            </div>
+          </div>
+
+          <div class="command-field command-artifact">
+            <label for="lrcArtifactSelect">Cached Artifact</label>
+            <div class="artifact-select-group">
+              <select id="lrcArtifactSelect">
+                <option value="">-- Choose Existing Artifact Directory --</option>
+              </select>
+              <button type="button" id="lrcHideArtifactBtn" class="icon-btn" title="Hide selected artifact from dropdown (keeps files on disk)" aria-label="Hide artifact">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"></path>
+                  <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"></path>
+                  <line x1="1" y1="1" x2="23" y2="23"></line>
+                </svg>
+              </button>
+              <button type="button" id="lrcDeleteArtifactBtn" class="icon-btn danger" title="Delete selected artifact directory and all its files from disk" aria-label="Delete artifact">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                  <path d="M10 11v6"></path>
+                  <path d="M14 11v6"></path>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                </svg>
+              </button>
+              <button type="button" id="lrcRestoreHiddenBtn" class="icon-btn" style="display:none;" title="Restore hidden artifacts" aria-label="Restore hidden artifacts">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="1 4 1 10 7 10"></polyline>
+                  <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="command-actions">
+            <label class="toggle-pill" title="Look up lyrics on lrclib.net, with automatic fallback to YouTube captions if LRCLIB is unavailable.">
+              <input type="checkbox" id="lrcUseReference">
+              <span>Auto Reference</span>
+            </label>
+            <button type="button" id="lrcResetStudioBtn" class="secondary-btn" title="Reset studio view and clear inputs">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="1 4 1 10 7 10"></polyline>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+              </svg>
+              <span>Reset View</span>
+            </button>
+            <button type="button" id="lrcGenerateBtn" class="primary cta-btn">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <polygon points="6 3 20 12 6 21 6 3"></polygon>
+              </svg>
+              <span>Generate LRC</span>
+            </button>
+          </div>
         </div>
 
-        <div class="config-grid">
-          <div class="config-group" style="grid-column: span 2;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-              <label for="lrcArtifactSelect">Existing Run Artifacts (Cached):</label>
-              <div style="display:flex; gap:6px;">
-                <button type="button" id="lrcHideArtifactBtn" class="link-btn" style="font-size:11px" title="Hide selected artifact from web dropdown (keeps files on disk)">✕ Hide</button>
-                <button type="button" id="lrcDeleteArtifactBtn" class="link-btn" style="font-size:11px;color:var(--channel)" title="Delete selected artifact directory and all its files from disk">🗑 Delete</button>
-                <button type="button" id="lrcRestoreHiddenBtn" class="link-btn" style="font-size:11px; display:none;">↺ Restore</button>
-                <button type="button" id="lrcToggleDatasetsBtn" class="link-btn" style="font-size:11px;">Show Dataset Runs</button>
+        <div id="lrcStatusBanner" class="status-banner" style="display:none"></div>
+
+        <details class="advanced-drawer">
+          <summary class="advanced-summary">
+            <span class="advanced-summary-label">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <line x1="4" y1="21" x2="4" y2="14"></line>
+                <line x1="4" y1="10" x2="4" y2="3"></line>
+                <line x1="12" y1="21" x2="12" y2="12"></line>
+                <line x1="12" y1="8" x2="12" y2="3"></line>
+                <line x1="20" y1="21" x2="20" y2="16"></line>
+                <line x1="20" y1="12" x2="20" y2="3"></line>
+                <line x1="1" y1="14" x2="7" y2="14"></line>
+                <line x1="9" y1="8" x2="15" y2="8"></line>
+                <line x1="17" y1="16" x2="23" y2="16"></line>
+              </svg>
+              <span>Advanced Pipeline &amp; Metadata Options</span>
+            </span>
+            <svg class="drawer-chevron" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polyline points="6 9 12 15 18 9"></polyline>
+            </svg>
+          </summary>
+
+          <div class="advanced-body">
+            <div class="advanced-grid">
+              <div class="config-group">
+                <label for="lrcTitleInput">Song Title</label>
+                <input type="text" id="lrcTitleInput" placeholder="Track title">
+              </div>
+
+              <div class="config-group">
+                <label for="lrcArtistInput">Artist</label>
+                <input type="text" id="lrcArtistInput" placeholder="Artist name">
+              </div>
+
+              <div class="config-group">
+                <label for="lrcOffsetMs">Sync Offset (ms)</label>
+                <input type="number" id="lrcOffsetMs" value="0" step="50">
+              </div>
+
+              <div class="config-group">
+                <label for="lrcTrackerSelect">Tracker</label>
+                <select id="lrcTrackerSelect">
+                  <option value="bytetrack" selected>ByteTrack (Recommended)</option>
+                  <option value="greedy">Greedy</option>
+                </select>
+              </div>
+
+              <div class="config-group">
+                <label for="lrcCorrectSelect">OCR Text Correction</label>
+                <select id="lrcCorrectSelect">
+                  <option value="frequency" selected>Frequency / Medoid</option>
+                  <option value="levenshtein">Levenshtein Alignment</option>
+                  <option value="raw">Raw (No correction)</option>
+                </select>
+              </div>
+
+              <div class="config-group">
+                <label for="lrcReferencePath">Reference Lyrics File</label>
+                <input type="text" id="lrcReferencePath" placeholder="Path to .lrc or .txt file">
+              </div>
+
+              <div class="config-group">
+                <label for="lrcLoadPath">Load Existing .LRC</label>
+                <div class="inline-input-btn">
+                  <input type="text" id="lrcLoadPath" placeholder="outputs/.../song.lrc">
+                  <button type="button" id="lrcLoadBtn" class="mini-btn">Load</button>
+                </div>
+              </div>
+
+              <div class="config-group config-group-action">
+                <label>Dataset Artifacts</label>
+                <button type="button" id="lrcToggleDatasetsBtn" class="secondary-btn compact-btn">Show Dataset Runs</button>
               </div>
             </div>
-            <select id="lrcArtifactSelect">
-              <option value="">-- Choose Existing Artifact Directory --</option>
-            </select>
-          </div>
 
-          <div class="config-group" style="grid-column: span 2;">
-            <label for="lrcLoadPath">Side-by-side Test: Load Existing .LRC</label>
-            <div style="display:flex; gap:6px;">
-              <input type="text" id="lrcLoadPath" placeholder="lyra_output/.../song.lrc">
-              <button type="button" id="lrcLoadBtn" class="mini-btn">Load</button>
+            <div class="advanced-flags">
+              <label class="checkbox-row" title="Snap start timestamp to visual subtitle onset using difference peaks">
+                <input type="checkbox" id="lrcRefineTiming" checked>
+                <span>Refine Visual Timing</span>
+              </label>
+              <label class="checkbox-row" title="Include medium-confidence cues needing auditor review">
+                <input type="checkbox" id="lrcIncludeReview">
+                <span>Include Review Cues</span>
+              </label>
+              <label class="checkbox-row" title="Bypass cache and force-rerun extraction">
+                <input type="checkbox" id="lrcForceRerun" checked>
+                <span>Force Re-run</span>
+              </label>
+              <label class="checkbox-row" title="Disable automatic fallback to YouTube captions when LRCLIB has no lyrics.">
+                <input type="checkbox" id="lrcNoCaptionFallback">
+                <span>No Caption Fallback</span>
+              </label>
             </div>
           </div>
-
-          <div class="config-group" style="grid-column: span 2;">
-            <label for="lrcVideoInput">Or Video File Path / YouTube URL (Auto-download & process):</label>
-            <input type="text" id="lrcVideoInput" placeholder="https://www.youtube.com/watch?v=... or local path outputs/raw/song.mp4">
-          </div>
-
-          <div class="config-group" style="grid-column: span 2;">
-            <label for="lrcReferencePath">Reference Lyrics File (.lrc/.txt, optional):</label>
-            <input type="text" id="lrcReferencePath" placeholder="Path to trusted lyrics used to repair OCR text">
-          </div>
-
-          <div class="config-group" style="grid-column: span 2; display: flex; flex-direction: row; gap: 1.5rem; justify-content: flex-end; align-items: center;">
-            <label class="checkbox-row" title="Look up lyrics on lrclib.net, with automatic fallback to YouTube captions if LRCLIB is unavailable.">
-              <input type="checkbox" id="lrcUseReference">
-              <span>Auto reference lyrics (LRCLIB, YouTube captions fallback)</span>
-            </label>
-            <label class="checkbox-row" title="Disable automatic fallback to YouTube captions when LRCLIB has no lyrics.">
-              <input type="checkbox" id="lrcNoCaptionFallback">
-              <span>No caption fallback</span>
-            </label>
-          </div>
-
-          <div class="config-group">
-            <label for="lrcTrackerSelect">Tracker:</label>
-            <select id="lrcTrackerSelect">
-              <option value="bytetrack" selected>ByteTrack (Recommended)</option>
-              <option value="greedy">Greedy</option>
-            </select>
-          </div>
-
-          <div class="config-group">
-            <label for="lrcCorrectSelect">OCR Text Correction:</label>
-            <select id="lrcCorrectSelect">
-              <option value="frequency" selected>Frequency / Medoid</option>
-              <option value="levenshtein">Levenshtein Alignment</option>
-              <option value="raw">Raw (No correction)</option>
-            </select>
-          </div>
-
-          <div class="config-group">
-            <label for="lrcTitleInput">Song Title (Metadata):</label>
-            <input type="text" id="lrcTitleInput" placeholder="Title">
-          </div>
-
-          <div class="config-group">
-            <label for="lrcArtistInput">Artist (Metadata):</label>
-            <input type="text" id="lrcArtistInput" placeholder="Artist">
-          </div>
-
-          <div class="config-group">
-            <label for="lrcOffsetMs">Sync Offset (ms):</label>
-            <input type="number" id="lrcOffsetMs" value="0" step="50" style="width:100%">
-          </div>
-
-          <div class="config-flags" style="grid-column: span 3;">
-            <label class="checkbox-row" title="Snap start timestamp to visual subtitle onset using difference peaks">
-              <input type="checkbox" id="lrcRefineTiming" checked>
-              <span>Refine Visual Timing</span>
-            </label>
-            <label class="checkbox-row" title="Include medium-confidence cues needing auditor review">
-              <input type="checkbox" id="lrcIncludeReview">
-              <span>Include Review Cues</span>
-            </label>
-            <label class="checkbox-row" title="Bypass cache and force-rerun extraction">
-              <input type="checkbox" id="lrcForceRerun" checked>
-              <span>Force Re-run</span>
-            </label>
-          </div>
-        </div>
-
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-top:14px; gap:16px;">
-          <div id="lrcStatusBanner" class="status-banner" style="display:none"></div>
-          <div style="display:flex; gap:10px; margin-left:auto;">
-            <button type="button" id="lrcResetStudioBtn" style="padding:10px 16px; font-size:13px;" title="Reset studio view and clear inputs">
-              🧹 Reset View
-            </button>
-            <button id="lrcGenerateBtn" class="primary" style="padding:10px 24px; font-size:14px;">
-              ▶ Generate LRC
-            </button>
-          </div>
-        </div>
+        </details>
       </div>
 
-      <!-- Studio Workspace (split view) -->
-      <div id="studioMainContainer" class="studio-workspace" style="display:none">
+      <!-- Studio Workspace (Always-visible 2-column split view) -->
+      <div id="studioMainContainer" class="studio-workspace">
 
         <!-- Left: Synchronized Karaoke Player & Visualizer -->
         <div class="studio-left-panel">
           <div class="panel-header">
-            <span>Karaoke Preview & Timing</span>
+            <span class="panel-title">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polygon points="10 8 16 12 10 16 10 8"></polygon>
+              </svg>
+              <span>Karaoke Preview &amp; Timing</span>
+            </span>
           </div>
 
           <div class="studio-video-wrapper" id="studioVideoWrapper" style="display:none">
@@ -166,13 +230,18 @@
           <div class="karaoke-stage-wrapper">
             <div id="studioKaraokeStage" class="karaoke-stage">
               <div class="karaoke-line prev"></div>
-              <div class="karaoke-line active">✦ Press Play to Synchronize ✦</div>
+              <div class="karaoke-line active">Press Play to Synchronize</div>
               <div class="karaoke-line next"></div>
             </div>
           </div>
 
           <div class="studio-player-bar">
-            <button id="studioPlayBtn" class="primary">▶ Play</button>
+            <button type="button" id="studioPlayBtn" class="primary player-play-btn">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <polygon points="6 3 20 12 6 21 6 3"></polygon>
+              </svg>
+              <span>Play</span>
+            </button>
             <span id="studioCurrentTime" class="studio-time-code">00:00.00</span>
             <input type="range" id="studioScrubber" min="0" max="180000" value="0" style="flex:1">
           </div>
@@ -182,27 +251,52 @@
 
         <!-- Right: Interactive Cue Inspector & Raw LRC Editor -->
         <div class="studio-right-panel">
-          <div class="panel-header" style="justify-content:space-between">
-            <div style="display:flex; gap:6px; align-items:center;">
-              <button id="studioTabCues" class="mini-btn active">Cue Inspector</button>
-              <button id="studioTabRaw" class="mini-btn">Raw .LRC</button>
-              <select id="studioLayerSelect" style="display:none; font-size:12px; padding:2px 6px; background:#1e293b; color:#e2e8f0; border:1px solid #475569; border-radius:4px;"></select>
+          <div class="panel-header studio-right-header">
+            <div class="studio-tab-switcher">
+              <button type="button" id="studioTabCues" class="mini-btn active">Cue Inspector</button>
+              <button type="button" id="studioTabRaw" class="mini-btn">Raw .LRC</button>
+              <select id="studioLayerSelect" class="layer-select" style="display:none"></select>
             </div>
-            <div style="display:flex; gap:6px;">
-              <button id="lrcAddCueBtn" class="mini-btn">+ Add Line</button>
-              <button id="lrcSaveBtn" class="mini-btn">💾 Save</button>
-              <button id="lrcCopyBtn" class="mini-btn">📋 Copy</button>
-              <button id="lrcDownloadBtn" class="mini-btn primary">⬇ Download .lrc</button>
+            <div class="studio-editor-actions">
+              <button type="button" id="lrcAddCueBtn" class="mini-btn">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
+                </svg>
+                <span>Add Line</span>
+              </button>
+              <button type="button" id="lrcSaveBtn" class="mini-btn">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path>
+                  <polyline points="17 21 17 13 7 13 7 21"></polyline>
+                  <polyline points="7 3 7 8 15 8"></polyline>
+                </svg>
+                <span>Save</span>
+              </button>
+              <button type="button" id="lrcCopyBtn" class="mini-btn">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span>Copy</span>
+              </button>
+              <button type="button" id="lrcDownloadBtn" class="mini-btn primary">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                <span>Download .lrc</span>
+              </button>
             </div>
           </div>
-
 
           <!-- Cue List Editor -->
           <div id="studioCuesView" class="studio-tab-content">
             <div class="cues-list-header">
-              <span style="width:75px">Timestamp</span>
+              <span style="width:78px">Timestamp</span>
               <span style="flex:1">Lyric Text</span>
-              <span style="width:90px; text-align:right">Confidence</span>
+              <span style="width:94px; text-align:right">Confidence</span>
             </div>
             <div id="studioCuesList" class="cues-list"></div>
           </div>
@@ -219,10 +313,8 @@
   </div>
   <!-- /view-lrc -->
 
-  <!-- Main Body: Review Tracks -->
-  <div class="main-container view" id="view-review">
-
-    <!-- Left Panel: Tracks -->
+  <!-- Hidden Legacy Container: Review Tracks -->
+  <div class="main-container view" id="view-review" style="display:none">
     <div class="left-panel">
       <div class="panel-header">
         <span>Video Tracks (<span id="trackCount">0</span>)</span>
@@ -236,7 +328,6 @@
       <div class="track-list" id="trackList"></div>
     </div>
 
-    <!-- Center Panel: Canvas & Playback -->
     <div class="center-panel">
       <div class="frame-toolbar">
         <div>
@@ -255,9 +346,9 @@
       </div>
 
       <div class="playback-bar">
-        <button id="prevBtn" title="Previous frame (A / Left Arrow)">◀ Prev</button>
-        <button id="playBtn" class="primary" title="Play/Pause (Space)">▶ Play</button>
-        <button id="nextBtn" title="Next frame (D / Right Arrow)">Next ▶</button>
+        <button id="prevBtn" title="Previous frame (A / Left Arrow)">Prev</button>
+        <button id="playBtn" class="primary" title="Play/Pause (Space)">Play</button>
+        <button id="nextBtn" title="Next frame (D / Right Arrow)">Next</button>
         <div class="slider-container">
           <input type="range" id="frameSlider" min="0" max="0" value="0">
         </div>
@@ -269,7 +360,6 @@
       </div>
     </div>
 
-    <!-- Right Panel: Track & Labeling Inspector -->
     <div class="right-panel">
       <div>
         <div class="section-title">Selected Track</div>
@@ -302,28 +392,16 @@
           </div>
 
           <button id="saveLabelBtn" class="primary" style="padding:10px;font-size:14px;margin-top:4px">
-            💾 Save Label (Enter)
+            Save Label (Enter)
           </button>
         </div>
       </div>
-
-      <div>
-        <div class="section-title">Keyboard Shortcuts</div>
-        <div style="font-size:12px;color:var(--text-muted);line-height:1.6">
-          • <kbd>1</kbd> / <kbd>2</kbd> : Lyric / Non-Lyric<br>
-          • <kbd>A</kbd> / <kbd>D</kbd> or <kbd>←</kbd> / <kbd>→</kbd> : Step Frames<br>
-          • <kbd>Space</kbd> : Play / Pause Video<br>
-          • <kbd>E</kbd> : Toggle Tracking Error<br>
-          • <kbd>Enter</kbd> : Save & Advance Track
-        </div>
-      </div>
     </div>
-
   </div>
   <!-- /view-review -->
 
-  <!-- Datasets View -->
-  <div class="view" id="view-datasets">
+  <!-- Hidden Legacy Container: Datasets View -->
+  <div class="view" id="view-datasets" style="display:none">
     <div class="datasets-layout">
       <div class="ds-sidebar">
         <div class="ds-card">
@@ -352,8 +430,8 @@
         </div>
 
         <div class="ds-card">
-          <h4>Local Video Files (workspace-relative paths, one per line)</h4>
-          <textarea id="localPaths" placeholder="outputs/raw/myvideo.mp4&#10;/abs/path/inside/workspace.mp4"></textarea>
+          <h4>Local Video Files</h4>
+          <textarea id="localPaths" placeholder="outputs/raw/myvideo.mp4"></textarea>
         </div>
 
         <div class="ds-card">
@@ -364,24 +442,21 @@
             </div>
           </div>
           <button class="primary" id="downloadBtn">Download selected videos</button>
-          <div style="font-size:11px;color:var(--text-muted)">
-            This only downloads media into the dataset. Create a run in the <strong>Runs</strong> tab to process it.
-          </div>
         </div>
       </div>
 
       <div class="ds-main">
         <div id="dsStats" class="stat-chips"></div>
-        <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
+        <div class="panel-header">
           <span id="dsTitle">No dataset selected</span>
           <span style="display:flex;gap:8px">
-            <button class="mini-btn" id="dsClearJobsBtn" title="Clear completed/failed jobs from view (keeps files on disk)">🧹 Clear Finished</button>
-            <button class="mini-btn danger" id="dsCancelAllBtn" title="Cancel all running and queued jobs">⏹ Cancel All</button>
-            <button class="mini-btn" id="dsRunsBtn">Runs →</button>
-            <button class="mini-btn" id="dsRefreshBtn">↻ Refresh</button>
+            <button class="mini-btn" id="dsClearJobsBtn">Clear Finished</button>
+            <button class="mini-btn danger" id="dsCancelAllBtn">Cancel All</button>
+            <button class="mini-btn" id="dsRunsBtn">Runs</button>
+            <button class="mini-btn" id="dsRefreshBtn">Refresh</button>
           </span>
         </div>
-        <div style="border:1px solid var(--border); border-top:none; border-radius:0 0 var(--radius) var(--radius); overflow:auto; max-height: calc(100vh - 240px)">
+        <div>
           <table class="data-table" id="dsVideoTable"></table>
         </div>
         <div id="dsDetailError" style="font-size:12px;color:var(--channel)"></div>
@@ -389,8 +464,8 @@
     </div>
   </div>
 
-  <!-- Runs View -->
-  <div class="view" id="view-runs">
+  <!-- Hidden Legacy Container: Runs View -->
+  <div class="view" id="view-runs" style="display:none">
     <div class="datasets-layout">
       <div class="ds-sidebar">
         <div class="ds-card">
@@ -420,10 +495,10 @@
             <div>Rec batch <input type="number" id="runRecBatch" value="8" step="1" min="1" max="64"></div>
           </div>
           <label class="checkbox-row">
-            <input type="checkbox" id="runDedup"> Frame dedup (reuse OCR for near-identical frames)
+            <input type="checkbox" id="runDedup"> Frame dedup
           </label>
           <label class="checkbox-row">
-            <input type="checkbox" id="runForce"> Force re-run (reprocess finished videos)
+            <input type="checkbox" id="runForce"> Force re-run
           </label>
           <button class="primary" id="runCreateBtn">+ Create run</button>
         </div>
@@ -434,24 +509,24 @@
           <div id="runMeta" style="font-size:11px;color:var(--text-muted)"></div>
           <button class="primary" id="runQueueAllBtn">Queue all videos</button>
           <button id="runQueueMissingBtn">Queue missing videos</button>
-          <button class="danger" id="runCancelAllBtn" title="Cancel all queued and running jobs in this dataset">⏹ Cancel all jobs</button>
-          <button class="danger" id="runDeleteBtn" title="Delete selected run and its output artifacts">🗑 Delete run</button>
-          <button id="runPromoteBtn" title="Copy labels from this run into canonical dataset ground truth">Promote labels to Ground Truth</button>
-          <button id="runEvalBtn">Eval this run →</button>
+          <button class="danger" id="runCancelAllBtn">Cancel all jobs</button>
+          <button class="danger" id="runDeleteBtn">Delete run</button>
+          <button id="runPromoteBtn">Promote labels to Ground Truth</button>
+          <button id="runEvalBtn">Eval this run</button>
         </div>
       </div>
 
       <div class="ds-main">
         <div id="runStats" class="stat-chips"></div>
-        <div class="panel-header" style="border:1px solid var(--border); border-radius:var(--radius) var(--radius) 0 0; background:var(--bg-panel); padding:10px 14px;">
+        <div class="panel-header">
           <span id="runTitle">No run selected</span>
           <span style="display:flex;gap:8px">
-            <button class="mini-btn danger" id="runTableDeleteBtn" title="Delete selected run">🗑 Delete Run</button>
-            <button class="mini-btn danger" id="runTableCancelAllBtn" title="Cancel all queued and running jobs">⏹ Cancel All</button>
-            <button class="mini-btn" id="runRefreshBtn">↻ Refresh</button>
+            <button class="mini-btn danger" id="runTableDeleteBtn">Delete Run</button>
+            <button class="mini-btn danger" id="runTableCancelAllBtn">Cancel All</button>
+            <button class="mini-btn" id="runRefreshBtn">Refresh</button>
           </span>
         </div>
-        <div style="border:1px solid var(--border); border-top:none; border-radius:0 0 var(--radius) var(--radius); overflow:auto; max-height: calc(100vh - 240px)">
+        <div>
           <table class="data-table" id="runVideoTable"></table>
         </div>
         <div id="runDetailError" style="font-size:12px;color:var(--channel)"></div>
@@ -459,8 +534,8 @@
     </div>
   </div>
 
-  <!-- Eval View -->
-  <div class="view" id="view-eval">
+  <!-- Hidden Legacy Container: Eval View -->
+  <div class="view" id="view-eval" style="display:none">
     <div class="eval-layout">
       <div class="eval-toolbar">
         <label style="color:var(--text-muted);font-size:12px" for="evalDatasetSelect">Dataset:</label>
@@ -470,16 +545,11 @@
         <button class="primary" id="evalRunBtn">Run Evaluation</button>
         <span id="evalStatus" style="font-size:12px;color:var(--text-muted)"></span>
       </div>
-      <div id="evalContent">
-        <div style="color:var(--text-muted);font-style:italic;padding:30px">
-          Select a dataset and run. Ground truth comes from the dataset, not from individual runs.
-        </div>
-      </div>
+      <div id="evalContent"></div>
     </div>
   </div>
 
   <div id="toast">Label Saved Successfully!</div>
-
 
   <script type="module" src="/js/main.js"></script>
 </body>

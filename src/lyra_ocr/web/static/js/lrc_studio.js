@@ -26,6 +26,14 @@ let studioVideo = null;
 let allRawArtifacts = [];
 let showDatasetRuns = false;
 
+const ICON_PLAY = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`;
+const ICON_PAUSE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
+const ICON_CLOSE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+const ICON_FILE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline></svg>`;
+const ICON_GLOBE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>`;
+const ICON_WARN = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>`;
+const ICON_CACHE = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>`;
+
 export async function initLrcStudio() {
   await loadArtifactOptions();
   bindStudioEvents();
@@ -92,13 +100,15 @@ function renderArtifactDropdown() {
     toggleBtn.textContent = showDatasetRuns
       ? `Hide Dataset Runs (${datasetRuns.length})`
       : `Show Dataset Runs (${datasetRuns.length})`;
-    toggleBtn.style.display = datasetRuns.length ? "" : "none";
+    const container = toggleBtn.closest(".config-group") || toggleBtn;
+    container.style.display = datasetRuns.length ? "" : "none";
   }
 
   const restoreBtn = document.getElementById("lrcRestoreHiddenBtn");
   if (restoreBtn) {
     restoreBtn.style.display = hidden.size > 0 ? "" : "none";
-    restoreBtn.textContent = `↺ Restore ${hidden.size} Hidden`;
+    restoreBtn.title = `Restore ${hidden.size} hidden artifact(s)`;
+    restoreBtn.setAttribute("aria-label", restoreBtn.title);
   }
 }
 
@@ -151,7 +161,7 @@ export function resetStudioView() {
   const statsBar = document.getElementById("studioStatsBar");
   if (statsBar) statsBar.innerHTML = "";
   const mainCont = document.getElementById("studioMainContainer");
-  if (mainCont) mainCont.style.display = "none";
+  if (mainCont) mainCont.style.display = "grid";
 
   renderCuesList();
   renderKaraokeView();
@@ -170,8 +180,11 @@ function bindStudioEvents() {
   if (artSelect && !artSelect.dataset.bound) {
     artSelect.dataset.bound = "true";
     artSelect.addEventListener("change", () => {
-      if (artSelect.value) {
-        document.getElementById("lrcVideoInput").value = "";
+      const selectedDir = artSelect.value.trim();
+      if (selectedDir) {
+        const videoInput = document.getElementById("lrcVideoInput");
+        if (videoInput) videoInput.value = "";
+        tryLoadExistingArtifactLrc(selectedDir);
       }
     });
   }
@@ -364,19 +377,19 @@ function attachVideoEvents() {
     clearInterval(playTimer);
     startVideoSyncLoop();
     const btn = document.getElementById("studioPlayBtn");
-    if (btn) btn.innerHTML = "⏸ Pause";
+    if (btn) btn.innerHTML = `${ICON_PAUSE}<span>Pause</span>`;
   });
   studioVideo.addEventListener("pause", () => {
     isPlaying = false;
     stopVideoSyncLoop();
     const btn = document.getElementById("studioPlayBtn");
-    if (btn) btn.innerHTML = "▶ Play";
+    if (btn) btn.innerHTML = `${ICON_PLAY}<span>Play</span>`;
   });
   studioVideo.addEventListener("ended", () => {
     isPlaying = false;
     stopVideoSyncLoop();
     const btn = document.getElementById("studioPlayBtn");
-    if (btn) btn.innerHTML = "▶ Play";
+    if (btn) btn.innerHTML = `${ICON_PLAY}<span>Play</span>`;
   });
 }
 
@@ -424,6 +437,64 @@ function parseLrcText(text) {
   return cues;
 }
 
+function applyLoadedLrcData(data, { artifactDir = "", fallbackOutLrc = "" } = {}) {
+  currentCues = Array.isArray(data.cues) && data.cues.length ? data.cues : parseLrcText(data.lrc_text || "");
+  currentMetadata = data.metadata || { title: "", artist: "", album: "", by: "Lyra OCR", offset_ms: 0 };
+  currentLrcText = data.lrc_text || "";
+  currentOutLrc = data.path || fallbackOutLrc;
+  currentArtifactDir = artifactDir;
+  currentVideoPath = data.video_path || "";
+  playbackTimeMs = 0;
+  setVideoSource(currentVideoPath);
+  maxDurationMs = currentCues.length
+    ? Math.max(...currentCues.map(c => c.end_ms || c.start_ms)) + 5000
+    : 180000;
+  const scrubber = document.getElementById("studioScrubber");
+  if (scrubber) scrubber.max = maxDurationMs;
+
+  allLayers = data.layers || [];
+  if (data.selected_layer_id !== undefined && data.selected_layer_id !== null) {
+    selectedLayerId = String(data.selected_layer_id);
+  }
+  renderLayerSelector(allLayers, data.primary_lang);
+  renderCuesList();
+  renderKaraokeView();
+  syncCuesToRawLrc();
+  const mainCont = document.getElementById("studioMainContainer");
+  if (mainCont) mainCont.style.display = "grid";
+}
+
+async function tryLoadExistingArtifactLrc(artDir) {
+  const dirName = basename(artDir);
+  if (!dirName) return;
+  const candidates = [`${artDir}/${dirName}.lrc`, `${artDir}/${dirName}.cues.json`];
+
+  for (const candidate of candidates) {
+    try {
+      const res = await fetch(`/api/lrc?path=${encodeURIComponent(candidate)}`);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const outLrc = candidate.endsWith(".cues.json")
+        ? `${artDir}/${dirName}.lrc`
+        : (data.path || candidate);
+      applyLoadedLrcData(data, { artifactDir: artDir, fallbackOutLrc: outLrc });
+      updateStatsSummary({
+        n_cues: currentCues.length,
+        n_skipped: 0,
+        review_required: currentCues.filter(c => c.review_required).length,
+        layers: data.layers || [],
+        cached: true,
+        out_lrc: outLrc,
+      });
+      showStatus(`Loaded cached LRC (${currentCues.length} cues).`, "success");
+      return;
+    } catch (_) {
+      // Ignore probe error and try next candidate
+    }
+  }
+  showStatus(`Selected ${dirName} — click Generate LRC to build synchronized lyrics.`, "info");
+}
+
 async function handleLoadLrc() {
   const input = document.getElementById("lrcLoadPath");
   const lrcPath = (input ? input.value : "").trim();
@@ -437,29 +508,7 @@ async function handleLoadLrc() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || "Failed to load LRC");
 
-    currentCues = Array.isArray(data.cues) && data.cues.length ? data.cues : parseLrcText(data.lrc_text || "");
-    currentMetadata = data.metadata || { title: "", artist: "", album: "", by: "Lyra OCR", offset_ms: 0 };
-    currentLrcText = data.lrc_text || "";
-    currentOutLrc = data.path || lrcPath;
-    currentArtifactDir = "";
-    currentVideoPath = data.video_path || "";
-    playbackTimeMs = 0;
-    setVideoSource(currentVideoPath);
-    maxDurationMs = currentCues.length
-      ? Math.max(...currentCues.map(c => c.end_ms || c.start_ms)) + 5000
-      : 180000;
-    const scrubber = document.getElementById("studioScrubber");
-    if (scrubber) scrubber.max = maxDurationMs;
-
-    allLayers = data.layers || [];
-    if (data.selected_layer_id !== undefined && data.selected_layer_id !== null) {
-      selectedLayerId = String(data.selected_layer_id);
-    }
-    renderLayerSelector(allLayers, data.primary_lang);
-    renderCuesList();
-    renderKaraokeView();
-    syncCuesToRawLrc();
-    document.getElementById("studioMainContainer").style.display = "grid";
+    applyLoadedLrcData(data, { artifactDir: "", fallbackOutLrc: lrcPath });
     showStatus(
       `Loaded ${currentCues.length} cues${currentVideoPath ? " with video" : " (no video path found)"}.`,
       "success"
@@ -556,7 +605,7 @@ async function handleGenerateLrc() {
     showStatus(`Error: ${err.message}`, "error");
   } finally {
     genBtn.disabled = false;
-    genBtn.innerHTML = "▶ Generate LRC";
+    genBtn.innerHTML = `${ICON_PLAY}<span>Generate LRC</span>`;
   }
 }
 
@@ -624,17 +673,17 @@ function updateStatsSummary(data) {
   const hasRef = (data.n_reference_matches || 0) > 0 || (data.n_reference_gap_fills || 0) > 0;
   const isCaption = Boolean(data.reference_source && data.reference_source.includes("caption"));
   const layerBadges = (data.layers && data.layers.length > 1)
-    ? data.layers.map(l => `<span class="stat-badge" title="${escapeHtml(l.path || "")}">🌐 ${basename(l.path || "")} <strong>${l.lang}</strong> (${l.n_cues})</span>`).join(" ")
+    ? data.layers.map(l => `<span class="stat-badge" title="${escapeHtml(l.path || "")}">${ICON_GLOBE} ${basename(l.path || "")} <strong>${escapeHtml(l.lang)}</strong> (${l.n_cues})</span>`).join(" ")
     : "";
   container.innerHTML = `
     <span class="stat-badge"><strong>${data.n_cues || 0}</strong> Accepted Cues</span>
     <span class="stat-badge"><strong>${data.n_skipped || 0}</strong> Filtered Distractors</span>
     <span class="stat-badge ${data.review_required > 0 ? "warning" : ""}"><strong>${data.review_required || 0}</strong> Review Flags</span>
     ${layerBadges}
-    ${data.cached ? `<span class="stat-badge warning">♻️ Loaded from cached LRC</span>` : ""}
-    ${hasRef ? `<span class="stat-badge"><strong>${data.n_reference_matches || 0}</strong> Ref Matches, <strong>${data.n_reference_gap_fills || 0}</strong> Gap Fills (${data.reference_source || "ref"})</span>` : ""}
-    ${isCaption ? `<span class="stat-badge warning">⚠️ ASR caption fallback used</span>` : ""}
-    <span class="stat-badge file-path" title="${data.out_lrc}">📄 ${basename(data.out_lrc)}</span>
+    ${data.cached ? `<span class="stat-badge warning">${ICON_CACHE} Loaded from cached LRC</span>` : ""}
+    ${hasRef ? `<span class="stat-badge"><strong>${data.n_reference_matches || 0}</strong> Ref Matches, <strong>${data.n_reference_gap_fills || 0}</strong> Gap Fills (${escapeHtml(data.reference_source || "ref")})</span>` : ""}
+    ${isCaption ? `<span class="stat-badge warning">${ICON_WARN} ASR caption fallback used</span>` : ""}
+    ${data.out_lrc ? `<span class="stat-badge file-path" title="${escapeHtml(data.out_lrc)}">${ICON_FILE} ${escapeHtml(basename(data.out_lrc))}</span>` : ""}
   `;
 }
 
@@ -657,9 +706,8 @@ function renderCuesList() {
     row.dataset.idx = actualIdx;
 
     const timeTag = formatTimestamp(cue.start_ms);
-    const endTag = formatTimestamp(cue.end_ms);
     const layerBadge = (cue.layer_id !== undefined && cue.layer_id !== null && allLayers.length > 1)
-      ? `<span class="cue-tag" style="background:#334155;color:#94a3b8;font-size:10px;margin-right:4px;">L${cue.layer_id}:${cue.lang || 'und'}</span>`
+      ? `<span class="cue-tag" style="background:#334155;color:#94a3b8;font-size:10px;margin-right:4px;">L${cue.layer_id}:${escapeHtml(cue.lang || 'und')}</span>`
       : '';
 
     row.innerHTML = `
@@ -672,13 +720,14 @@ function renderCuesList() {
       <div class="cue-meta">
         <span class="chip-conf ${cue.confidence >= 0.9 ? 'high' : 'med'}">${Math.round((cue.confidence || 0) * 100)}%</span>
         ${cue.review_required ? '<span class="chip-rev">REV</span>' : ''}
-        <button class="mini-btn danger cue-del-btn" title="Remove line" data-idx="${actualIdx}">✕</button>
+        <button type="button" class="mini-btn danger cue-del-btn" title="Remove line" aria-label="Remove line" data-idx="${actualIdx}">${ICON_CLOSE}</button>
       </div>
     `;
 
     row.querySelector(".cue-time").addEventListener("click", () => seekTo(cue.start_ms));
     row.querySelector(".cue-text-input").addEventListener("input", (e) => {
       currentCues[actualIdx].text = e.target.value;
+      currentCues[actualIdx].words = [];
       renderKaraokeView();
       syncCuesToRawLrc();
     });
@@ -723,23 +772,39 @@ function renderKaraokeView() {
     nextLocalIdx = activeCues.findIndex(c => c.start_ms > effectiveTimeMs);
   }
 
+  const activeCueObj = localIdx >= 0 ? activeCues[localIdx] : null;
   const prevText = localIdx > 0
     ? activeCues[localIdx - 1].text
     : (nextLocalIdx > 0 ? activeCues[nextLocalIdx - 1].text : "");
-  const currText = localIdx >= 0
-    ? activeCues[localIdx].text
-    : (activeCues.length > 0 ? "♪ (Instrumental) ♪" : "(No lyrics loaded)");
+  const currText = activeCueObj
+    ? activeCueObj.text
+    : (activeCues.length > 0 ? "Instrumental" : "Press Play to Synchronize");
   const nextText = localIdx >= 0
     ? (localIdx < activeCues.length - 1 ? activeCues[localIdx + 1].text : "")
     : (nextLocalIdx >= 0 ? activeCues[nextLocalIdx].text : "");
 
+  let activeLineHtml = escapeHtml(currText);
+  if (activeCueObj && Array.isArray(activeCueObj.words) && activeCueObj.words.length > 0) {
+    const wordSpans = activeCueObj.words
+      .map((w) => {
+        const wordText = String(w.word ?? w.text ?? "").trim();
+        if (!wordText) return "";
+        const wordStart = typeof w.start_ms === "number" ? w.start_ms : activeCueObj.start_ms;
+        const sungClass = effectiveTimeMs >= wordStart ? " sung" : "";
+        return `<span class="karaoke-word${sungClass}">${escapeHtml(wordText)}</span>`;
+      })
+      .filter(Boolean);
+    if (wordSpans.length > 0) {
+      activeLineHtml = wordSpans.join(" ");
+    }
+  }
+
   karaokeBox.innerHTML = `
     <div class="karaoke-line prev">${escapeHtml(prevText)}</div>
-    <div class="karaoke-line active">✦ ${escapeHtml(currText)}</div>
+    <div class="karaoke-line active">${activeLineHtml}</div>
     <div class="karaoke-line next">${escapeHtml(nextText)}</div>
   `;
 
-  const activeCueObj = localIdx >= 0 ? activeCues[localIdx] : null;
   const activeActualIdx = activeCueObj ? currentCues.indexOf(activeCueObj) : -1;
 
   let activeRowEl = null;
@@ -887,10 +952,10 @@ function togglePlayback() {
   if (isPlaying) {
     clearInterval(playTimer);
     isPlaying = false;
-    if (btn) btn.innerHTML = "▶ Play";
+    if (btn) btn.innerHTML = `${ICON_PLAY}<span>Play</span>`;
   } else {
     isPlaying = true;
-    if (btn) btn.innerHTML = "⏸ Pause";
+    if (btn) btn.innerHTML = `${ICON_PAUSE}<span>Pause</span>`;
     const startReal = performance.now();
     const startPlayback = playbackTimeMs;
     playTimer = setInterval(() => {

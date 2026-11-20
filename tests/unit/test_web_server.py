@@ -67,6 +67,12 @@ def test_web_server_index_html(make_web_server, tmp_path):
         assert resp.status == 200
         content = resp.read().decode("utf-8")
         assert "LYRA OCR" in content
+        assert "LRC Studio" in content
+        assert "lrcVideoInput" in content
+        assert "lrcArtifactSelect" in content
+        assert "lrcGenerateBtn" in content
+        assert "advanced-drawer" in content
+        assert "studioMainContainer" in content
         assert "frameCanvas" in content
         assert "/js/main.js" in content
 
