@@ -1167,6 +1167,119 @@ def test_dedupe_merges_same_track_long_gap_when_asr_shows_continuation():
     assert result[0].source_track_ids == [5]
 
 
+def test_dedupe_blocks_same_track_long_gap_on_intervening_cue_or_asr_restart():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+
+    line_text = "Zankoku ni sugi yuku toki no naka de sagashi motomete ita"
+    cue1 = LyricCue(
+        start_ms=30400,
+        end_ms=31300,
+        text=line_text,
+        source_track_ids=[5],
+        confidence=0.92,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="ja-Latn",
+    )
+    intervening_same_layer = LyricCue(
+        start_ms=32000,
+        end_ms=35000,
+        text="Completely different middle line",
+        source_track_ids=[6],
+        confidence=0.94,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="ja-Latn",
+    )
+    cue2 = LyricCue(
+        start_ms=36440,
+        end_ms=39760,
+        text=line_text,
+        source_track_ids=[5],
+        confidence=0.95,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="ja-Latn",
+    )
+    cont_transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="sagashi motomete ita",
+                start_ms=36440,
+                end_ms=39000,
+                words=[
+                    ASRWord("sagashi", 36500, 37200),
+                    ASRWord("motomete", 37200, 38100),
+                    ASRWord("ita", 38100, 38900),
+                ],
+            )
+        ],
+    )
+
+    # 1. Intervening cue on the SAME layer blocks the long-gap (5140ms) merge
+    res_intervening = dedupe_and_group(
+        [cue1, intervening_same_layer, cue2],
+        asr_transcript=cont_transcript,
+    )
+    assert len(res_intervening) == 3
+    assert [c.start_ms for c in res_intervening] == [30400, 32000, 36440]
+
+    # 2. Intervening cue on a DIFFERENT layer does NOT block the same-layer merge
+    intervening_other_layer = LyricCue(
+        start_ms=32000,
+        end_ms=35000,
+        text="Translation line on layer 2",
+        source_track_ids=[7],
+        confidence=0.94,
+        y_center=0.15,
+        bbox=[100, 100, 900, 150],
+        layer_id=2,
+        lang="en",
+    )
+    res_diff_layer = dedupe_and_group(
+        [
+            LyricCue(start_ms=30400, end_ms=31300, text=line_text, source_track_ids=[5], confidence=0.92, y_center=0.85, bbox=[100, 600, 900, 650], layer_id=1, lang="ja-Latn"),
+            intervening_other_layer,
+            LyricCue(start_ms=36440, end_ms=39760, text=line_text, source_track_ids=[5], confidence=0.95, y_center=0.85, bbox=[100, 600, 900, 650], layer_id=1, lang="ja-Latn"),
+        ],
+        asr_transcript=cont_transcript,
+    )
+    layer1_cues = [c for c in res_diff_layer if c.layer_id == 1]
+    assert len(layer1_cues) == 1
+    assert (layer1_cues[0].start_ms, layer1_cues[0].end_ms) == (30400, 39760)
+
+    # 3. ASR prefix restart blocks the long-gap merge even with no intervening cue
+    restart_transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="zankoku ni sugi",
+                start_ms=36400,
+                end_ms=38000,
+                words=[
+                    ASRWord("zankoku", 36450, 37000),
+                    ASRWord("ni", 37000, 37300),
+                    ASRWord("sugi", 37300, 37800),
+                ],
+            )
+        ],
+    )
+    res_restart = dedupe_and_group(
+        [
+            LyricCue(start_ms=30400, end_ms=31300, text=line_text, source_track_ids=[5], confidence=0.92, y_center=0.85, bbox=[100, 600, 900, 650], layer_id=1, lang="ja-Latn"),
+            LyricCue(start_ms=36440, end_ms=39760, text=line_text, source_track_ids=[5], confidence=0.95, y_center=0.85, bbox=[100, 600, 900, 650], layer_id=1, lang="ja-Latn"),
+        ],
+        asr_transcript=restart_transcript,
+    )
+    assert len(res_restart) == 2
+    assert [c.start_ms for c in res_restart] == [30400, 36440]
+
+
+
 
 
 

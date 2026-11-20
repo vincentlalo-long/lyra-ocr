@@ -262,3 +262,113 @@ def test_asr_has_new_prefix_onset_pre_window_tail_word_masking():
         transcript=transcript,
         first_start_ms=10000,
     ) is True
+
+
+def test_asr_has_new_prefix_onset_continuation_beats_partial_prefix():
+    # Romaji/Latin: ASR has a partial/noisy prefix match (>= 0.65, e.g. "ankok" vs "zankoku" = 0.833)
+    # alongside a much stronger continuation match ("sagashi motomete ita" = 1.0).
+    # best_cont_sim > best_prefix_sim + 0.08 must return False.
+    cue_romaji = "Zankoku ni sugi yuku toki no naka de sagashi motomete ita"
+    cont_transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="ankok sagashi motomete ita",
+                start_ms=36400,
+                end_ms=39000,
+                words=[
+                    ASRWord("ankok", 36450, 36800),
+                    ASRWord("sagashi", 36900, 37500),
+                    ASRWord("motomete", 37500, 38200),
+                    ASRWord("ita", 38200, 38900),
+                ],
+            )
+        ],
+    )
+    assert (
+        asr_has_new_prefix_onset(
+            cue_romaji,
+            second_start_ms=36440,
+            transcript=cont_transcript,
+            first_start_ms=30400,
+        )
+        is False
+    )
+
+    # Prefix restart returns True when ASR matches prefix strongly
+    restart_transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="zankoku ni sugi",
+                start_ms=36400,
+                end_ms=38000,
+                words=[
+                    ASRWord("zankoku", 36450, 37000),
+                    ASRWord("ni", 37000, 37300),
+                    ASRWord("sugi", 37300, 37800),
+                ],
+            )
+        ],
+    )
+    assert (
+        asr_has_new_prefix_onset(
+            cue_romaji,
+            second_start_ms=36440,
+            transcript=restart_transcript,
+            first_start_ms=30400,
+        )
+        is True
+    )
+
+    # CJK: noisy prefix ("残酷の" vs "残酷に" = 0.667 >= 0.65) beaten by tail ("求めていた" = 1.0)
+    cue_cjk = "残酷に過ぎゆく時の中で探し求めていた"
+    cjk_cont_transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="残酷の求めていた",
+                start_ms=36400,
+                end_ms=39000,
+                words=[
+                    ASRWord("残酷の", 36450, 37000),
+                    ASRWord("求めていた", 37100, 38800),
+                ],
+            )
+        ],
+    )
+    assert (
+        asr_has_new_prefix_onset(
+            cue_cjk,
+            second_start_ms=36440,
+            transcript=cjk_cont_transcript,
+            first_start_ms=30400,
+        )
+        is False
+    )
+
+    cjk_restart_transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="残酷に過ぎ",
+                start_ms=36400,
+                end_ms=37800,
+                words=[
+                    ASRWord("残酷", 36450, 37000),
+                    ASRWord("に", 37000, 37200),
+                    ASRWord("過ぎ", 37200, 37700),
+                ],
+            )
+        ],
+    )
+    assert (
+        asr_has_new_prefix_onset(
+            cue_cjk,
+            second_start_ms=36440,
+            transcript=cjk_restart_transcript,
+            first_start_ms=30400,
+        )
+        is True
+    )
+
