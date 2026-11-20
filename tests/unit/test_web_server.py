@@ -989,4 +989,69 @@ def test_artifacts_scope_and_classification(make_web_server, tmp_path: Path):
     assert "datasets/ds1/runs/run_abc/videos/vid1" not in paths
 
 
+def test_lrc_studio_cues_json_fallback_saves_to_lrc():
+    """Regression: loading .cues.json fallback must still target .lrc on Save."""
+    import shutil
+    import subprocess
+
+    node_bin = shutil.which("node")
+    if not node_bin:
+        pytest.skip("node not available")
+
+    studio_js = REPO_ROOT / "src" / "lyra_ocr" / "web" / "static" / "js" / "lrc_studio.js"
+    script = f"""
+import assert from "node:assert/strict";
+import {{ pathToFileURL }} from "node:url";
+
+globalThis.document = {{
+  getElementById: () => null,
+  querySelectorAll: () => [],
+}};
+
+let savedPayload = null;
+globalThis.fetch = async (url, opts) => {{
+  if (url.startsWith("/api/lrc?path=")) {{
+    const target = decodeURIComponent(url.split("path=")[1]);
+    if (target.endsWith(".lrc")) {{
+      return {{ ok: false, status: 404, json: async () => ({{ error: "not found" }}) }};
+    }}
+    if (target.endsWith(".cues.json")) {{
+      return {{
+        ok: true,
+        status: 200,
+        json: async () => ({{
+          path: "/ws/" + target,
+          lrc_text: "",
+          cues: [{{ start_ms: 1000, end_ms: 3000, text: "Hello", confidence: 0.95 }}],
+          metadata: {{ title: "", artist: "", offset_ms: 0 }},
+          layers: [],
+        }}),
+      }};
+    }}
+  }}
+  if (url === "/api/lrc/save") {{
+    savedPayload = JSON.parse(opts.body);
+    return {{ ok: true, status: 200, json: async () => ({{ ok: true }}) }};
+  }}
+  throw new Error("Unexpected fetch: " + url);
+}};
+
+const mod = await import(pathToFileURL({json.dumps(str(studio_js))}).href);
+await mod.tryLoadExistingArtifactLrc("outputs/clip");
+await mod.handleSaveLrcChanges();
+
+assert.ok(savedPayload, "Save should have posted to /api/lrc/save");
+assert.equal(savedPayload.out_lrc, "outputs/clip/clip.lrc");
+assert.ok(!savedPayload.out_lrc.endsWith(".cues.json"));
+"""
+    proc = subprocess.run(
+        [node_bin, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node regression check failed:\n{proc.stdout}\n{proc.stderr}"
+
+
+
 

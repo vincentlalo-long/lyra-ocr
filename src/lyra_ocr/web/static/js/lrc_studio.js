@@ -437,11 +437,21 @@ function parseLrcText(text) {
   return cues;
 }
 
-function applyLoadedLrcData(data, { artifactDir = "", fallbackOutLrc = "" } = {}) {
+export function resolveOutLrcPath(dataPath, fallbackOutLrc = "", explicitOutLrc = "") {
+  const normalize = (p) => {
+    const s = String(p || "").trim();
+    return s.endsWith(".cues.json") ? `${s.slice(0, -".cues.json".length)}.lrc` : s;
+  };
+  if (explicitOutLrc) return normalize(explicitOutLrc);
+  const resolvedDataPath = dataPath && !String(dataPath).endsWith(".cues.json") ? String(dataPath) : "";
+  return resolvedDataPath || normalize(fallbackOutLrc);
+}
+
+export function applyLoadedLrcData(data, { artifactDir = "", fallbackOutLrc = "", explicitOutLrc = "" } = {}) {
   currentCues = Array.isArray(data.cues) && data.cues.length ? data.cues : parseLrcText(data.lrc_text || "");
   currentMetadata = data.metadata || { title: "", artist: "", album: "", by: "Lyra OCR", offset_ms: 0 };
   currentLrcText = data.lrc_text || "";
-  currentOutLrc = data.path || fallbackOutLrc;
+  currentOutLrc = resolveOutLrcPath(data.path, fallbackOutLrc, explicitOutLrc);
   currentArtifactDir = artifactDir;
   currentVideoPath = data.video_path || "";
   playbackTimeMs = 0;
@@ -464,7 +474,7 @@ function applyLoadedLrcData(data, { artifactDir = "", fallbackOutLrc = "" } = {}
   if (mainCont) mainCont.style.display = "grid";
 }
 
-async function tryLoadExistingArtifactLrc(artDir) {
+export async function tryLoadExistingArtifactLrc(artDir) {
   const dirName = basename(artDir);
   if (!dirName) return;
   const candidates = [`${artDir}/${dirName}.lrc`, `${artDir}/${dirName}.cues.json`];
@@ -474,10 +484,15 @@ async function tryLoadExistingArtifactLrc(artDir) {
       const res = await fetch(`/api/lrc?path=${encodeURIComponent(candidate)}`);
       if (!res.ok) continue;
       const data = await res.json();
-      const outLrc = candidate.endsWith(".cues.json")
+      const isCuesFallback = candidate.endsWith(".cues.json");
+      const outLrc = isCuesFallback
         ? `${artDir}/${dirName}.lrc`
         : (data.path || candidate);
-      applyLoadedLrcData(data, { artifactDir: artDir, fallbackOutLrc: outLrc });
+      applyLoadedLrcData(data, {
+        artifactDir: artDir,
+        fallbackOutLrc: outLrc,
+        explicitOutLrc: isCuesFallback ? outLrc : "",
+      });
       updateStatsSummary({
         n_cues: currentCues.length,
         n_skipped: 0,
@@ -865,7 +880,7 @@ function handleAddCue() {
   syncCuesToRawLrc();
 }
 
-async function handleSaveLrcChanges() {
+export async function handleSaveLrcChanges() {
   if (!currentOutLrc) {
     showStatus("No active output file to save to.", "error");
     return;
