@@ -609,22 +609,50 @@ def asr_has_new_prefix_onset(
     if not asr_candidates:
         return False
 
-    cue_prefixes: list[str] = []
-    if is_cjk:
+    def _append_word_continuations(
+        words: list[str],
+        *,
+        min_single_len: int = 3,
+        include_joined: bool = False,
+    ) -> None:
+        if len(words) < 2:
+            return
+        tail = words[len(words) // 2 :]
+        cue_continuations.append(" ".join(tail))
+        for j in range(len(tail) - 1):
+            cue_continuations.append(f"{tail[j]} {tail[j + 1]}")
+            if include_joined:
+                cue_continuations.append(f"{tail[j]}{tail[j + 1]}")
+        for tw in tail:
+            if len(tw) >= min_single_len or len(tail) == 1:
+                cue_continuations.append(tw)
 
+    cue_prefixes: list[str] = []
+    cue_continuations: list[str] = []
+    if is_cjk:
         cjk_chars = re.sub(r"\s+", "", cue_clean)
         if len(cjk_chars) >= 4:
             cue_prefixes.append(cjk_chars[:4])
         if len(cjk_chars) >= 3:
             cue_prefixes.append(cjk_chars[:3])
         cue_prefixes.append(cjk_chars)
+        if len(cjk_chars) >= 4:
+            tail_chars = cjk_chars[len(cjk_chars) // 2 :]
+            cue_continuations.append(tail_chars)
+            if len(tail_chars) >= 4:
+                cue_continuations.append(tail_chars[:4])
+                cue_continuations.append(tail_chars[-4:])
+            if len(tail_chars) >= 3:
+                cue_continuations.append(tail_chars[:3])
+                cue_continuations.append(tail_chars[-3:])
         c_words = cue_clean.split()
         if c_words:
             cue_prefixes.append(c_words[0])
             if len(c_words) >= 2:
                 cue_prefixes.append(f"{c_words[0]} {c_words[1]}")
                 cue_prefixes.append(f"{c_words[0]}{c_words[1]}")
-        # Also support romanized Japanese prefix if available
+                _append_word_continuations(c_words, min_single_len=2, include_joined=True)
+        # Also support romanized Japanese prefix and continuation if available
         kks_text = _romanize_ja_text(cue_clean)
         if kks_text:
             kks_clean = _clean_match_str(kks_text)
@@ -633,22 +661,32 @@ def asr_has_new_prefix_onset(
                 cue_prefixes.append(kks_words[0])
                 if len(kks_words) >= 2:
                     cue_prefixes.append(f"{kks_words[0]} {kks_words[1]}")
+                    _append_word_continuations(kks_words)
     else:
         cue_words = cue_clean.split()
         if cue_words:
             cue_prefixes.append(cue_words[0])
             if len(cue_words) >= 2:
                 cue_prefixes.append(f"{cue_words[0]} {cue_words[1]}")
+                _append_word_continuations(cue_words)
 
     from lyra_ocr.lyric.reference import line_similarity
 
-    for asr_cand in asr_candidates:
-        for cue_p in cue_prefixes:
-            sim = line_similarity(asr_cand, cue_p)
-            if sim < 0.65:
-                sim = max(sim, SequenceMatcher(None, asr_cand, cue_p).ratio())
-            if sim >= 0.65:
-                return True
+    def _best_target_sim(targets: list[str]) -> float:
+        best = 0.0
+        for asr_cand in asr_candidates:
+            for target in targets:
+                sim = line_similarity(asr_cand, target)
+                if sim < 0.65:
+                    sim = max(sim, SequenceMatcher(None, asr_cand, target).ratio())
+                if sim > best:
+                    best = sim
+        return best
 
-    return False
+    best_prefix_sim = _best_target_sim(cue_prefixes)
+    best_cont_sim = _best_target_sim(cue_continuations) if cue_continuations else 0.0
+    if best_cont_sim > best_prefix_sim + 0.08:
+        return False
+
+    return best_prefix_sim >= 0.65
 

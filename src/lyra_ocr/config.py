@@ -92,6 +92,7 @@ class GroupingThresholds:
     merge_max_start_delta_ms: int = 1500
     merge_overlap_gap_ms: int = 200
     merge_split_max_gap_ms: int = 2500
+    same_track_max_gap_ms: int = 8000
     upgrade_min_extra_chars: int = 3
     upgrade_max_conf_drop: float = 0.05
 

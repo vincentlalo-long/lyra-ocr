@@ -179,6 +179,8 @@ class BaseTracker(ABC):
 
     def finalize(self, video_duration_ms: int = 0) -> list[TextTrack]:
         """Close active tracks, sort chronologically, and compute statistical features."""
+        from lyra_ocr.lyric.select import consolidate_track_segments
+
         for tr in self.active_tracks:
             self.finished_tracks.append(tr)
         self.active_tracks = []
@@ -186,6 +188,21 @@ class BaseTracker(ABC):
         self.finished_tracks.sort(key=lambda t: t.start_ms)
 
         for tr in self.finished_tracks:
+            if len(tr.segments) >= 2:
+                consolidated = consolidate_track_segments([s.to_dict() for s in tr.segments])
+                if len(consolidated) != len(tr.segments):
+                    tr.segments = [
+                        TextSegment(
+                            segment_id=idx,
+                            start_ms=int(s["start_ms"]),
+                            end_ms=int(s["end_ms"]),
+                            text=str(s["text"]),
+                            confidence=float(s["confidence"]),
+                            num_occurrences=int(s["num_occurrences"]),
+                        )
+                        for idx, s in enumerate(consolidated)
+                    ]
+                    tr.n_text_changes = max(0, len(tr.segments) - 1)
             compute_track_features(
                 tr,
                 video_duration_ms=video_duration_ms,

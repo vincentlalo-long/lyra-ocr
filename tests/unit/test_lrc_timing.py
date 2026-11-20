@@ -95,3 +95,78 @@ def test_refine_timings_with_mock_scan(tmp_path: Path):
     assert refined[0].start_ms == 900
     # 2800ms is the last matching frame + frame_interval (40ms) -> 2840ms
     assert refined[0].end_ms == 2840
+
+
+def test_refine_timings_scopes_occurrence_window_and_clamps_inward_shrinkage(tmp_path: Path):
+    import cv2
+
+    video_path = tmp_path / "vid.mp4"
+    video_path.write_bytes(b"data")
+
+    # Frame 0 (in cue window, at y=20..40) vs Frame 1 (outside cue window, higher conf, at y=60..80)
+    frame_in = np.zeros((100, 200, 3), dtype=np.uint8)
+    frame_in[20:40, 20:40] = 255
+    cv2.imwrite(str(tmp_path / "frame_in.jpg"), frame_in)
+
+    frame_out = np.zeros((100, 200, 3), dtype=np.uint8)
+    frame_out[60:80, 20:40] = 255
+    cv2.imwrite(str(tmp_path / "frame_out.jpg"), frame_out)
+
+    frame_index = {
+        "0": {"image_path": "frame_in.jpg", "timestamp_ms": 2000},
+        "1": {"image_path": "frame_out.jpg", "timestamp_ms": 9000},
+    }
+    (tmp_path / "frame_index.json").write_text(json.dumps(frame_index), encoding="utf-8")
+
+    tracks_data = {
+        "tracks": [
+            {
+                "track_id": 1,
+                "occurrences": [
+                    # Inside [1000-500, 5000+500] = [500, 5500]
+                    {"frame_id": 0, "timestamp_ms": 2000, "confidence": 0.90, "bbox": [20, 20, 40, 40]},
+                    # Outside cue window, higher confidence -> MUST NOT be used as template!
+                    {"frame_id": 1, "timestamp_ms": 9000, "confidence": 0.99, "bbox": [20, 60, 40, 80]},
+                ],
+            }
+        ]
+    }
+    (tmp_path / "tracks.json").write_text(json.dumps(tracks_data), encoding="utf-8")
+
+    cue = LyricCue(
+        start_ms=1000,
+        end_ms=5000,  # 4000ms span (> 2000ms)
+        text="LONG CUE",
+        source_track_ids=[1],
+        bbox=[20, 20, 40, 40],
+    )
+
+    # Scan frames only match the in-window template (y=20..40) at 2800..3000ms
+    # Without inward clamp, cue would shrink from [1000, 5000] to [2800, 3040].
+    # With <=1200ms inward clamp, start_ms <= 2200 and end_ms >= 3800.
+    match_in = np.zeros((100, 200, 3), dtype=np.uint8)
+    match_in[20:40, 20:40] = 255
+    no_match = np.zeros((100, 200, 3), dtype=np.uint8)
+
+    mock_packets = [
+        FramePacket(frame_id=10, timestamp_ms=1000, pts_time=1.0, image_path="", image_bgr=no_match, jpeg_bytes=b"", pts_source=""),
+        FramePacket(frame_id=11, timestamp_ms=2800, pts_time=2.8, image_path="", image_bgr=match_in, jpeg_bytes=b"", pts_source=""),
+        FramePacket(frame_id=12, timestamp_ms=3000, pts_time=3.0, image_path="", image_bgr=match_in, jpeg_bytes=b"", pts_source=""),
+        FramePacket(frame_id=13, timestamp_ms=5000, pts_time=5.0, image_path="", image_bgr=no_match, jpeg_bytes=b"", pts_source=""),
+    ]
+
+    with patch("lyra_ocr.lyric.timing.iter_sampled_frames", return_value=iter(mock_packets)):
+        refined = refine_timings(
+            [cue],
+            str(video_path),
+            {"probe": {"duration": 10.0, "width": 200, "height": 100}},
+            str(tmp_path),
+            fps=25.0,
+            window_ms=500,
+            enabled=True,
+        )
+
+    assert len(refined) == 1
+    assert refined[0].start_ms == 2200
+    assert refined[0].end_ms >= 3800
+

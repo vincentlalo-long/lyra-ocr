@@ -81,6 +81,98 @@ def _segment_confidence(seg: dict[str, Any], track: dict[str, Any]) -> float | N
     return None
 
 
+def _seg_occ_count(seg: dict[str, Any]) -> int:
+    n = seg.get("num_occurrences")
+    if n is not None:
+        return int(n)
+    s = int(seg.get("start_ms", 0))
+    e = int(seg.get("end_ms", s))
+    return 1 if e <= s else 2
+
+
+def _segments_text_overlap_score(text_a: str, text_b: str) -> float:
+    """Return positive overlap length when two segment texts share substring/affix fade text."""
+    a = re.sub(r"\s+", "", (text_a or "").lower())
+    b = re.sub(r"\s+", "", (text_b or "").lower())
+    if not a or not b:
+        return 0.0
+    min_len = min(len(a), len(b))
+    if a in b or b in a:
+        return float(min_len)
+    pref = 0
+    while pref < min_len and a[pref] == b[pref]:
+        pref += 1
+    suff = 0
+    while suff < min_len and a[-1 - suff] == b[-1 - suff]:
+        suff += 1
+    best_affix = max(pref, suff)
+    is_cjk = bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]", a + b))
+    min_ratio = 0.35 if is_cjk else 0.70
+    if best_affix >= 10 or best_affix >= min_ratio * min_len:
+        return float(best_affix)
+    return 0.0
+
+
+def consolidate_track_segments(
+    segments: list[dict[str, Any]],
+    max_boundary_gap_ms: int = 1500,
+) -> list[dict[str, Any]]:
+    """Absorb 1-occurrence boundary fade/crossfade segments into adjacent dominant segments."""
+    if len(segments) <= 1:
+        return [dict(s) for s in segments]
+
+    work = sorted(
+        (dict(s) for s in segments),
+        key=lambda s: (int(s.get("start_ms", 0)), int(s.get("end_ms", 0))),
+    )
+
+    changed = True
+    while changed and len(work) > 1:
+        changed = False
+        for i, seg in enumerate(work):
+            s_start = int(seg.get("start_ms", 0))
+            s_end = int(seg.get("end_ms", s_start))
+            s_occ = _seg_occ_count(seg)
+            if not (s_occ <= 1 or s_end <= s_start):
+                continue
+
+            seg_text = str(seg.get("text", ""))
+            seg_compact_len = max(1, len(re.sub(r"\s+", "", seg_text)))
+
+            best_candidate: tuple[float, int, int] | None = None
+            for nb_idx in (i - 1, i + 1):
+                if nb_idx < 0 or nb_idx >= len(work):
+                    continue
+                nb = work[nb_idx]
+                nb_start = int(nb.get("start_ms", 0))
+                nb_end = int(nb.get("end_ms", nb_start))
+                nb_occ = _seg_occ_count(nb)
+                if nb_occ < 2 or nb_end <= nb_start:
+                    continue
+                gap = max(0, s_start - nb_end, nb_start - s_end)
+                if gap > max_boundary_gap_ms:
+                    continue
+                overlap = _segments_text_overlap_score(seg_text, str(nb.get("text", "")))
+                if overlap <= 0.0:
+                    continue
+                cand = (overlap / seg_compact_len, -gap, nb_idx)
+                if best_candidate is None or cand > best_candidate:
+                    best_candidate = cand
+
+            if best_candidate is not None:
+                target = work[best_candidate[2]]
+                target_start = int(target.get("start_ms", 0))
+                target_end = int(target.get("end_ms", target_start))
+                target["start_ms"] = min(target_start, s_start)
+                target["end_ms"] = max(target_end, s_end)
+                target["num_occurrences"] = _seg_occ_count(target) + s_occ
+                work.pop(i)
+                changed = True
+                break
+
+    return work
+
+
 def _quality_gate(
     conf: float | None,
     quality: float,
@@ -169,7 +261,7 @@ def select_cues(
         segments = track.get("segments") or []
         if not isinstance(segments, list):
             segments = []
-        segments = [seg for seg in segments if isinstance(seg, dict)]
+        segments = consolidate_track_segments([seg for seg in segments if isinstance(seg, dict)])
         if not segments:
             fallback_seg: dict[str, Any] = {
                 "segment_id": None,

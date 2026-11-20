@@ -178,11 +178,20 @@ def correct_text(
                 variants.append((norm_seg, seg_conf))
 
         target_seg_id = segment.get("segment_id")
+        seg_start = segment.get("start_ms")
+        seg_end = segment.get("end_ms")
         for occ in track.get("occurrences") or []:
             if not isinstance(occ, dict):
                 continue
-            if target_seg_id is not None and occ.get("segment_id") is not None:
-                if occ.get("segment_id") != target_seg_id:
+            occ_seg_id = occ.get("segment_id")
+            if target_seg_id is not None and occ_seg_id is not None:
+                if occ_seg_id != target_seg_id:
+                    continue
+            elif occ_seg_id is None and seg_start is not None and seg_end is not None:
+                occ_ts = occ.get("timestamp_ms", -1)
+                if occ_ts is None:
+                    occ_ts = -1
+                if not (int(seg_start) <= int(occ_ts) <= int(seg_end)):
                     continue
             t = occ.get("text_norm") or occ.get("text_raw") or occ.get("text", "")
             c = float(occ.get("confidence", 0.0))

@@ -252,4 +252,92 @@ def test_correct_text_protects_romaji_from_english_nlp_repair():
     assert final == "nageku uta mo kikoe nai yo"
 
 
+def test_correct_text_scopes_occurrences_to_segment_time_window():
+    seg0 = {
+        "segment_id": 0,
+        "start_ms": 31000,
+        "end_ms": 31000,
+        "text": "toki no naka de",
+        "confidence": 0.90,
+        "num_occurrences": 1,
+    }
+    seg1 = {
+        "segment_id": 1,
+        "start_ms": 32000,
+        "end_ms": 43000,
+        "text": "Zankoku ni sugi yuku toki no naka de",
+        "confidence": 0.96,
+        "num_occurrences": 12,
+    }
+    occurrences = [{"timestamp_ms": 31000, "text_norm": "toki no naka de", "confidence": 0.90}]
+    for i in range(12):
+        occurrences.append(
+            {
+                "timestamp_ms": 32000 + i * 1000,
+                "text_norm": "Zankoku ni sugi yuku toki no naka de",
+                "confidence": 0.96,
+            }
+        )
+    track = {
+        "track_id": 1,
+        "features": {"dominant_text": "Zankoku ni sugi yuku toki no naka de", "lang": "ja-Latn"},
+        "segments": [seg0, seg1],
+        "occurrences": occurrences,
+    }
+    cfg = CorrectionConfig(method="consensus")
+    final, raw, info = correct_text(track, [track], cfg, segment=seg0)
+    assert final == "toki no naka de"
+
+
+def test_consolidate_track_segments_absorbs_1frame_fade_and_crossfade():
+    from lyra_ocr.lyric.select import consolidate_track_segments
+
+    segments = [
+        # 1-occurrence prefix fade-in within 1500ms of dominant segment
+        {
+            "segment_id": 0,
+            "start_ms": 31000,
+            "end_ms": 31000,
+            "text": "toki no naka de",
+            "confidence": 0.85,
+            "num_occurrences": 1,
+        },
+        # Dominant segment
+        {
+            "segment_id": 1,
+            "start_ms": 32000,
+            "end_ms": 43000,
+            "text": "Zankoku ni sugi yuku toki no naka de",
+            "confidence": 0.96,
+            "num_occurrences": 12,
+        },
+        # 1-occurrence cross-fade suffix within 1500ms of dominant segment (>=10 shared chars)
+        {
+            "segment_id": 2,
+            "start_ms": 43800,
+            "end_ms": 43800,
+            "text": "Zankoku ni sugi yuku xyz",
+            "confidence": 0.80,
+            "num_occurrences": 1,
+        },
+        # Distinct 1-occurrence segment (>1500ms away and unrelated) must NOT be absorbed
+        {
+            "segment_id": 3,
+            "start_ms": 47000,
+            "end_ms": 47000,
+            "text": "Completely separate line",
+            "confidence": 0.92,
+            "num_occurrences": 1,
+        },
+    ]
+    consolidated = consolidate_track_segments(segments)
+    assert len(consolidated) == 2
+    assert consolidated[0]["text"] == "Zankoku ni sugi yuku toki no naka de"
+    assert consolidated[0]["start_ms"] == 31000
+    assert consolidated[0]["end_ms"] == 43800
+    assert consolidated[0]["num_occurrences"] == 14
+    assert consolidated[1]["text"] == "Completely separate line"
+
+
+
 

@@ -80,17 +80,37 @@ def refine_timings(
     refined_indices: set[int] = set()
 
     for cue_idx, cue in enumerate(cues):
-        # Find best occurrence to extract visual template
+        # Find best occurrence to extract visual template, scoped to the cue's time window first
         best_occ = None
         best_conf = -1.0
+        track_occs: list[dict[str, Any]] = []
         for tid in cue.source_track_ids:
             tr = tracks_by_id.get(int(tid))
             if tr:
                 for occ in tr.get("occurrences", []):
-                    c = float(occ.get("confidence", 0.0))
-                    if c > best_conf:
-                        best_conf = c
-                        best_occ = occ
+                    if isinstance(occ, dict):
+                        track_occs.append(occ)
+
+        for occ in track_occs:
+            occ_ts = occ.get("timestamp_ms")
+            if occ_ts is None:
+                occ_fid = str(occ.get("frame_id", ""))
+                occ_ts = frame_index.get(occ_fid, {}).get("timestamp_ms")
+            if occ_ts is None:
+                continue
+            if not (cue.start_ms - 500 <= int(occ_ts) <= cue.end_ms + 500):
+                continue
+            c = float(occ.get("confidence", 0.0))
+            if c > best_conf:
+                best_conf = c
+                best_occ = occ
+
+        if best_occ is None:
+            for occ in track_occs:
+                c = float(occ.get("confidence", 0.0))
+                if c > best_conf:
+                    best_conf = c
+                    best_occ = occ
 
         if not best_occ:
             continue
@@ -181,6 +201,9 @@ def refine_timings(
                 if matching:
                     visual_start = matching[0]
                     visual_end = matching[-1]
+                    if cue.end_ms - cue.start_ms > 2000:
+                        visual_start = min(visual_start, cue.start_ms + 1200)
+                        visual_end = max(visual_end, cue.end_ms - 1200)
                     cue.start_ms = visual_start
                     cue.end_ms = max(visual_start + 300, visual_end + frame_interval_ms)
                     refined_indices.add(cue_idx)

@@ -1119,5 +1119,54 @@ def test_grouping_thresholds_govern_dedupe_and_layer_consolidation():
     )
 
 
+def test_dedupe_merges_same_track_long_gap_when_asr_shows_continuation():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+
+    line_text = "Zankoku ni sugi yuku toki no naka de sagashi motomete ita"
+    cue1 = LyricCue(
+        start_ms=30400,
+        end_ms=31300,
+        text=line_text,
+        source_track_ids=[5],
+        confidence=0.92,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="ja-Latn",
+    )
+    cue2 = LyricCue(
+        start_ms=36440,
+        end_ms=39760,
+        text=line_text,
+        source_track_ids=[5],
+        confidence=0.95,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="ja-Latn",
+    )
+    transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="sagashi motomete ita",
+                start_ms=36440,
+                end_ms=39000,
+                words=[
+                    ASRWord("sagashi", 36500, 37200),
+                    ASRWord("motomete", 37200, 38100),
+                    ASRWord("ita", 38100, 38900),
+                ],
+            )
+        ],
+    )
+    result = dedupe_and_group([cue1, cue2], asr_transcript=transcript)
+    assert len(result) == 1
+    assert result[0].start_ms == 30400
+    assert result[0].end_ms == 39760
+    assert result[0].source_track_ids == [5]
+
+
+
 
 

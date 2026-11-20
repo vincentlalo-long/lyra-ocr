@@ -309,6 +309,8 @@ def _should_merge_duplicate_cue(
     cue: LyricCue,
     asr_transcript: Any,
     cfg: GroupingThresholds,
+    *,
+    has_intervening_same_layer_cue: bool = False,
 ) -> bool:
     """Return True if ``cue`` is a temporal/fade duplicate of ``existing`` in the same layer."""
     if existing.layer_id is not None and cue.layer_id is not None and existing.layer_id != cue.layer_id:
@@ -355,10 +357,19 @@ def _should_merge_duplicate_cue(
         return False
     if fade_transition_match:
         return True
+    same_track_or_band = (
+        bool(set(existing.source_track_ids) & set(cue.source_track_ids))
+        or y_diff < cfg.same_y_band_tolerance
+    )
+    max_gap = (
+        cfg.same_track_max_gap_ms
+        if (not has_intervening_same_layer_cue and same_track_or_band)
+        else cfg.merge_split_max_gap_ms
+    )
     in_merge_window = (
         start_delta <= cfg.merge_max_start_delta_ms
         or gap_ms <= cfg.merge_overlap_gap_ms
-        or gap_ms <= cfg.merge_split_max_gap_ms
+        or gap_ms <= max_gap
     )
     if not in_merge_window:
         return False
@@ -438,10 +449,23 @@ def dedupe_and_group(
     sorted_cues = sorted(cues, key=_cue_sort_key)
     merged: list[LyricCue] = []
     for cue in sorted_cues:
-        matched_idx = next(
-            (i for i, existing in enumerate(merged) if _should_merge_duplicate_cue(existing, cue, asr_transcript, cfg)),
-            -1,
-        )
+        matched_idx = -1
+        for i, existing in enumerate(merged):
+            has_intervening = any(
+                j != i
+                and other.layer_id == existing.layer_id
+                and existing.end_ms <= other.start_ms < cue.start_ms
+                for j, other in enumerate(merged)
+            )
+            if _should_merge_duplicate_cue(
+                existing,
+                cue,
+                asr_transcript,
+                cfg,
+                has_intervening_same_layer_cue=has_intervening,
+            ):
+                matched_idx = i
+                break
         if matched_idx >= 0:
             _merge_cue_into_target(merged[matched_idx], cue, cfg)
         else:
