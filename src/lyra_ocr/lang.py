@@ -71,6 +71,7 @@ LANGUAGE_PROFILES: dict[str, LanguageProfile] = {
     "und": LanguageProfile(
         code="und",
         name="Undetermined",
+        bypass_en_oov_gate=False,
     ),
 }
 

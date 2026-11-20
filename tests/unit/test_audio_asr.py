@@ -511,3 +511,31 @@ def test_align_cues_words_with_asr_romanizes_ja_for_ja_latn():
     assert cue.words[1]["end_ms"] == 2600
 
 
+def test_align_cues_words_with_asr_overlapping_asr_words_stay_monotonic():
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="alpha gamma",
+                start_ms=1000,
+                end_ms=3000,
+                language="en",
+                words=[
+                    ASRWord("alpha", 1000, 2200),
+                    ASRWord("gamma", 1800, 2600),
+                ],
+            )
+        ],
+    )
+    cue = LyricCue(start_ms=1000, end_ms=3000, text="alpha foo gamma", lang="en")
+    n = align_cues_words_with_asr([cue], transcript)
+    assert n == 1
+    assert [w["word"] for w in cue.words] == ["alpha", "foo", "gamma"]
+    for i, w in enumerate(cue.words):
+        assert 1000 <= w["start_ms"] <= w["end_ms"] <= 3000
+        if i > 0:
+            assert cue.words[i - 1]["start_ms"] <= w["start_ms"]
+            assert cue.words[i - 1]["end_ms"] <= w["start_ms"]
+
+
+

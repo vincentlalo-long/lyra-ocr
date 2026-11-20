@@ -1279,6 +1279,55 @@ def test_dedupe_blocks_same_track_long_gap_on_intervening_cue_or_asr_restart():
     assert [c.start_ms for c in res_restart] == [30400, 36440]
 
 
+def test_dedupe_does_not_delete_cue_across_overlapping_intervening_cue():
+    c1 = LyricCue(
+        start_ms=1000,
+        end_ms=5050,
+        text="Hello world first verse",
+        source_track_ids=[1],
+        confidence=0.92,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="en",
+    )
+    c2 = LyricCue(
+        start_ms=5000,
+        end_ms=8000,
+        text="Completely different middle line",
+        source_track_ids=[2],
+        confidence=0.95,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="en",
+    )
+    c3 = LyricCue(
+        start_ms=9000,
+        end_ms=12000,
+        text="Hello world first verse",
+        source_track_ids=[1],
+        confidence=0.94,
+        y_center=0.85,
+        bbox=[100, 600, 900, 650],
+        layer_id=1,
+        lang="en",
+    )
+
+    res = dedupe_and_group([c1, c2, c3])
+    assert len(res) == 3
+    assert [(c.start_ms, c.end_ms) for c in res] == [(1000, 5000), (5000, 8000), (9000, 12000)]
+
+    # Also verify smaller post-intervening gap (<= merge_split_max_gap_ms) does not merge & delete
+    c1b = LyricCue(start_ms=1000, end_ms=5050, text="Hello world first verse", source_track_ids=[1], y_center=0.85, bbox=[100, 600, 900, 650], layer_id=1, lang="en")
+    c2b = LyricCue(start_ms=5000, end_ms=6500, text="Completely different middle line", source_track_ids=[2], y_center=0.85, bbox=[100, 600, 900, 650], layer_id=1, lang="en")
+    c3b = LyricCue(start_ms=7000, end_ms=10000, text="Hello world first verse", source_track_ids=[1], y_center=0.85, bbox=[100, 600, 900, 650], layer_id=1, lang="en")
+    res_short = dedupe_and_group([c1b, c2b, c3b])
+    assert len(res_short) == 3
+    assert [(c.start_ms, c.end_ms) for c in res_short] == [(1000, 5000), (5000, 6500), (7000, 10000)]
+
+
+
 
 
 

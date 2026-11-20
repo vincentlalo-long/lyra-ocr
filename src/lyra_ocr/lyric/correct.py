@@ -5,6 +5,7 @@ import re
 import unicodedata
 from typing import Any, Mapping
 
+from lyra_ocr.lang import get_language_profile
 from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo
 from lyra_ocr.lyric.text_repair import RepairConfig, repair_romaji_confusables, repair_text, text_quality
 from lyra_ocr.track import string_similarity
@@ -332,7 +333,7 @@ def correct_text(
     if not cleaned_final:
         cleaned_final = medoid
 
-    if config.enable_nlp and track_lang == "en" and not _is_cjk(cleaned_final):
+    if config.enable_nlp and get_language_profile(track_lang).allow_symspell_repair and not _is_cjk(cleaned_final):
         repaired = repair_text(
             cleaned_final,
             config=RepairConfig(
@@ -341,6 +342,7 @@ def correct_text(
                 split_penalty=config.nlp_split_penalty,
             ),
             vocab=effective_vocab,
+            lang=track_lang,
         )
         repaired = _normalize_string(repaired)
         if repaired:

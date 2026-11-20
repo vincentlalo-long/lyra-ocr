@@ -23,6 +23,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Mapping
 
+from lyra_ocr.lang import get_language_profile
+
 _LATIN_RANGE = r"A-Za-z\u00c0-\u024f\u1e00-\u1eff"
 _URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 _TOKEN_RE = re.compile(
@@ -440,6 +442,7 @@ def repair_text(
     *,
     config: RepairConfig | None = None,
     vocab: Mapping[str, int] | None = None,
+    lang: str = "en",
 ) -> str:
     """Repair merged words and obvious OCR misspellings in lyric text.
 
@@ -448,6 +451,8 @@ def repair_text(
     """
     cfg = config or RepairConfig()
     if not cfg.enabled or not text or not text.strip():
+        return text
+    if lang and lang != "und" and not get_language_profile(lang).allow_symspell_repair:
         return text
     if _CJK_RE.search(text) or _NON_ASCII_LATIN_RE.search(text):
         # Non-English scripts are preserved as-is; the lexicon is English-only.

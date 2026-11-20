@@ -25,6 +25,7 @@ let studioVideo = null;
 
 let allRawArtifacts = [];
 let showDatasetRuns = false;
+let artifactLoadSeq = 0;
 
 const ICON_PLAY = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>`;
 const ICON_PAUSE = `<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="4" width="4" height="16"></rect><rect x="14" y="4" width="4" height="16"></rect></svg>`;
@@ -112,7 +113,7 @@ function renderArtifactDropdown() {
   }
 }
 
-export function resetStudioView() {
+export function clearLoadedStudioState() {
   stopVideoSyncLoop();
   lastHighlightedIdx = -1;
   currentCues = [];
@@ -125,7 +126,16 @@ export function resetStudioView() {
   selectedLayerId = "all";
   rawDirty = false;
   playbackTimeMs = 0;
+  maxDurationMs = 180000;
   if (isPlaying) togglePlayback();
+
+  const scrubber = document.getElementById("studioScrubber");
+  if (scrubber) {
+    scrubber.max = maxDurationMs;
+    scrubber.value = 0;
+  }
+  const timeLabel = document.getElementById("studioCurrentTime");
+  if (timeLabel) timeLabel.textContent = "00:00.00";
 
   const layerSel = document.getElementById("studioLayerSelect");
   if (layerSel) {
@@ -133,6 +143,17 @@ export function resetStudioView() {
     layerSel.style.display = "none";
   }
 
+  setVideoSource("");
+  const statsBar = document.getElementById("studioStatsBar");
+  if (statsBar) statsBar.innerHTML = "";
+  renderCuesList();
+  renderKaraokeView();
+  syncCuesToRawLrc();
+}
+
+export function resetStudioView() {
+  ++artifactLoadSeq;
+  clearLoadedStudioState();
 
   const artSelect = document.getElementById("lrcArtifactSelect");
   if (artSelect) artSelect.value = "";
@@ -154,18 +175,12 @@ export function resetStudioView() {
   if (refIn) refIn.value = "";
   const refCheck = document.getElementById("lrcUseReference");
   if (refCheck) refCheck.checked = false;
-  setVideoSource("");
 
   const banner = document.getElementById("lrcStatusBanner");
   if (banner) banner.style.display = "none";
-  const statsBar = document.getElementById("studioStatsBar");
-  if (statsBar) statsBar.innerHTML = "";
   const mainCont = document.getElementById("studioMainContainer");
   if (mainCont) mainCont.style.display = "grid";
 
-  renderCuesList();
-  renderKaraokeView();
-  syncCuesToRawLrc();
   showToast("Studio view cleared");
 }
 
@@ -399,9 +414,13 @@ function setVideoSource(path) {
   if (!studioVideo) return;
 
   if (!path) {
-    studioVideo.pause();
-    studioVideo.removeAttribute("src");
-    studioVideo.load();
+    if (typeof studioVideo.pause === "function") studioVideo.pause();
+    if (typeof studioVideo.removeAttribute === "function") {
+      studioVideo.removeAttribute("src");
+    } else {
+      delete studioVideo.src;
+    }
+    if (typeof studioVideo.load === "function") studioVideo.load();
     if (wrapper) wrapper.style.display = "none";
     return;
   }
@@ -463,9 +482,9 @@ export function applyLoadedLrcData(data, { artifactDir = "", fallbackOutLrc = ""
   if (scrubber) scrubber.max = maxDurationMs;
 
   allLayers = data.layers || [];
-  if (data.selected_layer_id !== undefined && data.selected_layer_id !== null) {
-    selectedLayerId = String(data.selected_layer_id);
-  }
+  selectedLayerId = (data.selected_layer_id !== undefined && data.selected_layer_id !== null)
+    ? String(data.selected_layer_id)
+    : "all";
   renderLayerSelector(allLayers, data.primary_lang);
   renderCuesList();
   renderKaraokeView();
@@ -475,15 +494,20 @@ export function applyLoadedLrcData(data, { artifactDir = "", fallbackOutLrc = ""
 }
 
 export async function tryLoadExistingArtifactLrc(artDir) {
+  const reqSeq = ++artifactLoadSeq;
   const dirName = basename(artDir);
+  clearLoadedStudioState();
   if (!dirName) return;
+  currentArtifactDir = artDir;
   const candidates = [`${artDir}/${dirName}.lrc`, `${artDir}/${dirName}.cues.json`];
 
   for (const candidate of candidates) {
     try {
       const res = await fetch(`/api/lrc?path=${encodeURIComponent(candidate)}`);
+      if (reqSeq !== artifactLoadSeq) return;
       if (!res.ok) continue;
       const data = await res.json();
+      if (reqSeq !== artifactLoadSeq) return;
       const isCuesFallback = candidate.endsWith(".cues.json");
       const outLrc = isCuesFallback
         ? `${artDir}/${dirName}.lrc`
@@ -504,9 +528,11 @@ export async function tryLoadExistingArtifactLrc(artDir) {
       showStatus(`Loaded cached LRC (${currentCues.length} cues).`, "success");
       return;
     } catch (_) {
+      if (reqSeq !== artifactLoadSeq) return;
       // Ignore probe error and try next candidate
     }
   }
+  if (reqSeq !== artifactLoadSeq) return;
   showStatus(`Selected ${dirName} — click Generate LRC to build synchronized lyrics.`, "info");
 }
 
@@ -518,9 +544,11 @@ async function handleLoadLrc() {
     return;
   }
 
+  const reqSeq = ++artifactLoadSeq;
   try {
     const res = await fetch(`/api/lrc?path=${encodeURIComponent(lrcPath)}`);
     const data = await res.json();
+    if (reqSeq !== artifactLoadSeq) return;
     if (!res.ok) throw new Error(data.error || "Failed to load LRC");
 
     applyLoadedLrcData(data, { artifactDir: "", fallbackOutLrc: lrcPath });
@@ -602,10 +630,11 @@ async function handleGenerateLrc() {
       scrubber.max = maxDurationMs;
     }
 
+    ++artifactLoadSeq;
     allLayers = data.layers || [];
-    if (data.selected_layer_id !== undefined && data.selected_layer_id !== null) {
-      selectedLayerId = String(data.selected_layer_id);
-    }
+    selectedLayerId = (data.selected_layer_id !== undefined && data.selected_layer_id !== null)
+      ? String(data.selected_layer_id)
+      : "all";
     renderLayerSelector(allLayers, data.primary_lang);
     renderCuesList();
     renderKaraokeView();
@@ -682,13 +711,13 @@ function cuesForSelectedLayer() {
   return [...base].sort((a, b) => (a.start_ms - b.start_ms) || ((a.y_center || 0) - (b.y_center || 0)));
 }
 
-function updateStatsSummary(data) {
+export function updateStatsSummary(data) {
   const container = document.getElementById("studioStatsBar");
   if (!container) return;
   const hasRef = (data.n_reference_matches || 0) > 0 || (data.n_reference_gap_fills || 0) > 0;
   const isCaption = Boolean(data.reference_source && data.reference_source.includes("caption"));
   const layerBadges = (data.layers && data.layers.length > 1)
-    ? data.layers.map(l => `<span class="stat-badge" title="${escapeHtml(l.path || "")}">${ICON_GLOBE} ${basename(l.path || "")} <strong>${escapeHtml(l.lang)}</strong> (${l.n_cues})</span>`).join(" ")
+    ? data.layers.map(l => `<span class="stat-badge" title="${escapeHtml(l.path || "")}">${ICON_GLOBE} ${escapeHtml(basename(l.path || ""))} <strong>${escapeHtml(l.lang)}</strong> (${escapeHtml(String(l.n_cues ?? 0))})</span>`).join(" ")
     : "";
   container.innerHTML = `
     <span class="stat-badge"><strong>${data.n_cues || 0}</strong> Accepted Cues</span>
@@ -758,7 +787,7 @@ function renderCuesList() {
 }
 
 
-function renderKaraokeView() {
+export function renderKaraokeView() {
   const karaokeBox = document.getElementById("studioKaraokeStage");
   if (!karaokeBox) return;
 
@@ -802,6 +831,7 @@ function renderKaraokeView() {
   if (activeCueObj && Array.isArray(activeCueObj.words) && activeCueObj.words.length > 0) {
     const wordSpans = activeCueObj.words
       .map((w) => {
+        if (!w || typeof w !== "object") return "";
         const wordText = String(w.word ?? w.text ?? "").trim();
         if (!wordText) return "";
         const wordStart = typeof w.start_ms === "number" ? w.start_ms : activeCueObj.start_ms;
@@ -810,7 +840,13 @@ function renderKaraokeView() {
       })
       .filter(Boolean);
     if (wordSpans.length > 0) {
-      activeLineHtml = wordSpans.join(" ");
+      const cueLang = String(activeCueObj.lang || "").toLowerCase();
+      const isUnspacedCjk =
+        cueLang === "ja" ||
+        cueLang === "zh" ||
+        cueLang === "ko" ||
+        (/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]/.test(currText) && !/\s/.test(currText.trim()));
+      activeLineHtml = wordSpans.join(isUnspacedCjk ? "" : " ");
     }
   }
 

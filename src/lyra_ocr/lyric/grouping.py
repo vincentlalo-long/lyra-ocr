@@ -8,6 +8,7 @@ from dataclasses import replace
 from typing import Any
 
 from lyra_ocr.config import DEFAULT_GROUPING_THRESHOLDS, GroupingThresholds
+from lyra_ocr.lang import get_language_profile
 from lyra_ocr.lyric.layer_consolidation import (
     _cue_sort_key,
     _detect_parallel_bilingual_langs,
@@ -134,14 +135,16 @@ def _try_merge_short_wrap(
         return None
 
     combined = f"{l1.text.strip()} {l2.text.strip()}"
-    if l1.lang in ("ja", "zh", "ko") or _is_cjk_heavy(combined):
+    lang = l1.lang if l1.lang and l1.lang != "und" else l2.lang
+    lang_profile = get_language_profile(lang or "und")
+    is_unspaced = lang_profile.is_cjk_unspaced or _is_cjk_heavy(combined)
+    if is_unspaced:
         if len(re.sub(r"\s+", "", combined)) > cfg.short_wrap_max_cjk_chars:
             return None
     elif len(combined.split()) > max_words:
         return None
 
-    lang = l1.lang if l1.lang and l1.lang != "und" else l2.lang
-    sep = "" if lang in ("ja", "zh", "ko") else " "
+    sep = "" if (lang_profile.is_cjk_unspaced or (lang == "und" and _is_cjk_heavy(combined))) else " "
     raw_1 = (l1.raw_text or l1.text).strip()
     raw_2 = (l2.raw_text or l2.text).strip()
     tids = sorted(set(l1.source_track_ids + l2.source_track_ids), key=_track_sort_key)
@@ -355,6 +358,10 @@ def _should_merge_duplicate_cue(
             fade_transition_match = False
     if not text_match and not fade_transition_match:
         return False
+    if has_intervening_same_layer_cue and (
+        gap_ms > cfg.merge_overlap_gap_ms or start_delta > cfg.merge_max_start_delta_ms
+    ):
+        return False
     if fade_transition_match:
         return True
     same_track_or_band = (
@@ -454,7 +461,9 @@ def dedupe_and_group(
             has_intervening = any(
                 j != i
                 and other.layer_id == existing.layer_id
-                and existing.end_ms <= other.start_ms < cue.start_ms
+                and existing.start_ms < other.start_ms < cue.start_ms
+                and string_similarity(other.text, cue.text) < cfg.dedupe_text_similarity
+                and string_similarity(other.text, existing.text) < cfg.dedupe_text_similarity
                 for j, other in enumerate(merged)
             )
             if _should_merge_duplicate_cue(

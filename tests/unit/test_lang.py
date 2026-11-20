@@ -209,5 +209,74 @@ def test_language_profile_registry_and_unaccented_vietnamese_detection():
     assert detect_line_lang("Nhung ngay thang khong co anh trong tim") == "vi"
 
 
+def test_language_profile_registry_controls_pipeline_consumers():
+    from lyra_ocr.audio.asr import _normalize_whisper_lang
+    from lyra_ocr.audio.forced_align import _tokenize_words
+    from lyra_ocr.lyric.select import select_cues
+    from lyra_ocr.lyric.text_repair import repair_text
+
+    gibberish_track = {
+        "track_id": 1,
+        "start_ms": 1000,
+        "end_ms": 4000,
+        "label": "lyric",
+        "decision": "accept",
+        "confidence": 0.92,
+        "features": {
+            "dominant_text": "xqzv plmkr bndfgh",
+            "lang": "x-test",
+            "layer_id": 1,
+        },
+        "segments": [
+            {
+                "segment_id": 0,
+                "start_ms": 1000,
+                "end_ms": 4000,
+                "text": "xqzv plmkr bndfgh",
+                "confidence": 0.92,
+            }
+        ],
+    }
+
+    try:
+        # 1. Register profile with whisper_lang="tl", bypass_en_oov_gate=False, allow_symspell_repair=False
+        register_language_profile(
+            LanguageProfile(
+                code="x-test",
+                name="TestLang",
+                whisper_lang="tl",
+                bypass_en_oov_gate=False,
+                allow_symspell_repair=False,
+                is_cjk_unspaced=False,
+            )
+        )
+        assert _normalize_whisper_lang("x-test") == "tl"
+        cues_gated, skipped = select_cues([gibberish_track], human_labels={})
+        assert len(cues_gated) == 0
+        assert skipped[0]["reason"] == "low_text_quality"
+        assert repair_text("Iwalk in like thunder", lang="x-test") == "Iwalk in like thunder"
+        assert _tokenize_words("あいう えお", lang="x-test") == ["あいう", "えお"]
+
+        # 2. Override profile via register_language_profile and verify consumers obey
+        register_language_profile(
+            LanguageProfile(
+                code="x-test",
+                name="TestLangOverride",
+                whisper_lang="id",
+                bypass_en_oov_gate=True,
+                allow_symspell_repair=True,
+                is_cjk_unspaced=True,
+            )
+        )
+        assert _normalize_whisper_lang("x-test") == "id"
+        cues_bypassed, _ = select_cues([gibberish_track], human_labels={})
+        assert len(cues_bypassed) == 1
+        assert repair_text("Iwalk in like thunder", lang="x-test") == "I walk in like thunder"
+        assert _tokenize_words("あいう えお", lang="x-test") == ["あ", "い", "う", "え", "お"]
+    finally:
+        LANGUAGE_PROFILES.pop("x-test", None)
+
+
+
 
 

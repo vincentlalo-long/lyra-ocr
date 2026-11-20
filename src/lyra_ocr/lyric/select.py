@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from lyra_ocr.labels import load_labels_jsonl
+from lyra_ocr.lang import get_language_profile
 from lyra_ocr.lyric.correct import build_corpus_vocab, correct_text
 from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo, LyricCue, ReferenceConfig
 from lyra_ocr.lyric.reference import best_reference_similarity, line_similarity
@@ -416,7 +417,8 @@ def select_cues(
             # A trusted reference line proves the OCR text is real lyrics even
             # when the garbled spelling trips the quality gate.
             reference_match = best_reference_similarity(final_text, eff_ref_lines)
-            is_non_en = bool(track_lang and track_lang not in ("en", "und"))
+            lang_profile = get_language_profile(track_lang)
+            is_non_en = bool(track_lang and track_lang != "und" and lang_profile.bypass_en_oov_gate)
             is_trusted_lyric_layer = (
                 features.get("layer_kind") == "lyric"
                 and (seg_conf is None or seg_conf >= 0.70)

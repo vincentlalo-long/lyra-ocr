@@ -415,4 +415,109 @@ def test_to_soft_bw_stroke_crop_preserves_dark_text_on_bright_neutral_and_colore
         assert int(gray[pad + 16 : pad + 32, pad + 24 : pad + 136].min()) >= 200
 
 
+def test_to_soft_bw_stroke_crop_realistic_puttext_and_chromatic_fills():
+    import cv2
+
+    pad = 4
+
+    # 1. Realistic < 10% fill area cv2.putText with dilated black outline on gray (180,180,180)
+    h, w = 64, 380
+    text_mask = np.zeros((h, w), dtype=np.uint8)
+    cv2.putText(text_mask, "HELLO WORLD", (24, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.1, 255, 2, cv2.LINE_AA)
+    fill_px = text_mask > 180
+    assert 0.01 < (np.count_nonzero(fill_px) / (h * w)) < 0.10
+    outline_dilated = cv2.dilate(text_mask, np.ones((5, 5), dtype=np.uint8))
+    outline_px = (outline_dilated > 128) & (text_mask < 30)
+
+    crop_gray = np.full((h, w, 3), (180, 180, 180), dtype=np.uint8)
+    crop_gray[outline_px] = (10, 10, 10)
+    crop_gray[fill_px] = (250, 250, 250)
+
+    out_gray = to_soft_bw_stroke_crop(crop_gray)
+    assert out_gray is not None
+    inner_gray = out_gray[pad:-pad, pad:-pad, 0]
+    assert float(np.median(inner_gray[fill_px])) >= 200.0
+    assert float(np.median(inner_gray[outline_px])) <= 45.0
+
+    # 2. Saturated dark-luminance red (0,0,255) and blue (255,0,0) fills on bright white (220,220,220)
+    for fill_bgr in ((0, 0, 255), (255, 0, 0)):
+        crop_chr = np.full((h, w, 3), (220, 220, 220), dtype=np.uint8)
+        crop_chr[outline_px] = (10, 10, 10)
+        crop_chr[fill_px] = fill_bgr
+
+        out_chr = to_soft_bw_stroke_crop(crop_chr)
+        assert out_chr is not None
+        inner_chr = out_chr[pad:-pad, pad:-pad, 0]
+        assert float(np.median(inner_chr[fill_px])) >= 180.0
+        assert float(np.median(inner_chr[outline_px])) <= 45.0
+
+    # 3. Half-cyan / half-white fill with dark outline on gray (180,180,180)
+    crop_half = np.full((h, w, 3), (180, 180, 180), dtype=np.uint8)
+    crop_half[outline_px] = (10, 10, 10)
+    left_fill = fill_px.copy()
+    left_fill[:, w // 2 :] = False
+    right_fill = fill_px.copy()
+    right_fill[:, : w // 2] = False
+    crop_half[left_fill] = (255, 220, 0)
+    crop_half[right_fill] = (250, 250, 250)
+    out_half = to_soft_bw_stroke_crop(crop_half)
+    assert out_half is not None
+    inner_half = out_half[pad:-pad, pad:-pad, 0]
+    assert float(np.median(inner_half[left_fill])) >= 180.0
+    assert float(np.median(inner_half[right_fill])) >= 180.0
+    assert float(np.median(inner_half[outline_px])) <= 45.0
+
+    # 4. Plain dark cv2.putText on bright neutral (220,220,220) and bright colored (0,220,220)
+    for bg_bgr in ((220, 220, 220), (0, 220, 220)):
+        crop_dark = np.full((h, w, 3), bg_bgr, dtype=np.uint8)
+        crop_dark[fill_px] = (10, 10, 10)
+        out_dark = to_soft_bw_stroke_crop(crop_dark)
+        assert out_dark is not None
+        inner_dark = out_dark[pad:-pad, pad:-pad, 0]
+        assert float(np.median(inner_dark[fill_px])) >= 200.0
+
+
+def test_process_detections_recovers_extra_chars_requires_multicolor():
+    engine = OCREngine(default_model="PP-OCRv6_rec_small")
+    det = Detection(
+        polygon=[[10, 10], [190, 10], [190, 60], [10, 60]],
+        bbox=[10, 10, 190, 60],
+        score=0.95,
+    )
+
+    # Single-color crop (non-multicolor) at conf=0.84 (< 0.88): must NOT accept lower-conf BW with +4 extra chars
+    img_mono = np.zeros((80, 240, 3), dtype=np.uint8)
+    img_mono[22:48, 20:180] = (255, 255, 255)
+    with patch.object(
+        engine,
+        "recognize_crops",
+        return_value=[("千本", 0.84, "PP-OCRv6_rec_small")],
+    ), patch.object(
+        engine,
+        "recognize_crop",
+        return_value=("千本桜夜ニ紛レ", 0.80, "PP-OCRv6_rec_small"),
+    ):
+        lines_mono = engine.process_detections(img_mono, [det])
+    assert lines_mono[0].text_norm == "千本"
+    assert lines_mono[0].confidence == 0.84
+
+    # Multicolor crop at conf=0.84: DOES accept BW reading with +4 extra chars at bw_conf=0.80 (>= 0.78)
+    img_multi = np.zeros((80, 240, 3), dtype=np.uint8)
+    img_multi[22:48, 20:100] = (255, 180, 0)
+    img_multi[22:48, 100:180] = (255, 255, 255)
+    with patch.object(
+        engine,
+        "recognize_crops",
+        return_value=[("千本", 0.84, "PP-OCRv6_rec_small")],
+    ), patch.object(
+        engine,
+        "recognize_crop",
+        return_value=("千本桜夜ニ紛レ", 0.80, "PP-OCRv6_rec_small"),
+    ):
+        lines_multi = engine.process_detections(img_multi, [det])
+    assert lines_multi[0].text_norm == "千本桜夜ニ紛レ"
+    assert lines_multi[0].confidence == 0.80
+
+
+
 

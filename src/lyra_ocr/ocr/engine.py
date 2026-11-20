@@ -147,17 +147,19 @@ def _compute_border_fg_distance(
         l_chan = lab[:, :, 0]
         chroma = np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0)
         chroma_diff = np.hypot(lab[:, :, 1] - float(bg_lab[1]), lab[:, :, 2] - float(bg_lab[2]))
-        fg_chroma = np.where(
-            (l_chan >= bg_l - cfg.outline_peel_dark_pixel_delta_l)
-            & (chroma > cfg.outline_peel_max_chroma),
-            chroma_diff,
-            0.0,
+        min_fill_px = max(
+            cfg.outline_peel_min_fill_pixels,
+            int(round(cfg.outline_peel_min_fill_ratio * h * w)),
+        )
+        bright_fill_count = int(
+            np.count_nonzero(l_chan > bg_l + cfg.outline_peel_bright_fill_delta_l)
+        )
+        chroma_fill_mask = (chroma > cfg.outline_peel_max_chroma) & (
+            chroma_diff > cfg.outline_peel_max_chroma
         )
         has_bright_or_chroma_fill = (
-            float(np.percentile(l_chan, cfg.outline_peel_fill_percentile))
-            > bg_l + cfg.outline_peel_bright_fill_delta_l
-            or float(np.percentile(fg_chroma, cfg.outline_peel_fill_percentile))
-            > cfg.outline_peel_max_chroma
+            bright_fill_count >= min_fill_px
+            or int(np.count_nonzero(chroma_fill_mask)) >= min_fill_px
         )
         has_dark_outline = bool(np.any(l_chan < bg_l - cfg.outline_peel_dark_outline_delta_l))
         if has_bright_or_chroma_fill and has_dark_outline:
@@ -167,6 +169,16 @@ def _compute_border_fg_distance(
                 & (chroma < cfg.outline_peel_max_chroma)
             )
             dist_bgr = np.where(outline_mask, 0.0, dist_bgr)
+        if bright_fill_count >= min_fill_px:
+            # Normalize upward luminance fills relative to available headroom so white
+            # strokes on mid-gray backgrounds are not compressed below colored karaoke strokes.
+            headroom = max(1.0, 255.0 - bg_l)
+            bright_norm = np.where(
+                l_chan > bg_l + 5.0,
+                np.minimum(255.0, (l_chan - bg_l) * (255.0 / headroom)),
+                0.0,
+            )
+            dist_bgr = np.maximum(dist_bgr, bright_norm)
 
     return dist_bgr
 
@@ -588,7 +600,8 @@ class OCREngine:
                     )
                     bw_norm = normalize_text(bw_raw, form="NFC") if bw_raw else ""
                     recovers_extra_chars = (
-                        len(bw_norm.replace(" ", ""))
+                        is_multicolor
+                        and len(bw_norm.replace(" ", ""))
                         >= len(text_norm.replace(" ", "")) + cfg.multicolor_min_extra_chars
                         and bw_conf >= cfg.multicolor_min_bw_confidence
                     )

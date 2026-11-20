@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 from scipy import signal
 
+from lyra_ocr.lang import get_language_profile
 from lyra_ocr.lyric.models import LyricCue
 
 logger = logging.getLogger(__name__)
@@ -46,7 +47,11 @@ def _compute_onset_envelope(
     return onset_env
 
 
-def _tokenize_words(text: str) -> list[str]:
+def _tokenize_words(text: str, *, lang: str = "und") -> list[str]:
+    if lang and lang != "und":
+        profile = get_language_profile(lang)
+        if not profile.is_cjk_unspaced and " " in text.strip():
+            return text.split()
     return re.findall(
         r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]|[^\s\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]+",
         text,
@@ -114,7 +119,7 @@ def align_cues_with_audio(
         if cue.words and ("asr_aligned" in cue.qa_flags or "asr_word_aligned" in cue.qa_flags):
             _clamp_cue_words(cue)
         else:
-            words = _tokenize_words(cue.text)
+            words = _tokenize_words(cue.text, lang=cue.lang or "und")
             if words:
                 total_chars = sum(len(w) for w in words)
                 duration = max(500, int(cue.end_ms - cue.start_ms))

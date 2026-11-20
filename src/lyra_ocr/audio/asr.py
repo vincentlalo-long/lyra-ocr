@@ -16,6 +16,7 @@ import numpy as np
 
 from lyra_ocr.audio.forced_align import _tokenize_words
 from lyra_ocr.config import ASRAlignmentThresholds, DEFAULT_ASR_ALIGNMENT_THRESHOLDS
+from lyra_ocr.lang import LANGUAGE_PROFILES, get_language_profile
 
 if TYPE_CHECKING:
     from lyra_ocr.lyric.models import LyricCue
@@ -106,13 +107,22 @@ def save_asr_transcript(transcript: ASRTranscript, path: str | Path) -> Path:
 def _normalize_whisper_lang(language: str | None) -> str | None:
     if not language:
         return None
-    lang = language.strip().lower()
+    raw = language.strip()
+    lang = raw.lower()
     if lang in ("", "und", "auto", "unknown"):
         return None
-    if lang == "ja-latn":
-        return "ja"
+    profile = get_language_profile(raw)
+    if profile.code != "und" and profile.whisper_lang:
+        return profile.whisper_lang
+    for code, prof in LANGUAGE_PROFILES.items():
+        if code.lower() == lang and prof.whisper_lang:
+            return prof.whisper_lang
     if "-" in lang:
-        return lang.split("-")[0]
+        base = lang.split("-", 1)[0]
+        base_prof = get_language_profile(base)
+        if base_prof.code != "und" and base_prof.whisper_lang:
+            return base_prof.whisper_lang
+        return base
     return lang
 
 
@@ -133,7 +143,7 @@ def infer_vocal_language_from_cues(
     """Infer the dominant sung vocal language from lyric cues for Whisper ASR routing."""
     if not cues:
         return None
-    if any((c.lang or "").strip() in ("ja", "ja-Latn") for c in cues):
+    if any(get_language_profile((c.lang or "").strip()).whisper_lang == "ja" for c in cues):
         return "ja"
 
     cfg = thresholds or DEFAULT_ASR_ALIGNMENT_THRESHOLDS
@@ -811,7 +821,7 @@ def align_cues_words_with_asr(
     for cue in cues:
         if "asr_aligned" in cue.qa_flags:
             continue
-        cue_tokens = _tokenize_words(cue.text)
+        cue_tokens = _tokenize_words(cue.text, lang=cue.lang or "und")
         if not cue_tokens:
             continue
 
@@ -879,6 +889,25 @@ def align_cues_words_with_asr(
                 ce = min(cue_end, max(cs, int(span[1])))
                 clamped_spans.append((cs, ce))
 
+        # Normalize matched spans monotonically before interpolating gaps
+        prev_matched_idx: int | None = None
+        for i, span in enumerate(clamped_spans):
+            if span is None:
+                continue
+            cs, ce = span
+            if prev_matched_idx is not None:
+                ps, pe = clamped_spans[prev_matched_idx]  # type: ignore[misc]
+                if cs < pe:
+                    if cs >= ps:
+                        mid = (cs + min(pe, ce)) // 2
+                        clamped_spans[prev_matched_idx] = (ps, mid)
+                        cs = mid
+                    else:
+                        cs = pe
+                        ce = max(cs, ce)
+            clamped_spans[i] = (cs, ce)
+            prev_matched_idx = i
+
         # Linearly interpolate contiguous runs of unmatched tokens between neighbors
         n_toks = len(cue_tokens)
         idx = 0
@@ -906,6 +935,16 @@ def align_cues_words_with_asr(
                 t0 = left_ms + int(round(span_ms * k / cnt))
                 t1 = right_ms if k == cnt - 1 else left_ms + int(round(span_ms * (k + 1) / cnt))
                 clamped_spans[run_start + k] = (t0, max(t0, t1))
+
+        # Final monotonic non-decreasing enforcement within [cue_start, cue_end]
+        prev_end = cue_start
+        for i, span in enumerate(clamped_spans):
+            if span is None:
+                continue
+            cs = max(prev_end, min(cue_end, span[0]))
+            ce = min(cue_end, max(cs, span[1]))
+            clamped_spans[i] = (cs, ce)
+            prev_end = ce
 
         cue.words = [
             {

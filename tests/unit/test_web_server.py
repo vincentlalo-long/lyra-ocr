@@ -1053,5 +1053,221 @@ assert.ok(!savedPayload.out_lrc.endsWith(".cues.json"));
     assert proc.returncode == 0, f"Node regression check failed:\n{proc.stdout}\n{proc.stderr}"
 
 
+def test_lrc_studio_clears_stale_state_escapes_stats_and_joins_cjk_karaoke():
+    """Regression: uncached switch clears state, race guard drops stale fetch, layer resets, HTML escaped, CJK joins without spaces."""
+    import shutil
+    import subprocess
+
+    node_bin = shutil.which("node")
+    if not node_bin:
+        pytest.skip("node not available")
+
+    studio_js = REPO_ROOT / "src" / "lyra_ocr" / "web" / "static" / "js" / "lrc_studio.js"
+    script = f"""
+import assert from "node:assert/strict";
+import {{ pathToFileURL }} from "node:url";
+
+const elements = new Map();
+function makeEl(id) {{
+  const el = {{
+    id,
+    innerHTML: "",
+    textContent: "",
+    value: "",
+    className: "",
+    style: {{}},
+    children: [],
+    dataset: {{}},
+    attributes: {{}},
+    appendChild(c) {{ this.children.push(c); }},
+    setAttribute(k, v) {{ this.attributes[k] = v; }},
+    removeAttribute(k) {{ delete this.attributes[k]; delete this[k]; }},
+    addEventListener() {{}},
+    querySelector() {{ return {{ addEventListener() {{}} }}; }},
+    pause() {{}},
+    load() {{}},
+    classList: {{ toggle() {{}} }},
+  }};
+  elements.set(id, el);
+  return el;
+}}
+
+for (const id of [
+  "studioScrubber", "studioCurrentTime", "studioVideo", "studioVideoWrapper",
+  "studioLayerSelect", "studioCuesList", "studioKaraokeStage", "studioRawLrcText",
+  "studioStatsBar", "lrcStatusBanner", "studioMainContainer",
+]) {{
+  makeEl(id);
+}}
+
+globalThis.document = {{
+  getElementById: (id) => elements.get(id) || null,
+  querySelectorAll: () => [],
+  createElement: (tag) => makeEl("dyn_" + tag + "_" + Math.random()),
+}};
+
+let saveCount = 0;
+let resolveSlow = null;
+globalThis.fetch = async (url, opts) => {{
+  if (url === "/api/lrc/save") {{
+    saveCount += 1;
+    return {{ ok: true, status: 200, json: async () => ({{ ok: true }}) }};
+  }}
+  if (url.startsWith("/api/lrc?path=")) {{
+    const target = decodeURIComponent(url.split("path=")[1]);
+    if (target.startsWith("outputs/song_a/")) {{
+      return {{
+        ok: true,
+        status: 200,
+        json: async () => ({{
+          path: "outputs/song_a/song_a.lrc",
+          video_path: "outputs/song_a/video.mp4",
+          cues: [{{ start_ms: 1000, end_ms: 3000, text: "Song A line", confidence: 0.95, layer_id: 1, lang: "en" }}],
+          layers: [
+            {{ layer_id: 1, lang: "en", n_cues: 1, path: "outputs/song_a/song_a.en.lrc" }},
+            {{ layer_id: 2, lang: "ja", n_cues: 1, path: "outputs/song_a/song_a.ja.lrc" }},
+          ],
+          selected_layer_id: 1,
+          primary_lang: "en",
+        }}),
+      }};
+    }}
+    if (target.startsWith("outputs/song_b/")) {{
+      return {{ ok: false, status: 404, json: async () => ({{ error: "not found" }}) }};
+    }}
+    if (target.startsWith("outputs/slow/")) {{
+      return await new Promise((resolve) => {{
+        resolveSlow = () => resolve({{
+          ok: true,
+          status: 200,
+          json: async () => ({{
+            path: "outputs/slow/slow.lrc",
+            cues: [{{ start_ms: 1000, end_ms: 2000, text: "SLOW STALE", confidence: 0.9 }}],
+            layers: [],
+          }}),
+        }});
+      }});
+    }}
+    if (target.startsWith("outputs/fast/")) {{
+      return {{
+        ok: true,
+        status: 200,
+        json: async () => ({{
+          path: "outputs/fast/fast.lrc",
+          cues: [{{ start_ms: 1000, end_ms: 2000, text: "FAST FRESH", confidence: 0.9 }}],
+          layers: [],
+        }}),
+      }};
+    }}
+  }}
+  throw new Error("Unexpected fetch: " + url);
+}};
+
+const mod = await import(pathToFileURL({json.dumps(str(studio_js))}).href);
+
+// 1. Load Song A (sets selected_layer_id = 1, video, cues, out_lrc), then switch to uncached Song B
+await mod.tryLoadExistingArtifactLrc("outputs/song_a");
+assert.ok(elements.get("studioVideo").src, "Song A video should be loaded");
+
+await mod.tryLoadExistingArtifactLrc("outputs/song_b");
+assert.equal(elements.get("studioVideo").src, undefined, "Uncached Song B must clear video src");
+assert.equal(elements.get("studioStatsBar").innerHTML, "", "Uncached Song B must clear stats bar");
+await mod.handleSaveLrcChanges();
+assert.equal(saveCount, 0, "Saving on uncached Song B must NOT overwrite Song A");
+
+// 2. Rapid switch race guard: slow must not overwrite fast
+const pSlow = mod.tryLoadExistingArtifactLrc("outputs/slow");
+await mod.tryLoadExistingArtifactLrc("outputs/fast");
+if (resolveSlow) resolveSlow();
+await pSlow;
+assert.ok(elements.get("studioRawLrcText").value.includes("FAST FRESH"));
+assert.ok(!elements.get("studioRawLrcText").value.includes("SLOW STALE"));
+
+// 3. Sticky selectedLayerId reset when payload omits selected_layer_id
+mod.applyLoadedLrcData({{
+  path: "outputs/song_a/song_a.lrc",
+  cues: [{{ start_ms: 0, end_ms: 1000, text: "A", layer_id: 1 }}],
+  layers: [{{ layer_id: 1, lang: "en", n_cues: 1 }}, {{ layer_id: 2, lang: "ja", n_cues: 1 }}],
+  selected_layer_id: 1,
+}});
+assert.equal(elements.get("studioLayerSelect").value, "1");
+
+mod.applyLoadedLrcData({{
+  path: "outputs/song_c/song_c.lrc",
+  cues: [{{ start_ms: 0, end_ms: 1000, text: "C", layer_id: 1 }}],
+  layers: [{{ layer_id: 1, lang: "es", n_cues: 1 }}, {{ layer_id: 2, lang: "ja", n_cues: 1 }}],
+}});
+assert.equal(elements.get("studioLayerSelect").value, "all");
+
+// 4. Escaped basename in updateStatsSummary
+mod.updateStatsSummary({{
+  n_cues: 2,
+  n_skipped: 0,
+  review_required: 0,
+  layers: [
+    {{ layer_id: 1, lang: "en", n_cues: 1, path: "outputs/<img src=x onerror=alert(1)>.lrc" }},
+    {{ layer_id: 2, lang: "ja", n_cues: 1, path: "outputs/ok.lrc" }},
+  ],
+}});
+const statsHtml = elements.get("studioStatsBar").innerHTML;
+assert.ok(!statsHtml.includes("<img src=x"), "Layer path basename must be HTML-escaped");
+assert.ok(statsHtml.includes("&lt;img src=x"), "Escaped path must appear in stats HTML");
+
+// 5. CJK karaoke joins without spaces and guards null word entries
+mod.applyLoadedLrcData({{
+  path: "outputs/ja/ja.lrc",
+  cues: [
+    {{
+      start_ms: 0,
+      end_ms: 2000,
+      text: "その鼓動は",
+      lang: "ja",
+      words: [
+        {{ word: "そ", start_ms: 0 }},
+        null,
+        {{ word: "の", start_ms: 200 }},
+        {{ word: "鼓", start_ms: 400 }},
+        {{ word: "動", start_ms: 600 }},
+        {{ word: "は", start_ms: 800 }},
+      ],
+    }},
+  ],
+  layers: [],
+}});
+const jaHtml = elements.get("studioKaraokeStage").innerHTML;
+assert.ok(
+  jaHtml.includes('</span><span class="karaoke-word">'),
+  "CJK karaoke word spans must join without spaces: " + jaHtml
+);
+
+mod.applyLoadedLrcData({{
+  path: "outputs/en/en.lrc",
+  cues: [
+    {{
+      start_ms: 0,
+      end_ms: 2000,
+      text: "fly high",
+      lang: "en",
+      words: [{{ word: "fly", start_ms: 0 }}, {{ word: "high", start_ms: 500 }}],
+    }},
+  ],
+  layers: [],
+}});
+const enHtml = elements.get("studioKaraokeStage").innerHTML;
+assert.ok(
+  enHtml.includes('</span> <span class="karaoke-word">'),
+  "English karaoke word spans must keep space joiner: " + enHtml
+);
+"""
+    proc = subprocess.run(
+        [node_bin, "--input-type=module", "-e", script],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, f"Node regression check failed:\n{proc.stdout}\n{proc.stderr}"
+
+
+
 
 

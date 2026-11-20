@@ -220,6 +220,8 @@ class OcrPreprocessThresholds:
     # DecompST outline peeling & multicolor karaoke stroke detection
     outline_peel_min_bg_l: float = 85.0
     outline_peel_fill_percentile: float = 90.0
+    outline_peel_min_fill_pixels: int = 8
+    outline_peel_min_fill_ratio: float = 0.005
     outline_peel_bright_fill_delta_l: float = 20.0
     outline_peel_dark_outline_delta_l: float = 35.0
     outline_peel_dark_pixel_delta_l: float = 20.0
