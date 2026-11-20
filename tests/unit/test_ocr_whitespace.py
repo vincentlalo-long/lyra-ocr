@@ -399,3 +399,20 @@ def test_process_detections_triggers_soft_bw_proactively_on_multicolor_strokes()
     assert lines[0].confidence == 0.81
 
 
+def test_to_soft_bw_stroke_crop_preserves_dark_text_on_bright_neutral_and_colored_bg():
+    pad = 4
+    for bg_bgr in ((220, 220, 220), (0, 220, 220)):
+        crop = np.full((48, 160, 3), bg_bgr, dtype=np.uint8)
+        crop[14:34, 20:140] = (10, 10, 10)
+
+        out = to_soft_bw_stroke_crop(crop)
+        assert out is not None
+        gray = out[:, :, 0]
+        # Background maps to dark values (<= 45)
+        assert int(gray[pad + 2, pad + 2]) <= 45
+        assert int(gray[pad + 42, pad + 150]) <= 45
+        # Plain dark strokes (10, 10, 10) map to bright values (>= 200), not erased
+        assert int(gray[pad + 16 : pad + 32, pad + 24 : pad + 136].min()) >= 200
+
+
+

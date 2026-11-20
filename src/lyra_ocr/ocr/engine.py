@@ -146,10 +146,17 @@ def _compute_border_fg_distance(
     if bg_l >= cfg.outline_peel_min_bg_l:
         l_chan = lab[:, :, 0]
         chroma = np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0)
+        chroma_diff = np.hypot(lab[:, :, 1] - float(bg_lab[1]), lab[:, :, 2] - float(bg_lab[2]))
+        fg_chroma = np.where(
+            (l_chan >= bg_l - cfg.outline_peel_dark_pixel_delta_l)
+            & (chroma > cfg.outline_peel_max_chroma),
+            chroma_diff,
+            0.0,
+        )
         has_bright_or_chroma_fill = (
             float(np.percentile(l_chan, cfg.outline_peel_fill_percentile))
             > bg_l + cfg.outline_peel_bright_fill_delta_l
-            or float(np.percentile(chroma, cfg.outline_peel_fill_percentile))
+            or float(np.percentile(fg_chroma, cfg.outline_peel_fill_percentile))
             > cfg.outline_peel_max_chroma
         )
         has_dark_outline = bool(np.any(l_chan < bg_l - cfg.outline_peel_dark_outline_delta_l))
