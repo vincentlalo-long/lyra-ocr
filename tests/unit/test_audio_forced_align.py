@@ -2,6 +2,7 @@ import math
 import numpy as np
 import pytest
 
+from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord, align_cues_words_with_asr
 from lyra_ocr.audio.forced_align import align_cues_with_audio
 from lyra_ocr.lyric.models import LyricCue
 
@@ -46,3 +47,53 @@ def test_align_cues_with_audio_drift_gate_rejects_distant_onset():
     aligned = align_cues_with_audio(cues, audio, sample_rate=sr, max_drift_ms=1200)
     # Drift gate blocks shifting start_ms
     assert aligned[0].start_ms == 6000
+
+
+def test_align_cues_words_with_asr_and_forced_align_preserves_asr_words():
+    sr = 16000
+    audio = np.zeros(sr * 6, dtype=np.float32)
+    # Vocal onset begins cleanly at 1000ms and lasts until 4000ms
+    audio[16 * 1000 : 16 * 4000] = _generate_tone(800.0, 3.0, sr=sr, amp=0.5)
+
+    # Non-uniform real ASR word timings: short first word "hi" (1050..1200),
+    # long held middle word "beautiful" (1250..3600), short tail "world" (3650..3950)
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="hi beautiful world",
+                start_ms=1000,
+                end_ms=4000,
+                language="en",
+                words=[
+                    ASRWord("hi", 1050, 1200),
+                    ASRWord("beautiful", 1250, 3600),
+                    ASRWord("world", 3650, 3950),
+                ],
+            )
+        ],
+    )
+    cue = LyricCue(start_ms=1050, end_ms=4000, text="hi beautiful world", layer_id=1, lang="en")
+    n = align_cues_words_with_asr([cue], transcript)
+    assert n == 1
+    assert "asr_word_aligned" in cue.qa_flags
+    assert cue.words == [
+        {"word": "hi", "start_ms": 1050, "end_ms": 1200},
+        {"word": "beautiful", "start_ms": 1250, "end_ms": 3600},
+        {"word": "world", "start_ms": 3650, "end_ms": 3950},
+    ]
+
+    aligned = align_cues_with_audio([cue], audio, sample_rate=sr, max_drift_ms=1200)
+    assert len(aligned) == 1
+    out_words = aligned[0].words
+    assert len(out_words) == 3
+    # Relative ASR word boundaries (e.g. long "beautiful" starting at 1250 and ending at 3600)
+    # must be preserved rather than overwritten by uniform character-length allocation
+    # (which would place "beautiful" around 1369..3015 and "world" starting around 3015).
+    assert out_words[1]["start_ms"] == 1250
+    assert out_words[1]["end_ms"] == 3600
+    assert out_words[2]["start_ms"] == 3650
+    assert out_words[2]["end_ms"] == 3950
+    assert out_words[0]["start_ms"] >= aligned[0].start_ms
+    assert out_words[-1]["end_ms"] <= aligned[0].end_ms
+

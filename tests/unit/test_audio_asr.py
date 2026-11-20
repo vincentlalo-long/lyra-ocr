@@ -1,17 +1,23 @@
 """Unit tests for faster-whisper word-level ASR module and alignment helpers."""
 
 from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
 
 from lyra_ocr.audio.asr import (
     ASRSegment,
     ASRTranscript,
     ASRWord,
+    align_cues_words_with_asr,
     align_multiline_cues_with_asr,
     asr_has_new_prefix_onset,
     asr_to_reference_bundle,
     asr_vocal_gate_score,
+    infer_vocal_language_from_cues,
     load_asr_transcript,
     save_asr_transcript,
+    transcribe_audio_words,
 )
 from lyra_ocr.lyric.models import LyricCue
 
@@ -371,4 +377,137 @@ def test_asr_has_new_prefix_onset_continuation_beats_partial_prefix():
         )
         is True
     )
+
+
+def test_infer_vocal_language_from_cues_prefers_ja_when_romaji_or_ja_present():
+    assert infer_vocal_language_from_cues([]) is None
+    assert infer_vocal_language_from_cues([LyricCue(start_ms=100, end_ms=500, text="...", lang="und")]) is None
+
+    cues_romaji = [
+        LyricCue(start_ms=1000, end_ms=3000, text="In the sky", lang="en"),
+        LyricCue(start_ms=1000, end_ms=3000, text="En el cielo", lang="es"),
+        LyricCue(start_ms=1000, end_ms=3000, text="sono kodou wa", lang="ja-Latn"),
+    ]
+    assert infer_vocal_language_from_cues(cues_romaji) == "ja"
+
+    cues_ja = [
+        LyricCue(start_ms=1000, end_ms=3000, text="その鼓動", lang="ja"),
+        LyricCue(start_ms=1000, end_ms=3000, text="In the sky", lang="en"),
+        LyricCue(start_ms=4000, end_ms=6000, text="Fly away", lang="en"),
+    ]
+    assert infer_vocal_language_from_cues(cues_ja) == "ja"
+
+    cues_vi = [
+        LyricCue(start_ms=i * 1000, end_ms=i * 1000 + 800, text="Ngày hôm qua", lang="vi")
+        for i in range(1, 3)
+    ]
+    assert infer_vocal_language_from_cues(cues_vi) == "vi"
+
+    # Non-en language with >= 5 cues beats a larger English translation layer
+    cues_vi_with_en = [
+        LyricCue(start_ms=i * 1000, end_ms=i * 1000 + 800, text="Ngày hôm qua", lang="vi")
+        for i in range(5)
+    ] + [
+        LyricCue(start_ms=i * 1000, end_ms=i * 1000 + 800, text="Yesterday", lang="en")
+        for i in range(8)
+    ]
+    assert infer_vocal_language_from_cues(cues_vi_with_en) == "vi"
+
+
+def test_transcribe_audio_words_invalidates_mismatched_cached_language(tmp_path: Path):
+    stale_transcript = ASRTranscript(
+        language="en",
+        model_size="small",
+        segments=[
+            ASRSegment(
+                text="stale english words",
+                start_ms=1000,
+                end_ms=2500,
+                language="en",
+                words=[ASRWord("stale", 1000, 1500), ASRWord("english", 1500, 2500)],
+            )
+        ],
+    )
+    save_asr_transcript(stale_transcript, tmp_path / "asr_transcript.json")
+    audio = np.zeros(16000, dtype=np.float32)
+
+    # Matching language returns cached transcript without invoking faster-whisper
+    with patch.dict("sys.modules", {"faster_whisper": None}):
+        cached_en = transcribe_audio_words(audio, cache_dir=tmp_path, language="en")
+        assert cached_en is not None
+        assert cached_en.language == "en"
+
+        # Mismatched language ("ja" vs cached "en") invalidates stale cache and returns None
+        # when faster-whisper is unavailable
+        invalidated = transcribe_audio_words(audio, cache_dir=tmp_path, language="ja")
+        assert invalidated is None
+
+
+def test_align_cues_words_with_asr_matches_and_interpolates():
+    transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment(
+                text="fly high away now",
+                start_ms=1000,
+                end_ms=4000,
+                language="en",
+                words=[
+                    ASRWord("fly", 1050, 1300),
+                    ASRWord("away", 2600, 3400),
+                    ASRWord("now", 3450, 3900),
+                ],
+            )
+        ],
+    )
+    cue = LyricCue(start_ms=1000, end_ms=4000, text="fly high away now", lang="en")
+    already_aligned = LyricCue(
+        start_ms=5000,
+        end_ms=7000,
+        text="skip me",
+        qa_flags=["asr_aligned"],
+        words=[{"word": "skip", "start_ms": 5000, "end_ms": 6000}],
+    )
+
+    n = align_cues_words_with_asr([cue, already_aligned], transcript)
+    assert n == 1
+    assert "asr_word_aligned" in cue.qa_flags
+    assert [w["word"] for w in cue.words] == ["fly", "high", "away", "now"]
+    # Matched words keep ASR timings
+    assert cue.words[0]["start_ms"] == 1050
+    assert cue.words[0]["end_ms"] == 1300
+    assert cue.words[2]["start_ms"] == 2600
+    assert cue.words[2]["end_ms"] == 3400
+    # Unmatched word "high" linearly interpolated between 1300 and 2600
+    assert cue.words[1]["start_ms"] == 1300
+    assert cue.words[1]["end_ms"] == 2600
+    # Already asr_aligned cue was left untouched
+    assert already_aligned.words == [{"word": "skip", "start_ms": 5000, "end_ms": 6000}]
+
+
+def test_align_cues_words_with_asr_romanizes_ja_for_ja_latn():
+    transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="その鼓動は",
+                start_ms=1000,
+                end_ms=3200,
+                language="ja",
+                words=[
+                    ASRWord("その", 1050, 1400),
+                    ASRWord("鼓動", 1450, 2600),
+                    ASRWord("は", 2650, 3100),
+                ],
+            )
+        ],
+    )
+    cue = LyricCue(start_ms=1000, end_ms=3200, text="sono kodou wa", lang="ja-Latn")
+    n = align_cues_words_with_asr([cue], transcript)
+    assert n == 1
+    assert "asr_word_aligned" in cue.qa_flags
+    assert [w["word"] for w in cue.words] == ["sono", "kodou", "wa"]
+    assert cue.words[1]["start_ms"] == 1450
+    assert cue.words[1]["end_ms"] == 2600
+
 

@@ -99,24 +99,31 @@ def align_cues_with_audio(
         if cue.end_ms <= cue.start_ms:
             cue.end_ms = int(cue.start_ms + 2500)
 
-        # Word-level proportional allocation
-        words = _tokenize_words(cue.text)
-        if words:
-            total_chars = sum(len(w) for w in words)
-            duration = max(500, int(cue.end_ms - cue.start_ms))
-            word_entries: list[dict[str, Any]] = []
-            curr_ms = int(cue.start_ms)
-            for idx, w in enumerate(words):
-                weight = len(w) / max(1, total_chars)
-                w_dur = max(100, int(round(duration * weight)))
-                w_end = min(int(cue.end_ms), curr_ms + w_dur) if idx < len(words) - 1 else int(cue.end_ms)
-                word_entries.append({
-                    "word": w,
-                    "start_ms": int(curr_ms),
-                    "end_ms": int(w_end),
-                })
-                curr_ms = int(w_end)
-            cue.words = word_entries
+        # Word-level proportional allocation (preserve ASR-aligned word timings if present)
+        if cue.words and ("asr_aligned" in cue.qa_flags or "asr_word_aligned" in cue.qa_flags):
+            for w in cue.words:
+                w_start = min(int(cue.end_ms), max(int(cue.start_ms), int(w.get("start_ms", cue.start_ms))))
+                w_end = min(int(cue.end_ms), max(w_start, int(w.get("end_ms", w_start))))
+                w["start_ms"] = w_start
+                w["end_ms"] = w_end
+        else:
+            words = _tokenize_words(cue.text)
+            if words:
+                total_chars = sum(len(w) for w in words)
+                duration = max(500, int(cue.end_ms - cue.start_ms))
+                word_entries: list[dict[str, Any]] = []
+                curr_ms = int(cue.start_ms)
+                for idx, w in enumerate(words):
+                    weight = len(w) / max(1, total_chars)
+                    w_dur = max(100, int(round(duration * weight)))
+                    w_end = min(int(cue.end_ms), curr_ms + w_dur) if idx < len(words) - 1 else int(cue.end_ms)
+                    word_entries.append({
+                        "word": w,
+                        "start_ms": int(curr_ms),
+                        "end_ms": int(w_end),
+                    })
+                    curr_ms = int(w_end)
+                cue.words = word_entries
 
     # Maintain monotonicity within each layer
     by_layer: dict[Any, list[LyricCue]] = {}

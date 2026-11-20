@@ -9,10 +9,12 @@ from typing import Any
 
 from lyra_ocr.audio import (
     align_cues_with_audio,
+    align_cues_words_with_asr,
     asr_to_reference_bundle,
     asr_vocal_gate_score,
     compute_vocal_activity_profile,
     extract_audio_16k,
+    infer_vocal_language_from_cues,
     load_asr_transcript,
     transcribe_audio_words,
 )
@@ -319,14 +321,19 @@ def build_lrc_from_artifacts(
             logger.warning("Audio processing failed for %s: %s", eff_video_path, exc)
 
     if getattr(reference_cfg, "enable_asr", True):
+        vocal_lang = infer_vocal_language_from_cues(cues)
         cached_asr_path = art_path / "asr_transcript.json"
-        if cached_asr_path.is_file():
-            asr_transcript = load_asr_transcript(cached_asr_path)
-        elif audio_16k is not None:
+        if audio_16k is not None:
             try:
-                asr_transcript = transcribe_audio_words(audio_16k, cache_dir=art_path)
+                asr_transcript = transcribe_audio_words(
+                    audio_16k,
+                    cache_dir=art_path,
+                    language=vocal_lang,
+                )
             except Exception as exc:
                 logger.warning("Word-level ASR failed for %s: %s", eff_video_path, exc)
+        elif cached_asr_path.is_file():
+            asr_transcript = load_asr_transcript(cached_asr_path, expected_language=vocal_lang)
 
     if cues and asr_transcript is not None and asr_transcript.segments:
         gated_cues: list[LyricCue] = []
@@ -434,6 +441,12 @@ def build_lrc_from_artifacts(
     cues = consolidate_language_layers(cues, asr_transcript=asr_transcript)
     cues = dedupe_and_group(cues, asr_transcript=asr_transcript)
     cues = share_solitary_cross_layer_cues(cues)
+
+    if asr_transcript is not None:
+        try:
+            align_cues_words_with_asr(cues, asr_transcript)
+        except Exception as exc:
+            logger.warning("ASR word alignment failed: %s", exc)
 
     if audio_16k is not None and getattr(reference_cfg, "enable_audio_align", True):
         try:

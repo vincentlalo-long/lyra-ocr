@@ -1360,5 +1360,103 @@ def test_refresh_dict_tracks_layers_when_all_have_layer_id(tmp_path: Path):
     assert cue_langs == {"ja-Latn", "es"}
 
 
+def test_build_lrc_routes_vocal_lang_to_asr_and_preserves_asr_words(tmp_path: Path):
+    from unittest.mock import patch
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    artifacts_dir = tmp_path / "art_asr_lang_words"
+    artifacts_dir.mkdir()
+    v_file = tmp_path / "vid_ja.mp4"
+    v_file.touch()
+
+    manifest = {
+        "video_id": "vid_ja",
+        "video_path": str(v_file),
+        "probe": {"duration": 20.0, "width": 1280, "height": 720},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 1000,
+                "end_ms": 4000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "sono kodou wa", "mean_centroid": [0.5, 0.85]},
+                "segments": [
+                    {
+                        "segment_id": 0,
+                        "start_ms": 1000,
+                        "end_ms": 4000,
+                        "text": "sono kodou wa",
+                        "confidence": 0.95,
+                    }
+                ],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    # Stale "en" cache on disk must not block calling transcribe_audio_words with language="ja"
+    (artifacts_dir / "asr_transcript.json").write_text(
+        json.dumps({"language": "en", "model_size": "small", "segments": []}),
+        encoding="utf-8",
+    )
+
+    ja_transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment(
+                text="その鼓動は",
+                start_ms=1000,
+                end_ms=4000,
+                language="ja",
+                words=[
+                    ASRWord("その", 1050, 1300),
+                    ASRWord("鼓動", 1350, 3200),
+                    ASRWord("は", 3300, 3900),
+                ],
+            )
+        ],
+    )
+
+    observed_asr_langs: list[str | None] = []
+
+    def fake_transcribe(audio_source, *, cache_dir=None, language=None, model_size="small"):
+        observed_asr_langs.append(language)
+        return ja_transcript
+
+    audio = np.zeros(16000 * 6, dtype=np.float32)
+    out_lrc = tmp_path / "ja_words.lrc"
+    with (
+        patch("lyra_ocr.lyric.build.extract_audio_16k", return_value=audio),
+        patch("lyra_ocr.lyric.build.transcribe_audio_words", side_effect=fake_transcribe),
+    ):
+        build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            video_path=str(v_file),
+            force=True,
+            enhanced=True,
+            reference_config=ReferenceConfig(enable_audio_align=True, enable_asr=True),
+        )
+
+    assert observed_asr_langs == ["ja"]
+    cues_data = json.loads((tmp_path / "ja_words.cues.json").read_text(encoding="utf-8"))
+    assert len(cues_data["cues"]) == 1
+    cue = cues_data["cues"][0]
+    assert "asr_word_aligned" in cue["qa_flags"]
+    assert cue["words"] == [
+        {"word": "sono", "start_ms": 1050, "end_ms": 1300},
+        {"word": "kodou", "start_ms": 1350, "end_ms": 3200},
+        {"word": "wa", "start_ms": 3300, "end_ms": 3900},
+    ]
+
+
+
 
 

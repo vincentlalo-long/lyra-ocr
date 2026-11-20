@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+
+from lyra_ocr.audio.forced_align import _tokenize_words
 
 if TYPE_CHECKING:
     from lyra_ocr.lyric.models import LyricCue
@@ -98,18 +102,6 @@ def save_asr_transcript(transcript: ASRTranscript, path: str | Path) -> Path:
     return out
 
 
-def load_asr_transcript(path: str | Path) -> ASRTranscript | None:
-    p = Path(path)
-    if not p.is_file():
-        return None
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-        return ASRTranscript.from_dict(data)
-    except Exception as exc:
-        logger.warning("Failed to load ASR transcript cache %s: %s", p, exc)
-        return None
-
-
 def _normalize_whisper_lang(language: str | None) -> str | None:
     if not language:
         return None
@@ -123,6 +115,62 @@ def _normalize_whisper_lang(language: str | None) -> str | None:
     return lang
 
 
+def _asr_cache_matches_language(cached: ASRTranscript, language: str | None) -> bool:
+    """Return True if a cached ASR transcript's language is compatible with the requested language."""
+    whisper_lang = _normalize_whisper_lang(language)
+    cached_lang = _normalize_whisper_lang(cached.language) if cached.language else None
+    if whisper_lang is not None and cached_lang is not None and cached_lang != whisper_lang:
+        return False
+    return True
+
+
+def infer_vocal_language_from_cues(cues: list[LyricCue]) -> str | None:
+    """Infer the dominant sung vocal language from lyric cues for Whisper ASR routing."""
+    if not cues:
+        return None
+    if any((c.lang or "").strip() in ("ja", "ja-Latn") for c in cues):
+        return "ja"
+
+    counts = Counter(
+        c.lang.strip()
+        for c in cues
+        if (c.lang or "").strip() and c.lang.strip() != "und"
+    )
+    if not counts:
+        return None
+
+    for lang, cnt in counts.most_common():
+        if lang != "en" and cnt >= 5:
+            return lang
+
+    return counts.most_common(1)[0][0]
+
+
+def load_asr_transcript(
+    path: str | Path,
+    *,
+    expected_language: str | None = None,
+) -> ASRTranscript | None:
+    p = Path(path)
+    if not p.is_file():
+        return None
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+        loaded = ASRTranscript.from_dict(data)
+    except Exception as exc:
+        logger.warning("Failed to load ASR transcript cache %s: %s", p, exc)
+        return None
+    if expected_language is not None and not _asr_cache_matches_language(loaded, expected_language):
+        logger.info(
+            "Ignoring stale ASR cache %s (cached language=%r != requested=%r)",
+            p,
+            loaded.language,
+            _normalize_whisper_lang(expected_language),
+        )
+        return None
+    return loaded
+
+
 def transcribe_audio_words(
     audio_source: str | Path | np.ndarray,
     *,
@@ -131,11 +179,19 @@ def transcribe_audio_words(
     model_size: str = "small",
 ) -> ASRTranscript | None:
     """Transcribe audio into word-level timestamps using faster-whisper, with disk caching."""
+    whisper_lang = _normalize_whisper_lang(language)
     cache_file = Path(cache_dir) / "asr_transcript.json" if cache_dir else None
     if cache_file is not None and cache_file.is_file():
         cached = load_asr_transcript(cache_file)
         if cached is not None:
-            return cached
+            if _asr_cache_matches_language(cached, language):
+                return cached
+            logger.info(
+                "Ignoring stale ASR cache %s (cached language=%r != requested=%r)",
+                cache_file,
+                cached.language,
+                whisper_lang,
+            )
 
     try:
         from faster_whisper import WhisperModel
@@ -153,8 +209,6 @@ def transcribe_audio_words(
             logger.warning("ASR audio source does not exist: %s", p)
             return None
         audio_input = str(p)
-
-    whisper_lang = _normalize_whisper_lang(language)
 
     try:
         model = WhisperModel(model_size, device="auto", compute_type="default")
@@ -689,4 +743,174 @@ def asr_has_new_prefix_onset(
         return False
 
     return best_prefix_sim >= 0.65
+
+
+def _norm_word_token(tok: str) -> str:
+    """Normalize a word token for sequence matching while preserving Unicode letters."""
+    norm = unicodedata.normalize("NFC", (tok or "").lower())
+    return re.sub(r"[\W_]+", "", norm)
+
+
+def _split_asr_word_tokens(
+    w: ASRWord,
+    *,
+    need_romanize: bool,
+) -> list[tuple[str, int, int]]:
+    """Expand an ASRWord into token-level (text, start_ms, end_ms) tuples."""
+    raw = (w.word or "").strip()
+    if not raw:
+        return []
+    if need_romanize:
+        rom = _romanize_ja_text(raw)
+        sub_tokens = rom.split() if rom else [raw]
+    elif _CJK_RE.search(raw):
+        sub_tokens = _tokenize_words(raw)
+    else:
+        sub_tokens = raw.split()
+
+    if not sub_tokens:
+        return []
+    ws = int(w.start_ms)
+    we = max(ws, int(w.end_ms))
+    if len(sub_tokens) == 1:
+        return [(sub_tokens[0], ws, we)]
+
+    total_chars = sum(max(1, len(t)) for t in sub_tokens)
+    dur = we - ws
+    out: list[tuple[str, int, int]] = []
+    acc = 0
+    for idx, sub in enumerate(sub_tokens):
+        w_len = max(1, len(sub))
+        t0 = ws + int(round(dur * acc / total_chars))
+        acc += w_len
+        t1 = we if idx == len(sub_tokens) - 1 else ws + int(round(dur * acc / total_chars))
+        out.append((sub, t0, max(t0, t1)))
+    return out
+
+
+def align_cues_words_with_asr(
+    cues: list[LyricCue],
+    transcript: ASRTranscript | None,
+) -> int:
+    """Populate cue.words with real ASR word timings (interpolating unmatched words)."""
+    if not cues or transcript is None or not transcript.segments:
+        return 0
+
+    transcript_lang = _normalize_whisper_lang(transcript.language)
+    aligned_count = 0
+
+    for cue in cues:
+        if "asr_aligned" in cue.qa_flags:
+            continue
+        cue_tokens = _tokenize_words(cue.text)
+        if not cue_tokens:
+            continue
+
+        win_start = int(cue.start_ms) - 400
+        win_end = int(cue.end_ms) + 400
+        need_romanize = (cue.lang == "ja-Latn") and (transcript_lang == "ja")
+
+        asr_tokens: list[tuple[str, int, int]] = []
+        for seg in transcript.segments:
+            if seg.end_ms < win_start or seg.start_ms > win_end:
+                continue
+            for w in seg.words or ():
+                if w.end_ms >= win_start and w.start_ms <= win_end and w.word.strip():
+                    asr_tokens.extend(_split_asr_word_tokens(w, need_romanize=need_romanize))
+
+        if not asr_tokens:
+            continue
+
+        asr_tokens.sort(key=lambda item: (item[1], item[2]))
+        cue_norms = [_norm_word_token(t) for t in cue_tokens]
+        asr_norms = [_norm_word_token(item[0]) for item in asr_tokens]
+
+        matcher = SequenceMatcher(None, cue_norms, asr_norms, autojunk=False)
+        matched_spans: list[tuple[int, int] | None] = [None] * len(cue_tokens)
+
+        for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+            if tag == "equal":
+                for offset in range(i2 - i1):
+                    ci = i1 + offset
+                    aj = j1 + offset
+                    matched_spans[ci] = (asr_tokens[aj][1], asr_tokens[aj][2])
+            elif tag == "replace":
+                j_cursor = j1
+                for ci in range(i1, i2):
+                    if not cue_norms[ci]:
+                        continue
+                    for aj in range(j_cursor, j2):
+                        if not asr_norms[aj]:
+                            continue
+                        if SequenceMatcher(None, cue_norms[ci], asr_norms[aj]).ratio() >= 0.70:
+                            matched_spans[ci] = (asr_tokens[aj][1], asr_tokens[aj][2])
+                            j_cursor = aj + 1
+                            break
+
+        n_matched = sum(1 for span in matched_spans if span is not None)
+        match_ratio = n_matched / len(cue_tokens)
+        cue_str = " ".join(t for t in cue_norms if t)
+        asr_str = " ".join(t for t in asr_norms if t)
+        str_sim = SequenceMatcher(None, cue_str, asr_str).ratio() if (cue_str and asr_str) else 0.0
+        total_sim = max(matcher.ratio(), str_sim)
+
+        if match_ratio < 0.50 and total_sim < 0.55:
+            continue
+
+        cue_start = int(cue.start_ms)
+        cue_end = max(cue_start, int(cue.end_ms))
+
+        # Clamp matched spans into [cue_start, cue_end]
+        clamped_spans: list[tuple[int, int] | None] = []
+        for span in matched_spans:
+            if span is None:
+                clamped_spans.append(None)
+            else:
+                cs = max(cue_start, min(cue_end, int(span[0])))
+                ce = min(cue_end, max(cs, int(span[1])))
+                clamped_spans.append((cs, ce))
+
+        # Linearly interpolate contiguous runs of unmatched tokens between neighbors
+        n_toks = len(cue_tokens)
+        idx = 0
+        while idx < n_toks:
+            if clamped_spans[idx] is not None:
+                idx += 1
+                continue
+            run_start = idx
+            while idx < n_toks and clamped_spans[idx] is None:
+                idx += 1
+            run_end = idx - 1
+
+            left_ms = clamped_spans[run_start - 1][1] if run_start > 0 and clamped_spans[run_start - 1] is not None else cue_start
+            right_ms = cue_end
+            for next_i in range(run_end + 1, n_toks):
+                next_span = clamped_spans[next_i]
+                if next_span is not None:
+                    right_ms = next_span[0]
+                    break
+            right_ms = max(left_ms, right_ms)
+
+            cnt = run_end - run_start + 1
+            span_ms = right_ms - left_ms
+            for k in range(cnt):
+                t0 = left_ms + int(round(span_ms * k / cnt))
+                t1 = right_ms if k == cnt - 1 else left_ms + int(round(span_ms * (k + 1) / cnt))
+                clamped_spans[run_start + k] = (t0, max(t0, t1))
+
+        cue.words = [
+            {
+                "word": tok,
+                "start_ms": int(span[0]),
+                "end_ms": int(span[1]),
+            }
+            for tok, span in zip(cue_tokens, clamped_spans)
+            if span is not None
+        ]
+        if "asr_word_aligned" not in cue.qa_flags:
+            cue.qa_flags = list(cue.qa_flags) + ["asr_word_aligned"]
+        aligned_count += 1
+
+    return aligned_count
+
 
