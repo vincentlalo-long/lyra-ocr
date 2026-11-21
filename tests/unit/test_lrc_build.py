@@ -1654,7 +1654,7 @@ def test_audit_and_recover_missing_lyrics_rescues_dropped_parallel_track_and_fla
     # Build 3 major layers (>= 8 cues each): ja (layer 1), ja-Latn (layer 2), en (layer 3)
     # Gap in en at 20000..23000ms (index 2) and 40000..43000ms (index 5)
     cues: list[LyricCue] = []
-    for i in range(10):
+    for i in range(12):
         s = (i + 1) * 7000
         e = s + 3000
         if i == 2:
@@ -1762,6 +1762,224 @@ def test_audit_and_recover_missing_lyrics_rescues_dropped_parallel_track_and_fla
     recovered_no_track, warnings_no_track = audit_and_recover_missing_lyrics(cues, [], [])
     assert "missing_parallel_cue: lang=en at 20.0s..23.0s" in warnings_no_track
     assert warnings_no_track.count("missing_parallel_cue: lang=en at 20.0s..23.0s") == 1
+
+
+def test_audit_and_recover_missing_lyrics_blocks_split_title_and_asr_unvoiced_and_respects_mixed_lang_layer():
+    from lyra_ocr.lyric.build import audit_and_recover_missing_lyrics
+    from lyra_ocr.lyric.models import LyricCue
+
+    cues: list[LyricCue] = []
+    for i in range(12):
+        s = (i + 1) * 7000
+        e = s + 3000
+        if i == 2:
+            s, e = 20000, 23000
+        elif i == 3:
+            s, e = 30000, 33000
+        elif i == 5:
+            s, e = 40000, 43000
+        elif i == 6:
+            s, e = 50000, 53000
+
+        cues.append(
+            LyricCue(
+                start_ms=s,
+                end_ms=e,
+                text=f"日本語の歌詞ライン{i}",
+                layer_id=1,
+                lang="ja",
+                y_center=0.72,
+                source_track_ids=[100 + i],
+            )
+        )
+        # Mixed-language "en" cue inside layer_id=2 (ja-Latn) at 30000..33000ms
+        if i == 3:
+            cues.append(
+                LyricCue(
+                    start_ms=s,
+                    end_ms=e,
+                    text="Fly away tonight",
+                    layer_id=2,
+                    lang="en",
+                    y_center=0.80,
+                    source_track_ids=[200 + i],
+                )
+            )
+        else:
+            cues.append(
+                LyricCue(
+                    start_ms=s,
+                    end_ms=e,
+                    text=f"nihongo no kashi rain {i}",
+                    layer_id=2,
+                    lang="ja-Latn",
+                    y_center=0.80,
+                    source_track_ids=[200 + i],
+                )
+            )
+        # Leave gaps in en (layer 3) at indices 2 (20s), 5 (40s), 6 (50s)
+        if i not in (2, 5, 6):
+            cues.append(
+                LyricCue(
+                    start_ms=s,
+                    end_ms=e,
+                    text=f"English lyric line {i}",
+                    layer_id=3,
+                    lang="en",
+                    y_center=0.88,
+                    source_track_ids=[300 + i],
+                )
+            )
+
+    tracks = [
+        {
+            "track_id": 910,
+            "start_ms": 20000,
+            "end_ms": 23000,
+            "label": "non_lyric",
+            "decision": "reject",
+            "confidence": 0.90,
+            "qa_flags": ["split_title_card_fragment"],
+            "features": {"dominant_text": "Railgun", "layer_id": 3, "mean_centroid": [0.5, 0.88]},
+        },
+        {
+            "track_id": 911,
+            "start_ms": 40000,
+            "end_ms": 43000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.50,
+            "qa_flags": [],
+            "features": {"dominant_text": "Unvoiced instrumental text", "layer_id": 3, "mean_centroid": [0.5, 0.88]},
+        },
+        {
+            "track_id": 912,
+            "start_ms": 50000,
+            "end_ms": 53000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.55,
+            "qa_flags": ["asr_unvoiced"],
+            "features": {"dominant_text": "Another unvoiced caption", "layer_id": 3, "mean_centroid": [0.5, 0.88]},
+        },
+    ]
+    skipped = [
+        {"track_id": 910, "segment_id": None, "reason": "non_lyric", "label": "non_lyric", "decision": "reject", "text": "Railgun"},
+        {"track_id": 911, "segment_id": None, "reason": "asr_unvoiced", "label": "lyric", "decision": "accept", "text": "Unvoiced instrumental text"},
+        {"track_id": 912, "segment_id": None, "reason": "asr_unvoiced", "label": "lyric", "decision": "accept", "text": "Another unvoiced caption"},
+    ]
+
+    recovered, warnings = audit_and_recover_missing_lyrics(cues, tracks, skipped)
+    rescued_tids = {tid for c in recovered for tid in c.source_track_ids}
+    assert 910 not in rescued_tids
+    assert 911 not in rescued_tids
+    assert 912 not in rescued_tids
+    assert "missing_parallel_cue: lang=en at 20.0s..23.0s" in warnings
+    assert "missing_parallel_cue: lang=en at 40.0s..43.0s" in warnings
+    assert "missing_parallel_cue: lang=en at 50.0s..53.0s" in warnings
+    # Mixed-language "en" cue on layer 2 (ja-Latn) at 30.0s..33.0s must NOT trigger missing_parallel_cue
+    assert all("30.0s..33.0s" not in w for w in warnings)
+
+
+def test_build_lrc_from_artifacts_audits_and_recovers_parallel_lyrics(tmp_path: Path):
+    artifacts_dir = tmp_path / "art_audit_integration"
+    artifacts_dir.mkdir()
+    manifest = {
+        "video_id": "vid_audit",
+        "probe": {"duration": 100.0, "width": 1280, "height": 720},
+    }
+
+    ja_lines = [
+        "夜空の星を見上げて", "風が頬を撫でてゆく", "遠い記憶が蘇る", "夢の続きを追いかけ",
+        "明日へ向かう旅路", "君の声が響いてる", "光が差し込む朝に", "涙を拭いて歩こう",
+        "新しい世界が開く", "未来へ続くこの道",
+    ]
+    ro_lines = [
+        "yozora no hoshi wo miagete", "kaze ga hoho wo nadete yuku", "tooi kioku ga yomigaeru", "yume no tsuzuki wo oikake",
+        "ashita e mukau tabiji", "kimi no koe ga hibiiteru", "hikari ga sashikomu asa ni", "namida wo fuite arukou",
+        "atarashii sekai ga hiraku", "mirai e tsuzuku kono michi",
+    ]
+    en_lines = [
+        "Looking up at stars tonight", "Breeze is brushing past my face", "Even when the night is cold", "Chasing dreams beyond the sky",
+        "Walking down tomorrow road", "", "Morning light breaks through the dark", "Wiping tears and moving on",
+        "Brand new world is opening", "Pathway leading to the future",
+    ]
+
+    tracks_list: list[dict] = []
+    for i in range(10):
+        s = (i + 1) * 7000
+        e = s + 3000
+        if i == 2:
+            s, e = 20000, 23000
+        elif i == 5:
+            s, e = 40000, 43000
+
+        tracks_list.append({
+            "track_id": 100 + i,
+            "start_ms": s,
+            "end_ms": e,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.96,
+            "bbox": [300, 500, 980, 536],
+            "features": {"dominant_text": ja_lines[i], "mean_centroid": [0.5, 0.72]},
+            "segments": [{"segment_id": 0, "start_ms": s, "end_ms": e, "text": ja_lines[i], "confidence": 0.96, "num_occurrences": 4}],
+        })
+        tracks_list.append({
+            "track_id": 200 + i,
+            "start_ms": s,
+            "end_ms": e,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.95,
+            "bbox": [300, 560, 980, 596],
+            "features": {"dominant_text": ro_lines[i], "mean_centroid": [0.5, 0.80]},
+            "segments": [{"segment_id": 0, "start_ms": s, "end_ms": e, "text": ro_lines[i], "confidence": 0.95, "num_occurrences": 4}],
+        })
+        if i == 2:
+            # Recoverable gap on en layer: skipped as non_lyric/review at 20000..23000ms
+            tracks_list.append({
+                "track_id": 300 + i,
+                "start_ms": s,
+                "end_ms": e,
+                "label": "non_lyric",
+                "decision": "review",
+                "confidence": 0.91,
+                "qa_flags": ["needs_human_audit"],
+                "bbox": [300, 620, 980, 656],
+                "features": {"dominant_text": en_lines[i], "mean_centroid": [0.5, 0.88]},
+                "segments": [{"segment_id": 0, "start_ms": s, "end_ms": e, "text": en_lines[i], "confidence": 0.91, "num_occurrences": 4}],
+            })
+        elif i != 5:
+            tracks_list.append({
+                "track_id": 300 + i,
+                "start_ms": s,
+                "end_ms": e,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.94,
+                "bbox": [300, 620, 980, 656],
+                "features": {"dominant_text": en_lines[i], "mean_centroid": [0.5, 0.88]},
+                "segments": [{"segment_id": 0, "start_ms": s, "end_ms": e, "text": en_lines[i], "confidence": 0.94, "num_occurrences": 4}],
+            })
+        # Note: i == 5 (40000..43000ms) has NO en track at all -> unrecoverable gap
+
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps({"tracks": tracks_list}), encoding="utf-8")
+
+    out_lrc = tmp_path / "audit_out.lrc"
+    res = build_lrc_from_artifacts(artifacts_dir, out_lrc, include_review=False, force=True)
+
+    cues_json = json.loads((tmp_path / "audit_out.cues.json").read_text(encoding="utf-8"))
+    rescued_cues = [c for c in cues_json["cues"] if c["source_track_ids"] == [302]]
+    assert len(rescued_cues) == 1
+    assert rescued_cues[0]["text"] == "Even when the night is cold"
+    assert "cross_layer_gap_rescued" in rescued_cues[0]["qa_flags"]
+    assert all(s.get("track_id") != 302 for s in res["skipped"])
+
+    expected_warning = "missing_parallel_cue: lang=en at 40.0s..43.0s"
+    assert res["reference_warnings"].count(expected_warning) == 1
+    assert cues_json["reference_warnings"].count(expected_warning) == 1
 
 
 

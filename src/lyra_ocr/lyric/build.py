@@ -89,6 +89,8 @@ _HARD_REJECT_QA_FLAGS = frozenset({
     "vad_silent_overlay",
     "isolated_fragment_word",
     "boundary_unvoiced_or_credit",
+    "split_title_card_fragment",
+    "asr_unvoiced",
 })
 
 
@@ -104,7 +106,7 @@ def _is_hard_rejected_track(
     qa_flags = set(track.get("qa_flags") or [])
     if qa_flags & _HARD_REJECT_QA_FLAGS:
         return True
-    if skipped_reasons & {"tracking_error", "boundary_unvoiced_or_credit"}:
+    if skipped_reasons & {"tracking_error", "boundary_unvoiced_or_credit", "asr_unvoiced"}:
         return True
     if "supplementary/social/credit" in str(track.get("reason", "")).lower():
         return True
@@ -190,20 +192,25 @@ def audit_and_recover_missing_lyrics(
         return cues, []
 
     cfg = thresholds or DEFAULT_GROUPING_THRESHOLDS
-    by_layer_lang: dict[tuple[Any, str], list[LyricCue]] = defaultdict(list)
+    by_layer_id: dict[Any, list[LyricCue]] = defaultdict(list)
     for cue in cues:
         if cue.layer_id is not None:
-            by_layer_lang[(cue.layer_id, cue.lang)].append(cue)
+            by_layer_id[cue.layer_id].append(cue)
 
-    major_keys = [
-        key for key, lcues in by_layer_lang.items()
-        if len(lcues) >= cfg.audit_major_layer_min_cues
-    ]
+    major_keys: list[tuple[Any, str]] = []
+    for lid, lcues in by_layer_id.items():
+        if len(lcues) < cfg.audit_major_layer_min_cues:
+            continue
+        voted_lang = vote_layer_lang([c.lang for c in lcues if c.lang])
+        if voted_lang == "und":
+            voted_lang = next((c.lang for c in lcues if c.lang and c.lang != "und"), "und")
+        major_keys.append((lid, voted_lang))
+
     if len(major_keys) < 2:
         return cues, []
 
     target_mean_y = {
-        key: sum(c.y_center for c in by_layer_lang[key]) / len(by_layer_lang[key])
+        key: sum(c.y_center for c in by_layer_id[key[0]]) / len(by_layer_id[key[0]])
         for key in major_keys
     }
 
@@ -217,7 +224,7 @@ def audit_and_recover_missing_lyrics(
 
     anchor_entries: list[tuple[tuple[Any, str], LyricCue]] = []
     for key in major_keys:
-        for cue in by_layer_lang[key]:
+        for cue in by_layer_id[key[0]]:
             anchor_entries.append((key, cue))
     anchor_entries.sort(key=lambda item: (item[1].start_ms, item[1].end_ms, str(item[0][0])))
 
@@ -237,7 +244,7 @@ def audit_and_recover_missing_lyrics(
 
             has_target_cue = any(
                 dc.start_ms < anchor.end_ms + cue_pad and dc.end_ms > anchor.start_ms - cue_pad
-                for dc in by_layer_lang[target_key]
+                for dc in by_layer_id[target_lid]
             )
             if has_target_cue:
                 continue
@@ -308,7 +315,7 @@ def audit_and_recover_missing_lyrics(
                     lang=target_lang,
                 )
                 rescued_cues.append(rescued_cue)
-                by_layer_lang[target_key].append(rescued_cue)
+                by_layer_id[target_lid].append(rescued_cue)
                 if tid_str:
                     used_track_id_strs.add(tid_str)
                     rescued_track_id_strs.add(tid_str)
@@ -781,14 +788,6 @@ def build_lrc_from_artifacts(
         vocal_profile=vocal_profile,
         include_review=include_review,
     )
-    cues, audit_warnings = audit_and_recover_missing_lyrics(
-        cues,
-        tracks,
-        skipped,
-        frame_width=frame_width,
-        frame_height=frame_height,
-    )
-    reference_warnings.extend(audit_warnings)
 
     if cues and asr_transcript is not None and asr_transcript.segments:
         gated_cues: list[LyricCue] = []
