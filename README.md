@@ -25,7 +25,7 @@ The pipeline runs in two main stages (via the `lyra-ocr` CLI or Web UI `lyra-ocr
 ### Current Limitations
 
 - Text detection and multi-line splitting target **horizontal** text lines (vertical *tategaki* splitting is not implemented).
-- `faster-whisper` runs directly on mixed 16kHz mono audio (no Demucs/UVR vocal separation step).
+- Audio extraction runs a 2-tier vocal separation pipeline (`extract_isolated_vocals_16k`: optional Demucs stem separation with a zero-PyTorch Mid-Side HPSS fallback) before isolated-vocal RMS-VAD and `faster-whisper` ASR, falling back to raw mixed 16 kHz mono audio (`extract_audio_16k`) if separation yields silence or is unavailable.
 - On heavy background music or sung ateji not present in dictionaries/references, accuracy still depends on OCR crop readability and LRCLIB/ASR overlap.
 - The benchmark metrics below cover **Phase 1** tracking/classification on the 25-video English `Fix_lyric_EN` subset; subsequent multilingual, ASR, and LRC features are verified through the unit/eval test suite and local runs.
 
@@ -36,7 +36,6 @@ The pipeline runs in two main stages (via the `lyra-ocr` CLI or Web UI `lyra-ocr
 - [System Architecture](doc/ARCHITECTURE.md): Subsystem decomposition, domain entities, design decisions, and academic/engineering references.
 - [Data Contracts & Specifications](doc/SPECIFICATION.md): Artifact schemas (`manifest.json`, `frame_index.json`, `ocr_raw.json`, `tracks.json`, `review.csv`, `labels.jsonl`).
 - [Language Support & Policy Matrix](doc/LANGUAGE_SUPPORT.md): Script detection, `LanguageProfile` registry, and language-specific OCR/repair policies.
-- [Research Tracker & Literature Review](doc/RESEARCH_TRACKER.md): Deep-dive comparisons of academic papers and open-source GitHub repositories informing each pipeline stage.
 
 ---
 

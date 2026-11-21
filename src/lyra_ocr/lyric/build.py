@@ -88,9 +88,22 @@ _HARD_REJECT_QA_FLAGS = frozenset({
     "high_spatial_variance",
     "vad_silent_overlay",
     "isolated_fragment_word",
+    "single_frame_isolated",
     "boundary_unvoiced_or_credit",
     "split_title_card_fragment",
     "asr_unvoiced",
+    "low_ocr_confidence",
+    "low_text_quality",
+})
+
+_HARD_REJECT_SKIP_REASONS = frozenset({
+    "tracking_error",
+    "boundary_unvoiced_or_credit",
+    "asr_unvoiced",
+    "low_ocr_confidence",
+    "low_text_quality",
+    "empty_text",
+    "human_reject",
 })
 
 
@@ -98,15 +111,28 @@ def _is_hard_rejected_track(
     track: dict[str, Any],
     dom_text: str,
     skipped_reasons: set[str],
+    skipped_items: list[dict[str, Any]] | tuple[dict[str, Any], ...] = (),
 ) -> bool:
-    """Return True if a track was blocked by metadata, credit, watermark, or tracking-error rules."""
+    """Return True if a track was blocked by metadata, credit, watermark, human-reject, or quality-gate rules."""
     features = track.get("features") or {}
     if isinstance(features, dict) and features.get("layer_kind") == "overlay":
         return True
+    if track.get("decision") == "reject" or track.get("human_decision") == "reject":
+        return True
+    if track.get("human_label") == "non_lyric":
+        return True
+
     qa_flags = set(track.get("qa_flags") or [])
+    for item in skipped_items:
+        if item.get("decision") == "reject" or item.get("human_decision") == "reject":
+            return True
+        if item.get("human_label") == "non_lyric":
+            return True
+        qa_flags.update(item.get("qa_flags") or [])
+
     if qa_flags & _HARD_REJECT_QA_FLAGS:
         return True
-    if skipped_reasons & {"tracking_error", "boundary_unvoiced_or_credit", "asr_unvoiced"}:
+    if skipped_reasons & _HARD_REJECT_SKIP_REASONS:
         return True
     if "supplementary/social/credit" in str(track.get("reason", "")).lower():
         return True
@@ -218,9 +244,12 @@ def audit_and_recover_missing_lyrics(
         str(tid) for cue in cues for tid in cue.source_track_ids if tid is not None
     }
     skipped_reasons_by_tid: dict[str, set[str]] = defaultdict(set)
+    skipped_items_by_tid: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for item in skipped:
         if isinstance(item, dict) and item.get("track_id") is not None:
-            skipped_reasons_by_tid[str(item["track_id"])].add(str(item.get("reason", "")))
+            tid_key = str(item["track_id"])
+            skipped_reasons_by_tid[tid_key].add(str(item.get("reason", "")))
+            skipped_items_by_tid[tid_key].append(item)
 
     anchor_entries: list[tuple[tuple[Any, str], LyricCue]] = []
     for key in major_keys:
@@ -273,7 +302,12 @@ def audit_and_recover_missing_lyrics(
                 overlap_ms = min(tr_end, anchor.end_ms + track_pad) - max(tr_start, anchor.start_ms - track_pad)
                 if overlap_ms <= 0:
                     continue
-                if _is_hard_rejected_track(track, cand_text, skipped_reasons_by_tid.get(tid_str, set())):
+                if _is_hard_rejected_track(
+                    track,
+                    cand_text,
+                    skipped_reasons_by_tid.get(tid_str, set()),
+                    skipped_items=skipped_items_by_tid.get(tid_str, ()),
+                ):
                     continue
 
                 features = track.get("features") or {}

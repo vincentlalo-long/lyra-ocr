@@ -18,6 +18,7 @@ Every execution pipeline persists standardized intermediate artifacts to allow i
 | `review.csv` / `review_tracks.csv` | Classification Subsystem (`review.py`) | Tabular review sheets for rapid human-in-the-loop audit and confirmation. |
 | `labels.jsonl` | Labeling Store (`labels.py`, `review.py`) | Append-only JSON Lines trail of human annotations and corrections. |
 | `audio_16k.npy` | Audio Extractor (`audio/extract.py`) | Cached mono 16 kHz float32 PCM waveform extracted via FFmpeg. |
+| `vocals_16k.npy` | Audio Extractor (`audio/extract.py`) | Cached mono 16 kHz float32 isolated vocal stem waveform (Demucs or Mid-Side HPSS fallback). |
 | `asr_transcript.json` | Word-Level ASR (`audio/asr.py`) | Cached `faster-whisper` transcript with segment and word-level millisecond timestamps. |
 | `reference_cache/<sha1>.json` | Reference Models (`lyric/ref_models.py`) | Cached `ReferenceBundle` responses from LRCLIB or YouTube captions keyed by normalized query hash. |
 | `<name>.cues.json` | Lyric Export (`lyric/export.py`) | Complete cue-level assembly manifest with `words`, `layer_id`, `lang`, `qa_flags`, `skipped`, and provenance. |
@@ -328,7 +329,7 @@ Written alongside `<name>.lrc` by `write_cues_json()` at the end of `build_lrc_f
   "tracker": "bytetrack",
   "enhanced": true,
   "options": {
-    "cache_version": 7,
+    "cache_version": 8,
     "include_review": false,
     "correct_method": "dictionary",
     "refine": false,
@@ -441,6 +442,8 @@ Written alongside `<name>.lrc` by `write_cues_json()` at the end of `build_lrc_f
 | `select.py` | `low_ocr_confidence`, `low_text_quality` | Tripped `_quality_gate()` (emitted on cues when `include_review=True`, or in `skipped[].qa_flags`). |
 | `select.py` | `reference_rescue` | `non_lyric` track rescued via high-similarity match against manual or LRCLIB reference. |
 | `build.py` | `asr_unvoiced` | `asr_vocal_gate_score(cue, asr_transcript) < 0.20`; skipped if `eff_conf < 0.65` and `not include_review`. |
+| `build.py` | `boundary_unvoiced_or_credit` | Boundary intro/outro cue failed vocal-activity/ASR gating or matched credit, sign-off, artist/channel, or split-title patterns in `filter_boundary_unvoiced_and_distractor_cues()`. |
+| `build.py` | `cross_layer_gap_rescued` | Dropped non-rejected track recovered by `audit_and_recover_missing_lyrics()` to fill a parallel major-layer coverage gap. |
 | `ref_align.py` | `reference_uncertain` | Matched cue fell below replacement/coverage/ratio guards (unless `ja-Latn` with `repair_romaji=False`). |
 | `ref_align.py` | `reference_timing_split` | Overlapping OCR interval partitioned using synchronized reference timestamps. |
 | `ref_align.py` | `caption_gap_fill` | Gap-filled cue originated from a YouTube caption reference source. |
@@ -448,7 +451,7 @@ Written alongside `<name>.lrc` by `write_cues_json()` at the end of `build_lrc_f
 | `grouping.py` | `multiline_staggered` | Simultaneous multi-line cues staggered proportionally when ASR alignment was unavailable. |
 | `layer_consolidation.py` | `cross_layer_inherited` | Solitary English cue cloned into a silence gap of another major layer. |
 | `audio/asr.py` | `asr_aligned` | Multi-line cue timestamps and `words` assigned via DP alignment to `ASRTranscript`. |
-| `classify.py` | `lyric_layer_member`, `potential_chorus`, `title_hook_in_lyric_layer`, `title_match_outside_intro`, `metadata_title_match`, `metadata_channel_match`, `static_overlay_layer`, `intro_bounded_card`, `only_intro_outro`, `intro_credit_pattern`, `vad_silent_overlay`, `long_lifetime_invariant`, `high_spatial_variance`, `social_handle_tag`, `chat_overlay_suspect`, `chat_like_content`, `isolated_fragment_word`, `ocr_fluctuation_lyric_line`, `ocr_fluctuation_static`, `single_cue_track`, `single_frame_lyric_cue`, `single_frame_isolated`, `needs_human_audit` | Track-level classification diagnostics stored in `tracks.json` (and `review_tracks.csv`). |
+| `classify.py` | `lyric_layer_member`, `potential_chorus`, `title_hook_in_lyric_layer`, `title_match_outside_intro`, `metadata_title_match`, `metadata_channel_match`, `metadata_artist_match`, `static_overlay_layer`, `intro_bounded_card`, `only_intro_outro`, `intro_credit_pattern`, `intro_outro_signoff`, `split_title_card_fragment`, `vad_silent_overlay`, `long_lifetime_invariant`, `high_spatial_variance`, `social_handle_tag`, `chat_overlay_suspect`, `chat_like_content`, `isolated_fragment_word`, `ocr_fluctuation_lyric_line`, `ocr_fluctuation_static`, `single_cue_track`, `single_frame_lyric_cue`, `single_frame_isolated`, `needs_human_audit` | Track-level classification diagnostics stored in `tracks.json` (and `review_tracks.csv`). |
 
 ### 5.3. Multi-Layer `.lrc` & Enhanced `<mm:ss.xx>` Output Rules (`lyric/export.py`)
 

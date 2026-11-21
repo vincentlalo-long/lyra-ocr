@@ -818,5 +818,58 @@ def test_classify_preserves_sung_one_word_title_token_in_boundary_window():
     assert res_silent.decision == "reject"
 
 
+def test_boundary_distractor_text_ignores_stopwords_and_partial_multiword_artist():
+    from lyra_ocr.classify import is_boundary_distractor_text
+
+    # Stopwords in artist/channel names must not cause false boundary rejections
+    assert is_boundary_distractor_text("in the dark", artist="The Chainsmokers", channel="The Chainsmokers") is False
+    assert is_boundary_distractor_text("look at the sky", artist="Of Monsters and Men", channel="Of Monsters and Men") is False
+
+    # Partial 1-token overlap with a multi-word artist must not reject boundary lyrics
+    assert is_boundary_distractor_text("walk alone", artist="Alan Walker") is False
+    assert is_boundary_distractor_text("walker alone", artist="Alan Walker") is False
+
+    # Exact or full-token artist/channel credit still rejects
+    assert is_boundary_distractor_text("fripSide (フリップサイド)", artist="fripSide", channel="Geneon") is True
+    assert is_boundary_distractor_text("Music by Alan Walker", artist="Alan Walker") is True
+
+
+def test_classify_does_not_reject_boundary_lyric_on_artist_stopwords():
+    from lyra_ocr.classify import classify_track
+
+    v_dur = 200000
+    t1 = create_mock_track(
+        track_id=110,
+        start_ms=4000,
+        end_ms=8000,
+        texts=["in the dark"],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=v_dur,
+    )
+    res1 = classify_track(
+        t1,
+        metadata={"title": "Closer", "artist": "The Chainsmokers", "channel": "The Chainsmokers"},
+        video_duration_ms=v_dur,
+    )
+    assert res1.label == "lyric"
+    assert res1.decision == "accept"
+
+    t2 = create_mock_track(
+        track_id=111,
+        start_ms=4000,
+        end_ms=8000,
+        texts=["look at the sky"],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=v_dur,
+    )
+    res2 = classify_track(
+        t2,
+        metadata={"title": "Little Talks", "artist": "Of Monsters and Men", "channel": "Of Monsters and Men"},
+        video_duration_ms=v_dur,
+    )
+    assert res2.label == "lyric"
+    assert res2.decision == "accept"
+
+
 
 

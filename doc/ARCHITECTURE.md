@@ -63,9 +63,9 @@ flowchart TD
     Video -.-> AudioLayer
 
     subgraph AudioLayer ["Layer 5: Multimodal Audio & Track Classification (audio/, classify.py)"]
-        AudioExtract["16 kHz Mono PCM Extract (audio/extract.py)"]
-        VocalVAD["Band-Pass Vocal Activity Detection (audio/vad.py)"]
-        WordASR["Word-Level faster-whisper ASR (audio/asr.py)"]
+        AudioExtract["2-Tier Vocal Isolation & 16 kHz PCM<br/>(Demucs / Mid-Side HPSS -> vocals_16k.npy)"]
+        VocalVAD["Isolated-Vocal RMS-VAD & Band-Pass VAD<br/>(audio/vad.py)"]
+        WordASR["Word-Level faster-whisper ASR + Music Fallback<br/>(audio/asr.py)"]
         TrackClassifier["Rule-Based Track Classifier (classify.py)"]
         AudioExtract --> VocalVAD
         AudioExtract --> WordASR
@@ -115,13 +115,13 @@ flowchart TD
 - **Spatial Layer Discovery (`layers.py`)**: Clusters tracks into horizontal `TextLayer` bands (`discover_layers`, `refresh_dict_tracks_layers`) and classifies each layer as `lyric`, `overlay`, or `sparse` with a voted dominant `lang`.
 
 ### 2.5. Multimodal Audio & Track Classification Subsystem (`audio/`, `classify.py`)
-- **Audio Extraction & Vocal Separation (`audio/extract.py`)**: Extracts 16 kHz mono float32 PCM (`extract_audio_16k`, cached to `audio_16k.npy`) via FFmpeg and optionally invokes Demucs (`separate_vocals_demucs`).
-- **Vocal Activity Detection (`audio/vad.py`)**: Applies a 4th-order Butterworth band-pass filter (300–3400 Hz) to compute a 50 ms vocal probability profile (`compute_vocal_activity_profile`, `vocal_active_ratio`) used to reject silent intro/outro overlays and silent gap-fill candidates.
-- **Word-Level ASR (`audio/asr.py`)**: Runs `faster-whisper` with `word_timestamps=True` and `vad_filter=True` (`transcribe_audio_words`, cached to `asr_transcript.json`), supplying vocal gating (`asr_vocal_gate_score`), duplicate split onset checks (`asr_has_new_prefix_onset`), multi-line DP partitioning (`align_multiline_cues_with_asr`), and fallback reference bundles (`asr_to_reference_bundle`).
-- **Discriminative Rule Classification (`classify.py`)**: Classifies `TextTrack` entities into `lyric` vs `non_lyric` using spatial priors, channel/title metadata correlation, VAD vocal activity, intro credit patterns, and layer membership, preserving diagnostic subtypes in `reason` and `qa_flags`.
+- **Audio Extraction & 2-Tier Vocal Isolation (`audio/extract.py`)**: `extract_isolated_vocals_16k()` attempts neural Demucs stem separation (`separate_vocals_demucs`) and falls back to zero-PyTorch Stereo Mid-Side + STFT Median-Filter HPSS (`isolate_vocals_midside_hpss`), caching 16 kHz mono isolated vocals to `vocals_16k.npy`; if isolated vocals are unavailable or all-zero, `build_lrc_from_artifacts()` falls back to raw 16 kHz mono PCM (`extract_audio_16k`, cached to `audio_16k.npy`).
+- **Isolated-Vocal RMS-VAD & Band-Pass VAD (`audio/vad.py`)**: `compute_vocal_activity_profile()` computes a normalized 50 ms vocal probability profile—using direct $P_{95}$-normalized RMS-VAD when `is_isolated_vocals=True` and a 4th-order Butterworth band-pass filter (300–3400 Hz) on raw mixed audio—to gate silent intro/outro overlays, title-card fragments, and gap-fill candidates (`vocal_active_ratio`).
+- **Word-Level ASR (`audio/asr.py`)**: Runs `faster-whisper` with `word_timestamps=True` and `vad_filter=True` (`transcribe_audio_words`, cached to `asr_transcript.json`) on isolated vocals when available, automatically retrying with `vad_filter=False` and `condition_on_previous_text=False` when Silero VAD starves on music accompaniment and invalidating starved long-audio caches (`<= 1` segment on `>= 30s` audio). Supplies vocal gating (`asr_vocal_gate_score`), duplicate split onset checks (`asr_has_new_prefix_onset`), multi-line DP partitioning (`align_multiline_cues_with_asr`), cue word-level alignment (`align_cues_words_with_asr`), and fallback reference bundles (`asr_to_reference_bundle`).
+- **Discriminative Rule Classification (`classify.py`)**: Classifies `TextTrack` entities into `lyric` vs `non_lyric` using spatial priors, channel/title/artist metadata correlation, VAD vocal activity, intro credit/sign-off patterns, split title-card fragment checks, and layer membership, preserving diagnostic subtypes in `reason` and `qa_flags`.
 
 ### 2.6. Lyric Assembly, Reference Alignment & Export Subsystem (`lyric/`, `audio/forced_align.py`, `config.py`)
-- **Centralized Threshold Configuration (`config.py`)**: Houses immutable frozen dataclasses (`LayerDiscoveryThresholds`, `GroupingThresholds`, `ClassificationThresholds`, `OcrPreprocessThresholds`) consumed by `layers.py`, `lyric/grouping.py`, `lyric/layer_consolidation.py`, `classify.py`, and `ocr/engine.py`.
+- **Centralized Threshold Configuration (`config.py`)**: Houses immutable frozen dataclasses (`LayerDiscoveryThresholds`, `GroupingThresholds`, `ClassificationThresholds`, `OcrPreprocessThresholds`, `VocalIsolationThresholds`, `ASRAlignmentThresholds`) consumed by `layers.py`, `lyric/grouping.py`, `lyric/layer_consolidation.py`, `classify.py`, `ocr/engine.py`, `audio/extract.py`, `audio/vad.py`, and `audio/asr.py`.
 - **Cue Selection & Conservative Repair (`lyric/select.py`, `lyric/correct.py`, `lyric/text_repair.py`)**: Merges human labels (`labels.jsonl`), performs non-lyric reference rescue, applies confidence/readability gates (`_quality_gate`), computes consensus medoids, and runs corpus + SymSpell English repair (`repair_text`) while keeping non-English and Romaji lines screen-faithful by default.
 - **Modular Reference Subsystem (`lyric/reference.py`, `lyric/ref_models.py`, `lyric/ref_providers.py`, `lyric/ref_align.py`, `lyric/captions.py`)**: Queries LRCLIB and YouTube captions with SHA-1 disk caching (`reference_cache/`), runs monotonic many-to-many DP alignment (`align_reference`), splits overlapping reference-backed intervals (`reconcile_reference_overlaps`), and inserts VAD-checked gap fills (`fill_reference_gaps`).
 - **Layer Consolidation & Grouping (`lyric/layer_consolidation.py`, `lyric/grouping.py`)**: Collapses duplicate spatial bands (`merge_duplicate_layers`), separates parallel bilingual streams or filters secondary overlays (`consolidate_language_layers`), collapses same-Y flicker, resolves simultaneous multi-line cues via short-wrap merging or ASR alignment (`resolve_simultaneous_multiline_cues`), deduplicates fade transitions (`dedupe_and_group`), and shares solitary English cues across major layers (`share_solitary_cross_layer_cues`).
@@ -260,8 +260,8 @@ classDiagram
 ### 4.6. Source Layout: Cohesive Subsystem Package vs Single-Purpose Module
 * **Layout Problem**: A flat module list becomes unreadable as subsystems grow, while premature packaging buries single-purpose modules under a directory that contains one file.
 * **Lyra OCR Decision**: A subsystem with more than one cooperating module becomes a package (`video/`, `ocr/`, `trackers/`, `audio/`, `lyric/`, `dataset/`, `eval/`, `web/`); single-purpose domain and configuration modules stay flat at the package root (`config.py`, `lang.py`, `layers.py`, `track.py`, `classify.py`, `labels.py`, `review.py`, `provenance.py`, `pipeline.py`). Flat modules form the domain core and shared schemas, while packages isolate adapters, multimodal engines, lyric post-processing, and tooling:
-  - `src/lyra_ocr/config.py`: Centralized frozen threshold dataclasses (`LayerDiscoveryThresholds`, `GroupingThresholds`, `ClassificationThresholds`, `OcrPreprocessThresholds`).
-  - `src/lyra_ocr/audio/`: `extract.py` (16 kHz PCM & Demucs wrapper), `vad.py` (band-pass vocal activity profile), `asr.py` (`faster-whisper` word ASR, vocal gate, prefix onset, multi-line DP alignment), `forced_align.py` (10 ms onset alignment & proportional word timings).
+  - `src/lyra_ocr/config.py`: Centralized frozen threshold dataclasses (`LayerDiscoveryThresholds`, `GroupingThresholds`, `ClassificationThresholds`, `OcrPreprocessThresholds`, `VocalIsolationThresholds`, `ASRAlignmentThresholds`).
+  - `src/lyra_ocr/audio/`: `extract.py` (16 kHz PCM, `extract_isolated_vocals_16k` via Demucs + `isolate_vocals_midside_hpss` cached to `vocals_16k.npy`), `vad.py` (isolated-vocal RMS-VAD & band-pass vocal activity profile), `asr.py` (`faster-whisper` word ASR with Silero-VAD music fallback, vocal gate, prefix onset, multi-line DP alignment), `forced_align.py` (10 ms onset alignment & proportional word timings).
   - `src/lyra_ocr/lyric/`: `models.py` (`LyricCue`, `LrcMetadata`, `CorrectionConfig`, `ReferenceConfig`), `select.py`, `correct.py`, `text_repair.py`, `reference.py` (facade over `ref_models.py`, `ref_providers.py`, `ref_align.py`), `captions.py`, `layer_consolidation.py`, `grouping.py`, `timing.py`, `export.py`, `build.py`.
 * **Dependency Direction**: `cli.py` and `web/` are entry points and may import anything; domain modules never import from `cli.py`. Shared artifact metadata lives in `provenance.py`, not in the CLI.
 
@@ -272,7 +272,7 @@ classDiagram
 
 ### 4.8. Centralized Frozen Threshold Configuration (`config.py`)
 * **Configuration Drift Problem**: Scattering magic numbers across `layers.py`, `classify.py`, `ocr/engine.py`, `lyric/grouping.py`, and `lyric/layer_consolidation.py` makes tuning opaque and forces callers to edit algorithm code for sensitivity sweeps.
-* **Lyra OCR Decision**: Every tunable stage reads from an immutable frozen dataclass (`LayerDiscoveryThresholds`, `GroupingThresholds`, `ClassificationThresholds`, `OcrPreprocessThresholds`) in `src/lyra_ocr/config.py`, with module-level `DEFAULT_*` instances and optional keyword overrides on public functions.
+* **Lyra OCR Decision**: Every tunable stage reads from an immutable frozen dataclass (`LayerDiscoveryThresholds`, `GroupingThresholds`, `ClassificationThresholds`, `OcrPreprocessThresholds`, `VocalIsolationThresholds`, `ASRAlignmentThresholds`) in `src/lyra_ocr/config.py`, with module-level `DEFAULT_*` instances and optional keyword overrides on public functions.
 
 ### 4.9. Facade-Backed Reference & Layer Consolidation Decomposition
 * **Monolith Problem**: Combining data models/caching, LRCLIB HTTP queries, and monotonic DP alignment in a single file—or mixing cross-layer consolidation with within-layer cue deduplication—creates circular dependencies and bloated modules.

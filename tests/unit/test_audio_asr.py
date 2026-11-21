@@ -584,4 +584,58 @@ def test_transcribe_audio_words_retries_without_vad_when_silero_starves_on_music
     assert texts == ["その鼓動を", "超えてゆく", "光の先へ"]
 
 
+def test_transcribe_audio_words_invalidates_starved_cache_on_long_audio(tmp_path: Path):
+    from types import SimpleNamespace
+
+    stale_transcript = ASRTranscript(
+        language="ja",
+        model_size="small",
+        segments=[
+            ASRSegment(
+                text="only one segment",
+                start_ms=1000,
+                end_ms=2500,
+                language="ja",
+                words=[ASRWord("only", 1000, 2500)],
+            )
+        ],
+    )
+    save_asr_transcript(stale_transcript, tmp_path / "asr_transcript.json")
+
+    transcribe_calls = 0
+
+    class _FakeWhisperModel:
+        def __init__(self, model_size, device="auto", compute_type="default"):
+            pass
+
+        def transcribe(self, audio_input, **kwargs):
+            nonlocal transcribe_calls
+            transcribe_calls += 1
+            info = SimpleNamespace(language="ja", duration=35.0)
+            segs = [
+                SimpleNamespace(
+                    text=f"line {i} here",
+                    start=float(i * 5 + 1),
+                    end=float(i * 5 + 4),
+                    no_speech_prob=0.05,
+                    words=[
+                        SimpleNamespace(word=f"line{i}", start=float(i * 5 + 1), end=float(i * 5 + 2.5), probability=0.95),
+                        SimpleNamespace(word="here", start=float(i * 5 + 2.5), end=float(i * 5 + 4), probability=0.95),
+                    ],
+                )
+                for i in range(3)
+            ]
+            return iter(segs), info
+
+    audio_35s = np.zeros(16000 * 35, dtype=np.float32)
+    fake_module = SimpleNamespace(WhisperModel=_FakeWhisperModel)
+    with patch.dict("sys.modules", {"faster_whisper": fake_module}):
+        transcript = transcribe_audio_words(audio_35s, cache_dir=tmp_path, language="ja")
+
+    assert transcribe_calls == 1
+    assert transcript is not None
+    assert len(transcript.segments) == 3
+    assert [s.text for s in transcript.segments] == ["line 0 here", "line 1 here", "line 2 here"]
+
+
 

@@ -951,7 +951,11 @@ def test_build_lrc_enhanced_plumbing(tmp_path: Path):
     from lyra_ocr.lyric.models import ReferenceConfig
 
     # Test passing enhanced=True
-    with patch("lyra_ocr.lyric.build.extract_audio_16k") as mock_extract, patch("lyra_ocr.lyric.build.align_cues_with_audio") as mock_align:
+    with (
+        patch("lyra_ocr.lyric.build.extract_isolated_vocals_16k", return_value=None),
+        patch("lyra_ocr.lyric.build.extract_audio_16k") as mock_extract,
+        patch("lyra_ocr.lyric.build.align_cues_with_audio") as mock_align,
+    ):
         mock_extract.return_value = np.zeros(16000, dtype=np.float32)
         def _add_words(cues, audio):
             for c in cues:
@@ -1433,6 +1437,7 @@ def test_build_lrc_routes_vocal_lang_to_asr_and_preserves_asr_words(tmp_path: Pa
     audio = np.zeros(16000 * 6, dtype=np.float32)
     out_lrc = tmp_path / "ja_words.lrc"
     with (
+        patch("lyra_ocr.lyric.build.extract_isolated_vocals_16k", return_value=None),
         patch("lyra_ocr.lyric.build.extract_audio_16k", return_value=audio),
         patch("lyra_ocr.lyric.build.transcribe_audio_words", side_effect=fake_transcribe),
     ):
@@ -1980,6 +1985,349 @@ def test_build_lrc_from_artifacts_audits_and_recovers_parallel_lyrics(tmp_path: 
     expected_warning = "missing_parallel_cue: lang=en at 40.0s..43.0s"
     assert res["reference_warnings"].count(expected_warning) == 1
     assert cues_json["reference_warnings"].count(expected_warning) == 1
+
+
+def test_filter_boundary_cues_preserves_lyrics_with_stopword_and_multiword_artists():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+    from lyra_ocr.lyric.build import filter_boundary_unvoiced_and_distractor_cues
+    from lyra_ocr.lyric.models import LyricCue
+
+    duration_ms = 240000
+    vocal_profile = np.zeros(4800, dtype=np.float32)
+    vocal_profile[40:300] = 0.9  # active vocals at 2s..15s
+
+    asr_transcript = ASRTranscript(
+        language="en",
+        segments=[
+            ASRSegment("in the dark walker alone", 2000, 12000, words=[
+                ASRWord("in", 2000, 2500),
+                ASRWord("the", 2500, 3000),
+                ASRWord("dark", 3000, 4000),
+                ASRWord("walker", 6000, 7500),
+                ASRWord("alone", 7500, 9000),
+            ]),
+            ASRSegment("line2", 40000, 44000, words=[ASRWord("line2", 40000, 44000)]),
+            ASRSegment("line3", 80000, 84000, words=[ASRWord("line3", 80000, 84000)]),
+            ASRSegment("line4", 120000, 124000, words=[ASRWord("line4", 120000, 124000)]),
+            ASRSegment("line5", 200000, 204000, words=[ASRWord("line5", 200000, 204000)]),
+        ],
+    )
+
+    cues_1 = [
+        LyricCue(start_ms=2000, end_ms=4500, text="in the dark", ocr_confidence=0.98, source_track_ids=[1]),
+        LyricCue(start_ms=5000, end_ms=7500, text="look at the sky", ocr_confidence=0.98, source_track_ids=[2]),
+    ]
+    skipped_1: list[dict] = []
+    kept_1 = filter_boundary_unvoiced_and_distractor_cues(
+        cues_1,
+        skipped_1,
+        duration_ms=duration_ms,
+        title="Closer",
+        artist="The Chainsmokers",
+        channel="The Chainsmokers",
+        asr_transcript=asr_transcript,
+        vocal_profile=vocal_profile,
+    )
+    assert [c.text for c in kept_1] == ["in the dark", "look at the sky"]
+    assert skipped_1 == []
+
+    cues_2 = [
+        LyricCue(start_ms=6000, end_ms=9000, text="walker alone", ocr_confidence=0.98, source_track_ids=[3]),
+        LyricCue(start_ms=9500, end_ms=11500, text="walk alone", ocr_confidence=0.98, source_track_ids=[4]),
+    ]
+    skipped_2: list[dict] = []
+    kept_2 = filter_boundary_unvoiced_and_distractor_cues(
+        cues_2,
+        skipped_2,
+        duration_ms=duration_ms,
+        title="Faded",
+        artist="Alan Walker",
+        channel="Alan Walker",
+        asr_transcript=asr_transcript,
+        vocal_profile=vocal_profile,
+    )
+    assert [c.text for c in kept_2] == ["walker alone", "walk alone"]
+    assert skipped_2 == []
+
+
+def test_audit_and_recover_missing_lyrics_blocks_human_reject_quality_gate_single_frame_and_reject_decision(tmp_path: Path):
+    from lyra_ocr.lyric.build import audit_and_recover_missing_lyrics
+    from lyra_ocr.lyric.models import LyricCue
+
+    cues: list[LyricCue] = []
+    for i in range(12):
+        s = (i + 1) * 7000
+        e = s + 3000
+        if i == 2:
+            s, e = 20000, 23000
+        elif i == 3:
+            s, e = 30000, 33000
+        elif i == 5:
+            s, e = 40000, 43000
+        elif i == 6:
+            s, e = 50000, 53000
+
+        cues.append(
+            LyricCue(
+                start_ms=s,
+                end_ms=e,
+                text=f"日本語の歌詞ライン{i}",
+                layer_id=1,
+                lang="ja",
+                y_center=0.72,
+                source_track_ids=[100 + i],
+            )
+        )
+        cues.append(
+            LyricCue(
+                start_ms=s,
+                end_ms=e,
+                text=f"nihongo no kashi rain {i}",
+                layer_id=2,
+                lang="ja-Latn",
+                y_center=0.80,
+                source_track_ids=[200 + i],
+            )
+        )
+        if i not in (2, 3, 5, 6):
+            cues.append(
+                LyricCue(
+                    start_ms=s,
+                    end_ms=e,
+                    text=f"English lyric line {i}",
+                    layer_id=3,
+                    lang="en",
+                    y_center=0.88,
+                    source_track_ids=[300 + i],
+                )
+            )
+
+    tracks = [
+        # decision="reject" with no qa_flags
+        {
+            "track_id": 920,
+            "start_ms": 20000,
+            "end_ms": 23000,
+            "label": "non_lyric",
+            "decision": "reject",
+            "confidence": 0.90,
+            "qa_flags": [],
+            "features": {"dominant_text": "Rejected without flag", "layer_id": 3, "mean_centroid": [0.5, 0.88]},
+        },
+        # Quality-gated low_ocr_confidence in skipped (track itself has decision="accept")
+        {
+            "track_id": 921,
+            "start_ms": 30000,
+            "end_ms": 33000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.40,
+            "qa_flags": [],
+            "features": {"dominant_text": "Garbled low conf ocr", "layer_id": 3, "mean_centroid": [0.5, 0.88]},
+        },
+        # Quality-gated low_text_quality in skipped
+        {
+            "track_id": 922,
+            "start_ms": 40000,
+            "end_ms": 43000,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.70,
+            "qa_flags": [],
+            "features": {"dominant_text": "xzqv blarg qwfp", "layer_id": 3, "mean_centroid": [0.5, 0.88]},
+        },
+        # single_frame_isolated qa_flag
+        {
+            "track_id": 923,
+            "start_ms": 50000,
+            "end_ms": 53000,
+            "label": "non_lyric",
+            "decision": "review",
+            "confidence": 0.80,
+            "qa_flags": ["single_frame_isolated"],
+            "features": {"dominant_text": "Single frame noise", "layer_id": 3, "mean_centroid": [0.5, 0.88]},
+        },
+    ]
+    skipped = [
+        {"track_id": 920, "segment_id": None, "reason": "non_lyric", "label": "non_lyric", "decision": "reject", "text": "Rejected without flag"},
+        {"track_id": 921, "segment_id": 0, "reason": "low_ocr_confidence", "label": "lyric", "decision": "review", "text": "Garbled low conf ocr", "qa_flags": ["low_ocr_confidence"]},
+        {"track_id": 922, "segment_id": 0, "reason": "low_text_quality", "label": "lyric", "decision": "review", "text": "xzqv blarg qwfp", "qa_flags": ["low_text_quality"]},
+        {"track_id": 923, "segment_id": None, "reason": "review", "label": "non_lyric", "decision": "review", "text": "Single frame noise"},
+    ]
+
+    recovered, warnings = audit_and_recover_missing_lyrics(cues, tracks, skipped)
+    rescued_tids = {tid for c in recovered for tid in c.source_track_ids}
+    assert 920 not in rescued_tids
+    assert 921 not in rescued_tids
+    assert 922 not in rescued_tids
+    assert 923 not in rescued_tids
+
+    # End-to-end check: human rejection in labels.jsonl + low_ocr_confidence must NOT be resurrected
+    artifacts_dir = tmp_path / "art_human_reject"
+    artifacts_dir.mkdir()
+    manifest = {"video_id": "vid_hr", "probe": {"duration": 100.0, "width": 1280, "height": 720}}
+
+    ja_lines = [
+        "夜空の星を見上げて", "風が頬を撫でてゆく", "遠い記憶が蘇る", "夢の続きを追いかけ",
+        "明日へ向かう旅路", "君の声が響いてる", "光が差し込む朝に", "涙を拭いて歩こう",
+        "新しい世界が開く", "未来へ続くこの道",
+    ]
+    ro_lines = [
+        "yozora no hoshi wo miagete", "kaze ga hoho wo nadete yuku", "tooi kioku ga yomigaeru", "yume no tsuzuki wo oikake",
+        "ashita e mukau tabiji", "kimi no koe ga hibiiteru", "hikari ga sashikomu asa ni", "namida wo fuite arukou",
+        "atarashii sekai ga hiraku", "mirai e tsuzuku kono michi",
+    ]
+    en_lines = [
+        "Looking up at stars tonight", "Breeze is brushing past my face", "Even when the night is cold", "Chasing dreams beyond the sky",
+        "Walking down tomorrow road", "Garbled unreadable line", "Morning light breaks through the dark", "Wiping tears and moving on",
+        "Brand new world is opening", "Pathway leading to the future",
+    ]
+    e2e_tracks: list[dict] = []
+    for i in range(10):
+        s = (i + 1) * 7000
+        e = s + 3000
+        e2e_tracks.append({
+            "track_id": 100 + i,
+            "start_ms": s,
+            "end_ms": e,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.96,
+            "bbox": [300, 500, 980, 536],
+            "features": {"dominant_text": ja_lines[i], "mean_centroid": [0.5, 0.72]},
+            "segments": [{"segment_id": 0, "start_ms": s, "end_ms": e, "text": ja_lines[i], "confidence": 0.96, "num_occurrences": 4}],
+        })
+        e2e_tracks.append({
+            "track_id": 200 + i,
+            "start_ms": s,
+            "end_ms": e,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": 0.95,
+            "bbox": [300, 560, 980, 596],
+            "features": {"dominant_text": ro_lines[i], "mean_centroid": [0.5, 0.80]},
+            "segments": [{"segment_id": 0, "start_ms": s, "end_ms": e, "text": ro_lines[i], "confidence": 0.95, "num_occurrences": 4}],
+        })
+        # i == 2 (track 302) will be human-rejected in labels.jsonl despite tracks.json having label="lyric", decision="accept"
+        # i == 5 (track 305) will be quality-gated by low OCR confidence (0.35)
+        conf = 0.35 if i == 5 else 0.94
+        e2e_tracks.append({
+            "track_id": 300 + i,
+            "start_ms": s,
+            "end_ms": e,
+            "label": "lyric",
+            "decision": "accept",
+            "confidence": conf,
+            "bbox": [300, 620, 980, 656],
+            "features": {"dominant_text": en_lines[i], "mean_centroid": [0.5, 0.88]},
+            "segments": [{"segment_id": 0, "start_ms": s, "end_ms": e, "text": en_lines[i], "confidence": conf, "num_occurrences": 4}],
+        })
+
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps({"tracks": e2e_tracks}), encoding="utf-8")
+    (artifacts_dir / "labels.jsonl").write_text(
+        json.dumps({"video_id": "vid_hr", "track_id": "302", "human_label": "non_lyric", "human_decision": "reject", "annotator": "human"}) + "\n",
+        encoding="utf-8",
+    )
+
+    out_lrc = tmp_path / "human_reject.lrc"
+    build_lrc_from_artifacts(artifacts_dir, out_lrc, include_review=False, force=True)
+    cues_json = json.loads((tmp_path / "human_reject.cues.json").read_text(encoding="utf-8"))
+    final_tids = {tid for c in cues_json["cues"] for tid in c["source_track_ids"]}
+    assert 302 not in final_tids
+    assert 305 not in final_tids
+
+
+def test_build_lrc_isolated_vocals_primary_path_flows_into_vad_asr_and_align(tmp_path: Path):
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    artifacts_dir = tmp_path / "art_isolated_primary"
+    artifacts_dir.mkdir()
+    v_file = tmp_path / "vid_primary.mp4"
+    v_file.touch()
+
+    manifest = {
+        "video_id": "vid_primary",
+        "video_path": str(v_file),
+        "probe": {"duration": 20.0, "width": 1280, "height": 720},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 2000,
+                "end_ms": 5000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "singing out loud", "mean_centroid": [0.5, 0.85]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 2000, "end_ms": 5000, "text": "singing out loud", "confidence": 0.95}
+                ],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    t = np.linspace(0.0, 6.0, 16000 * 6, endpoint=False, dtype=np.float32)
+    isolated_vocals = (0.3 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
+    vad_calls: list[bool] = []
+    asr_audio_inputs: list[np.ndarray] = []
+    align_audio_inputs: list[np.ndarray] = []
+
+    def fake_vad(audio_in, *, is_isolated_vocals=False, **kwargs):
+        vad_calls.append(bool(is_isolated_vocals))
+        return np.ones(120, dtype=np.float32)
+
+    def fake_asr(audio_in, **kwargs):
+        asr_audio_inputs.append(audio_in)
+        return ASRTranscript(
+            language="en",
+            segments=[
+                ASRSegment(
+                    text="singing out loud",
+                    start_ms=2000,
+                    end_ms=5000,
+                    language="en",
+                    words=[
+                        ASRWord("singing", 2000, 3000),
+                        ASRWord("out", 3000, 3800),
+                        ASRWord("loud", 3800, 5000),
+                    ],
+                )
+            ],
+        )
+
+    def fake_align(cues_in, audio_in, **kwargs):
+        align_audio_inputs.append(audio_in)
+        return cues_in
+
+    out_lrc = tmp_path / "primary_isolated.lrc"
+    with (
+        patch("lyra_ocr.lyric.build.extract_isolated_vocals_16k", return_value=isolated_vocals),
+        patch("lyra_ocr.lyric.build.extract_audio_16k") as mock_raw,
+        patch("lyra_ocr.lyric.build.compute_vocal_activity_profile", side_effect=fake_vad),
+        patch("lyra_ocr.lyric.build.transcribe_audio_words", side_effect=fake_asr),
+        patch("lyra_ocr.lyric.build.align_cues_with_audio", side_effect=fake_align),
+    ):
+        build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            video_path=str(v_file),
+            force=True,
+            enhanced=True,
+            reference_config=ReferenceConfig(enable_audio_align=True, enable_asr=True),
+        )
+
+    assert mock_raw.call_count == 0
+    assert vad_calls == [True]
+    assert len(asr_audio_inputs) == 1
+    assert np.array_equal(asr_audio_inputs[0], isolated_vocals)
+    assert len(align_audio_inputs) == 1
+    assert np.array_equal(align_audio_inputs[0], isolated_vocals)
 
 
 

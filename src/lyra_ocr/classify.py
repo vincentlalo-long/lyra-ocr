@@ -59,6 +59,11 @@ _INTRO_CREDIT_PREFIX_RE = re.compile(
 
 _SIGNOFF_WORD_RE = re.compile(r"^watching[!！.]*$", re.IGNORECASE)
 
+_METADATA_ENTITY_STOPWORDS = frozenset({
+    "the", "and", "for", "with", "this", "that", "from", "you", "are", "was",
+    "not", "but", "all", "can", "one", "out", "her", "his", "our", "your",
+})
+
 
 def _is_intro_credit_text(text: str, *, in_lyric_layer: bool, word_count: int) -> bool:
     """Return True when ``text`` matches an intro/outro production-credit prefix or infix."""
@@ -76,29 +81,38 @@ def _matches_metadata_entity(
     *,
     n_text_changes: int,
     cfg: ClassificationThresholds,
+    require_full_entity_or_high_sim: bool = False,
 ) -> bool:
     """Return True when ``dom_lower`` matches channel or artist metadata."""
     if not entity:
         return False
     sim = string_similarity(dom_lower, entity)
     ent_tokens = set(re.findall(r"\w+", entity))
-    sig_ent_tokens = {t for t in ent_tokens if len(t) >= cfg.channel_token_min_len}
+    sig_ent_tokens = {
+        t
+        for t in ent_tokens
+        if len(t) >= cfg.channel_token_min_len and t not in _METADATA_ENTITY_STOPWORDS
+    }
+    partial_match = (
+        not require_full_entity_or_high_sim
+        and sig_ent_tokens.intersection(dom_tokens)
+        and n_text_changes == 0
+        and len(dom_tokens) <= cfg.channel_partial_max_dom_tokens
+    )
     token_match = bool(
         sig_ent_tokens
-        and (
-            sig_ent_tokens.issubset(dom_tokens)
-            or (
-                sig_ent_tokens.intersection(dom_tokens)
-                and n_text_changes == 0
-                and len(dom_tokens) <= cfg.channel_partial_max_dom_tokens
-            )
-        )
+        and (sig_ent_tokens.issubset(dom_tokens) or partial_match)
     )
     len_ratio = len(entity) / max(1, len(dom_lower))
+    substring_match = (
+        entity not in _METADATA_ENTITY_STOPWORDS
+        and entity in dom_lower
+        and len_ratio >= cfg.channel_substring_min_len_ratio
+    )
     return (
         sim >= cfg.channel_min_similarity
         or token_match
-        or (entity in dom_lower and len_ratio >= cfg.channel_substring_min_len_ratio)
+        or substring_match
     )
 
 
@@ -141,11 +155,21 @@ def is_boundary_distractor_text(
         return True
     dom_tokens = set(re.findall(r"\w+", dom_lower))
     if _matches_metadata_entity(
-        dom_lower, dom_tokens, channel.strip().lower(), n_text_changes=n_text_changes, cfg=cfg
+        dom_lower,
+        dom_tokens,
+        channel.strip().lower(),
+        n_text_changes=n_text_changes,
+        cfg=cfg,
+        require_full_entity_or_high_sim=True,
     ):
         return True
     if _matches_metadata_entity(
-        dom_lower, dom_tokens, artist.strip().lower(), n_text_changes=n_text_changes, cfg=cfg
+        dom_lower,
+        dom_tokens,
+        artist.strip().lower(),
+        n_text_changes=n_text_changes,
+        cfg=cfg,
+        require_full_entity_or_high_sim=True,
     ):
         return True
     return False
@@ -372,7 +396,12 @@ def classify_track(
 
     # Rule 3: Channel Watermark / Artist Attribution
     if _matches_metadata_entity(
-        dom_lower, dom_tokens, v_channel, n_text_changes=n_text_changes, cfg=cfg
+        dom_lower,
+        dom_tokens,
+        v_channel,
+        n_text_changes=n_text_changes,
+        cfg=cfg,
+        require_full_entity_or_high_sim=in_lyric_layer,
     ):
         res = ClassificationResult(
             label="non_lyric",
@@ -389,7 +418,12 @@ def classify_track(
         and v_artist
         and v_artist != v_channel
         and _matches_metadata_entity(
-            dom_lower, dom_tokens, v_artist, n_text_changes=n_text_changes, cfg=cfg
+            dom_lower,
+            dom_tokens,
+            v_artist,
+            n_text_changes=n_text_changes,
+            cfg=cfg,
+            require_full_entity_or_high_sim=in_lyric_layer,
         )
     ):
         res = ClassificationResult(

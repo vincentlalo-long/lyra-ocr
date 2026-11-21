@@ -330,6 +330,9 @@ def select_cues(
             if seg_h.get("human_label"):
                 seg_label = seg_h["human_label"]
                 seg_decision = seg_h.get("human_decision") or ("accept" if seg_label == "lyric" else "reject")
+            elif seg_h.get("human_decision"):
+                seg_label = track.get("label", "non_lyric")
+                seg_decision = seg_h["human_decision"]
             else:
                 seg_label = track.get("label", "non_lyric")
                 seg_decision = track.get("decision", "review")
@@ -415,14 +418,19 @@ def select_cues(
 
             if not is_accepted:
                 reason = "non_lyric" if seg_label != "lyric" else "review"
-                skipped_records.append({
+                rec: dict[str, Any] = {
                     "track_id": track.get("track_id"),
                     "segment_id": seg_id,
                     "reason": reason,
                     "label": seg_label,
                     "decision": seg_decision,
                     "text": seg_text_raw,
-                })
+                }
+                if has_human_label:
+                    if seg_h.get("human_label"):
+                        rec["human_label"] = seg_h["human_label"]
+                    rec["human_decision"] = seg_h.get("human_decision") or seg_decision
+                skipped_records.append(rec)
                 continue
 
             # 4. Text resolution & corrected_text
