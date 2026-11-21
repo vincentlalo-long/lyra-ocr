@@ -519,5 +519,46 @@ def test_process_detections_recovers_extra_chars_requires_multicolor():
     assert lines_multi[0].confidence == 0.80
 
 
+def test_to_soft_bw_stroke_crop_antialiased_dark_and_outlined_on_saturated_colored_bg():
+    import cv2
 
+    # 1. Anti-aliased plain dark text (10,10,10) on bright yellow (0,220,220) must preserve dark cores
+    crop_dark_aa = np.full((64, 380, 3), (0, 220, 220), dtype=np.uint8)
+    cv2.putText(crop_dark_aa, "Castle in the sky", (18, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 2, cv2.LINE_AA)
+    dark_core = crop_dark_aa.max(axis=2) < 40
+    bg_pure = (crop_dark_aa[:, :, 0] < 10) & (crop_dark_aa[:, :, 1] > 200) & (crop_dark_aa[:, :, 2] > 200)
+    out_dark = to_soft_bw_stroke_crop(crop_dark_aa)
+    assert out_dark is not None
+    pad_y = (out_dark.shape[0] - crop_dark_aa.shape[0]) // 2
+    pad_x = (out_dark.shape[1] - crop_dark_aa.shape[1]) // 2
+    inner_dark = out_dark[pad_y : pad_y + 64, pad_x : pad_x + 380, 0]
+    assert float(np.median(inner_dark[dark_core])) >= 200.0
+    assert float(np.median(inner_dark[bg_pure])) <= 45.0
 
+    # 2. Anti-aliased white text + thick black outline on bright yellow (0,220,220) must peel BOTH
+    #    pure black outline AND its yellow-tinted anti-aliased outer edge while keeping white fill bright
+    fill_hi = np.zeros((128, 760), dtype=np.uint8)
+    cv2.putText(fill_hi, "Castle in the sky", (36, 88), cv2.FONT_HERSHEY_SIMPLEX, 2.0, 255, 4, cv2.LINE_AA)
+    out_hi = cv2.dilate(fill_hi, np.ones((9, 9), dtype=np.uint8))
+    hi_img = np.full((128, 760, 3), (0, 220, 220), dtype=np.uint8)
+    hi_img[out_hi > 128] = (10, 10, 10)
+    hi_img[fill_hi > 128] = (250, 250, 250)
+    crop_outlined = cv2.resize(hi_img, (380, 64), interpolation=cv2.INTER_AREA)
+
+    lab_out = cv2.cvtColor(crop_outlined, cv2.COLOR_BGR2LAB).astype(np.float32)
+    chroma_out = np.hypot(lab_out[:, :, 1] - 128.0, lab_out[:, :, 2] - 128.0)
+    white_core = (crop_outlined[:, :, 0] > 230) & (crop_outlined[:, :, 1] > 230) & (crop_outlined[:, :, 2] > 230)
+    outline_dark = crop_outlined.max(axis=2) < 45
+    outline_aa_rim = (
+        (crop_outlined[:, :, 0] < 30)
+        & (crop_outlined[:, :, 1] >= 30)
+        & (crop_outlined[:, :, 1] <= 190)
+        & (chroma_out >= 28.0)
+    )
+    assert int(outline_aa_rim.sum()) >= 20
+    out_outlined = to_soft_bw_stroke_crop(crop_outlined)
+    assert out_outlined is not None
+    inner_outlined = out_outlined[pad_y : pad_y + 64, pad_x : pad_x + 380, 0]
+    assert float(np.median(inner_outlined[white_core])) >= 200.0
+    assert float(np.median(inner_outlined[outline_dark])) <= 45.0
+    assert float(np.median(inner_outlined[outline_aa_rim])) <= 45.0

@@ -25,6 +25,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]+")
+_HALLUCINATION_TRIM_RE = re.compile(
+    r"^[\s\[\]()（）「」『』【】♪♫*~_\-.,!?。！？]+|[\s\[\]()（）「」『』【】♪♫*~_\-.,!?。！？]+$"
+)
 _WHISPER_HALLUCINATION_RE = re.compile(
     r"^(?:bgm|music|instrumental|applause|字幕|エンディング|オープニング|thanks for watching|thank you for watching)$",
     re.IGNORECASE,
@@ -222,7 +225,8 @@ def _run_whisper_transcribe(
         no_speech_prob = float(getattr(seg, "no_speech_prob", 0.0) or 0.0)
         if no_speech_prob > cfg.whisper_no_speech_prob_max:
             continue
-        if _WHISPER_HALLUCINATION_RE.match(seg_text):
+        seg_clean = _HALLUCINATION_TRIM_RE.sub("", seg_text)
+        if not seg_clean or _WHISPER_HALLUCINATION_RE.match(seg_clean):
             continue
 
         words: list[ASRWord] = []

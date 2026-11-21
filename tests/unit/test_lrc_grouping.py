@@ -1706,11 +1706,45 @@ def test_consolidate_language_layers_keeps_non_overlapping_cues_from_small_secon
     assert len(result) == 32
 
 
+def test_continuation_wrap_respects_trailing_closers_and_600_to_1200ms_start_delta():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
 
+    # 1. Terminal punctuation inside quotes/parens must NOT merge even if next line starts lowercase
+    #    (duration 5000ms > short_wrap_max_dur_ms=4000ms isolates the continuation-wrap rule)
+    quoted_pair = [
+        LyricCue(start_ms=1000, end_ms=6000, text="(Are you ready?)", layer_id=1, lang="en", y_center=0.84),
+        LyricCue(start_ms=1000, end_ms=6000, text="yes we go", layer_id=1, lang="en", y_center=0.90),
+    ]
+    res_quoted = resolve_simultaneous_multiline_cues(quoted_pair)
+    assert len(res_quoted) == 2
 
+    exclaimed_pair = [
+        LyricCue(start_ms=7000, end_ms=12000, text='"Stop!"', layer_id=1, lang="en", y_center=0.84),
+        LyricCue(start_ms=7000, end_ms=12000, text="he shouted", layer_id=1, lang="en", y_center=0.90),
+    ]
+    res_exclaimed = resolve_simultaneous_multiline_cues(exclaimed_pair)
+    assert len(res_exclaimed) == 2
 
-
-
-
-
-
+    # 2. 600 < start_delta <= 1200ms continuation wrap must group and merge into 1 cue
+    offset_wrap = [
+        LyricCue(
+            start_ms=10000,
+            end_ms=16000,
+            text="Even the tears will turn into my",
+            layer_id=1,
+            lang="en",
+            y_center=0.84,
+        ),
+        LyricCue(
+            start_ms=10900,
+            end_ms=16000,
+            text="strength",
+            layer_id=1,
+            lang="en",
+            y_center=0.90,
+        ),
+    ]
+    res_offset = resolve_simultaneous_multiline_cues(offset_wrap)
+    assert len(res_offset) == 1
+    assert res_offset[0].text == "Even the tears will turn into my strength"
+    assert "multiline_merged" in res_offset[0].qa_flags

@@ -153,8 +153,11 @@ def _compute_border_fg_distance(
     bg_l = float(bg_lab[0])
     if bg_l >= cfg.outline_peel_min_bg_l:
         l_chan = lab[:, :, 0]
-        chroma = np.hypot(lab[:, :, 1] - 128.0, lab[:, :, 2] - 128.0)
-        chroma_diff = np.hypot(lab[:, :, 1] - float(bg_lab[1]), lab[:, :, 2] - float(bg_lab[2]))
+        ab = lab[:, :, 1:] - 128.0
+        bg_ab = bg_lab[1:3] - 128.0
+        bg_chroma = float(np.hypot(bg_ab[0], bg_ab[1]))
+        chroma = np.hypot(ab[:, :, 0], ab[:, :, 1])
+        chroma_diff = np.hypot(ab[:, :, 0] - float(bg_ab[0]), ab[:, :, 1] - float(bg_ab[1]))
         min_fill_px = max(
             cfg.outline_peel_min_fill_pixels,
             int(round(cfg.outline_peel_min_fill_ratio * h * w)),
@@ -162,19 +165,41 @@ def _compute_border_fg_distance(
         bright_fill_count = int(
             np.count_nonzero(l_chan > bg_l + cfg.outline_peel_bright_fill_delta_l)
         )
-        chroma_fill_mask = (chroma > cfg.outline_peel_max_chroma) & (
-            chroma_diff > cfg.outline_peel_max_chroma
-        )
+        if bg_chroma > cfg.outline_peel_max_chroma:
+            u_bg_a = float(bg_ab[0]) / bg_chroma
+            u_bg_b = float(bg_ab[1]) / bg_chroma
+            proj = ab[:, :, 0] * u_bg_a + ab[:, :, 1] * u_bg_b
+            ortho_chroma = np.abs(ab[:, :, 0] * u_bg_b - ab[:, :, 1] * u_bg_a)
+            # Dark anti-aliased edge pixels between neutral black text/outline and a saturated
+            # colored background fall along the background hue vector (0 <= proj <= bg_chroma,
+            # low orthogonal chroma); exclude them from triggering chromatic fill peeling.
+            is_bg_hue_fade = (
+                (ortho_chroma < cfg.outline_peel_max_chroma)
+                & (proj >= -5.0)
+                & (proj <= bg_chroma + cfg.outline_peel_max_chroma)
+            )
+            chroma_fill_mask = (
+                (chroma > cfg.outline_peel_max_chroma)
+                & (chroma_diff > cfg.outline_peel_max_chroma)
+                & ~is_bg_hue_fade
+            )
+            is_outline_chroma = (chroma < cfg.outline_peel_max_chroma) | is_bg_hue_fade
+        else:
+            chroma_fill_mask = (chroma > cfg.outline_peel_max_chroma) & (
+                chroma_diff > cfg.outline_peel_max_chroma
+            )
+            is_outline_chroma = chroma < cfg.outline_peel_max_chroma
+
         has_bright_or_chroma_fill = (
             bright_fill_count >= min_fill_px
             or int(np.count_nonzero(chroma_fill_mask)) >= min_fill_px
         )
         has_dark_outline = bool(np.any(l_chan < bg_l - cfg.outline_peel_dark_outline_delta_l))
         if has_bright_or_chroma_fill and has_dark_outline:
-            # Peel low-chroma dark outlines/shadows around bright/colored glyphs into background.
+            # Peel low-chroma or background-tinted dark outlines/shadows into background.
             outline_mask = (
                 (l_chan < bg_l - cfg.outline_peel_dark_pixel_delta_l)
-                & (chroma < cfg.outline_peel_max_chroma)
+                & is_outline_chroma
             )
             dist_bgr = np.where(outline_mask, 0.0, dist_bgr)
         if bright_fill_count >= min_fill_px:

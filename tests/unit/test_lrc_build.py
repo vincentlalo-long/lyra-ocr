@@ -2330,6 +2330,96 @@ def test_build_lrc_isolated_vocals_primary_path_flows_into_vad_asr_and_align(tmp
     assert np.array_equal(align_audio_inputs[0], isolated_vocals)
 
 
+def test_audit_and_recover_missing_lyrics_runs_quality_gate_and_consolidates_segments():
+    from lyra_ocr.lyric.build import audit_and_recover_missing_lyrics
+    from lyra_ocr.lyric.models import LyricCue
 
+    # 8-cue major ja layer (layer 1) and 8-cue major en layer (layer 2), gaps at 20..23s and 30..33s
+    cues: list[LyricCue] = []
+    for i in range(10):
+        t0 = i * 5000 + 10000
+        t1 = t0 + 3000
+        cues.append(
+            LyricCue(
+                start_ms=t0,
+                end_ms=t1,
+                text=f"日本語の歌詞ライン {i}",
+                layer_id=1,
+                lang="ja",
+                y_center=0.80,
+                source_track_ids=[i + 1],
+            )
+        )
+        if i not in (2, 4):  # gaps at 20..23s (i=2) and 30..33s (i=4)
+            cues.append(
+                LyricCue(
+                    start_ms=t0,
+                    end_ms=t1,
+                    text=f"English lyric line {i}",
+                    layer_id=2,
+                    lang="en",
+                    y_center=0.90,
+                    source_track_ids=[100 + i],
+                )
+            )
 
+    # Track 501 at 20..23s is OCR garbage ("~ * ~", low confidence 0.20) in review state -> MUST NOT rescue!
+    # Track 502 at 30..33s is valid CJK jitter track on layer 1 (Wait: let's add a gap on layer 1 too at 40..43s!)
+    cues = [c for c in cues if not (c.layer_id == 1 and c.start_ms == 40000)]
 
+    tracks = [
+        {
+            "track_id": 501,
+            "start_ms": 20000,
+            "end_ms": 23000,
+            "label": "lyric",
+            "decision": "review",
+            "confidence": 0.20,
+            "features": {"dominant_text": "~ * ~", "layer_id": 2, "mean_centroid": [0.5, 0.90]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 20000, "end_ms": 23000, "text": "~ * ~", "confidence": 0.20}
+            ],
+        },
+        {
+            "track_id": 502,
+            "start_ms": 30000,
+            "end_ms": 33000,
+            "label": "lyric",
+            "decision": "review",
+            "confidence": 0.25,
+            "features": {"dominant_text": "xqzwv btrmp klznp", "layer_id": 2, "mean_centroid": [0.5, 0.90]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 30000, "end_ms": 33000, "text": "xqzwv btrmp klznp", "confidence": 0.25}
+            ],
+        },
+        {
+            "track_id": 503,
+            "start_ms": 40000,
+            "end_ms": 43000,
+            "label": "lyric",
+            "decision": "review",
+            "confidence": 0.85,
+            "features": {"dominant_text": "君ノ声モ 届カナイヨ", "layer_id": 1, "mean_centroid": [0.5, 0.80]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 40000, "end_ms": 41000, "text": "君ノ声モ届力ナ但", "confidence": 0.78, "num_occurrences": 1},
+                {"segment_id": 1, "start_ms": 41000, "end_ms": 43000, "text": "君ノ声モ 届カナイヨ", "confidence": 0.92, "num_occurrences": 1},
+            ],
+        },
+    ]
+    skipped = [
+        {"track_id": 501, "reason": "review", "label": "lyric", "decision": "review", "text": "~ * ~"},
+        {"track_id": 502, "reason": "review", "label": "lyric", "decision": "review", "text": "xqzwv btrmp klznp"},
+        {"track_id": 503, "reason": "review", "label": "lyric", "decision": "review", "text": "君ノ声モ 届カナイヨ"},
+    ]
+
+    out_cues, warnings = audit_and_recover_missing_lyrics(cues, tracks, skipped)
+    rescued_tids = {tid for c in out_cues for tid in c.source_track_ids}
+    assert 501 not in rescued_tids
+    assert 502 not in rescued_tids
+    assert 503 in rescued_tids
+    c503 = next(c for c in out_cues if 503 in c.source_track_ids)
+    assert c503.start_ms == 40000
+    assert c503.end_ms == 43000
+    assert c503.text == "君ノ声モ 届カナイヨ"
+    assert any("lang=en at 20.0s..23.0s" in w for w in warnings)
+    assert any("lang=en at 30.0s..33.0s" in w for w in warnings)

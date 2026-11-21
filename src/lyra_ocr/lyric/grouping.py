@@ -169,7 +169,8 @@ def _is_sentence_continuation_wrap(
     t2 = l2.text.strip()
     if not t1 or not t2:
         return False
-    if t1.endswith(_TERMINAL_PUNCTUATION):
+    t1_core = t1.rstrip("\"'”’)]}»」』】 ")
+    if t1.endswith(_TERMINAL_PUNCTUATION) or (t1_core and t1_core.endswith(_TERMINAL_PUNCTUATION)):
         return False
 
     lang = l1.lang if l1.lang and l1.lang != "und" else l2.lang
@@ -344,6 +345,17 @@ def resolve_simultaneous_multiline_cues(
                     grp.append(cue)
                     placed = True
                     break
+                if (
+                    len(grp) == 1
+                    and abs(cue.start_ms - g_start) <= cfg.continuation_wrap_start_delta_ms
+                    and iou >= cfg.simultaneous_min_iou
+                    and cfg.wrap_y_diff_min <= abs(cue.y_center - grp[0].y_center) <= cfg.wrap_y_diff_max
+                ):
+                    pair = sorted([grp[0], cue], key=lambda c: (c.y_center, c.start_ms))
+                    if _is_sentence_continuation_wrap(pair[0], pair[1], cfg):
+                        grp.append(cue)
+                        placed = True
+                        break
             if not placed:
                 groups.append([cue])
 

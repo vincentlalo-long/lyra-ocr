@@ -364,10 +364,16 @@ def select_cues(
             has_human_label = bool(seg_h.get("human_label") or seg_h.get("human_decision"))
             blocked_rescue_flags = {
                 "intro_bounded_card",
+                "intro_credit_pattern",
+                "intro_outro_signoff",
                 "metadata_title_match",
+                "metadata_channel_match",
+                "metadata_artist_match",
                 "only_intro_outro",
                 "social_handle_tag",
-                "metadata_channel_match",
+                "split_title_card_fragment",
+                "boundary_credit_or_signoff",
+                "boundary_unvoiced_or_credit",
             }
             valid_rescue_source = eff_ref_source in (
                 "manual",

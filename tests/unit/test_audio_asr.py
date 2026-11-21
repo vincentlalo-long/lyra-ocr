@@ -638,4 +638,39 @@ def test_transcribe_audio_words_invalidates_starved_cache_on_long_audio(tmp_path
     assert [s.text for s in transcript.segments] == ["line 0 here", "line 1 here", "line 2 here"]
 
 
+def test_transcribe_audio_words_filters_bracketed_and_punctuated_hallucinations(tmp_path: Path):
+    from types import SimpleNamespace
 
+    class _FakeWhisperModel:
+        def __init__(self, model_size, device="auto", compute_type="default"):
+            pass
+
+        def transcribe(self, audio_input, **kwargs):
+            info = SimpleNamespace(language="en", duration=30.0)
+            segs = [
+                SimpleNamespace(text="[BGM]", start=0.5, end=2.0, no_speech_prob=0.1, words=[]),
+                SimpleNamespace(text="(Music)", start=2.5, end=4.0, no_speech_prob=0.1, words=[]),
+                SimpleNamespace(text="♪ BGM ♪", start=4.5, end=6.0, no_speech_prob=0.1, words=[]),
+                SimpleNamespace(text="Thanks for watching!", start=25.0, end=27.0, no_speech_prob=0.1, words=[]),
+                SimpleNamespace(
+                    text="We are the champions!",
+                    start=10.0,
+                    end=13.0,
+                    no_speech_prob=0.05,
+                    words=[
+                        SimpleNamespace(word="We", start=10.0, end=10.5, probability=0.95),
+                        SimpleNamespace(word="are", start=10.5, end=11.0, probability=0.95),
+                        SimpleNamespace(word="the", start=11.0, end=11.5, probability=0.95),
+                        SimpleNamespace(word="champions!", start=11.5, end=13.0, probability=0.95),
+                    ],
+                ),
+            ]
+            return iter(segs), info
+
+    audio_30s = np.zeros(16000 * 30, dtype=np.float32)
+    fake_module = SimpleNamespace(WhisperModel=_FakeWhisperModel)
+    with patch.dict("sys.modules", {"faster_whisper": fake_module}):
+        transcript = transcribe_audio_words(audio_30s, cache_dir=tmp_path, language="en")
+
+    assert transcript is not None
+    assert [s.text for s in transcript.segments] == ["We are the champions!"]

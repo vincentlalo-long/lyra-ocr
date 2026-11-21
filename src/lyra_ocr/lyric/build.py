@@ -38,7 +38,7 @@ from lyra_ocr.config import (
     ClassificationThresholds,
     GroupingThresholds,
 )
-from lyra_ocr.lang import detect_line_lang, vote_layer_lang
+from lyra_ocr.lang import detect_line_lang, get_language_profile, vote_layer_lang
 from lyra_ocr.layers import refresh_dict_tracks_layers
 from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
 from lyra_ocr.lyric.grouping import (
@@ -68,7 +68,15 @@ from lyra_ocr.lyric.reference import (
     select_reference_lines,
 )
 
-from lyra_ocr.lyric.select import _segment_confidence, load_artifacts, select_cues
+from lyra_ocr.lyric.select import (
+    _quality_gate,
+    _segment_confidence,
+    build_corpus_vocab,
+    consolidate_track_segments,
+    load_artifacts,
+    select_cues,
+)
+from lyra_ocr.lyric.text_repair import oov_ratio, text_quality
 
 logger = logging.getLogger(__name__)
 CAPTION_CACHE_TTL_SECONDS = 3600.0
@@ -172,7 +180,9 @@ def _pick_track_span_and_text(
     """Return (start_ms, end_ms, text, confidence, segment_id) for the best overlapping segment or track."""
     features = track.get("features") or {}
     dom_text = str(features.get("dominant_text") or "").strip() if isinstance(features, dict) else ""
-    segments = [s for s in (track.get("segments") or []) if isinstance(s, dict)]
+    segments = consolidate_track_segments(
+        [s for s in (track.get("segments") or []) if isinstance(s, dict)]
+    )
 
     best_seg: dict[str, Any] | None = None
     best_overlap = -1
@@ -212,12 +222,15 @@ def audit_and_recover_missing_lyrics(
     frame_width: int = 1280,
     frame_height: int = 720,
     thresholds: GroupingThresholds | None = None,
+    correction_config: CorrectionConfig | None = None,
 ) -> tuple[list[LyricCue], list[str]]:
     """Audit parallel major layers for coverage gaps, rescue dropped tracks, and flag remaining gaps."""
     if not cues:
         return cues, []
 
     cfg = thresholds or DEFAULT_GROUPING_THRESHOLDS
+    corr_cfg = correction_config or CorrectionConfig()
+    corpus_vocab = build_corpus_vocab(tracks)
     by_layer_id: dict[Any, list[LyricCue]] = defaultdict(list)
     for cue in cues:
         if cue.layer_id is not None:
@@ -312,8 +325,27 @@ def audit_and_recover_missing_lyrics(
 
                 features = track.get("features") or {}
                 tr_lid = features.get("layer_id") if isinstance(features, dict) else None
+                tr_layer_kind = features.get("layer_kind") if isinstance(features, dict) else None
                 tr_x, tr_y = _track_centroid(track, frame_width, frame_height)
                 det_lang = detect_line_lang(cand_text)
+                if cand_conf is not None and cand_conf < corr_cfg.min_ocr_confidence:
+                    continue
+                quality = text_quality(cand_text, corpus_vocab)
+                n_words = len(cand_text.split())
+                oov = oov_ratio(cand_text, corpus_vocab)
+                is_non_en = bool(
+                    det_lang
+                    and det_lang != "und"
+                    and get_language_profile(det_lang).bypass_en_oov_gate
+                )
+                is_trusted_lyric_layer = (
+                    tr_layer_kind == "lyric"
+                    and (cand_conf is None or cand_conf >= 0.70)
+                    and quality >= corr_cfg.min_text_quality_hard
+                )
+                if not (is_non_en or is_trusted_lyric_layer):
+                    if _quality_gate(cand_conf, quality, n_words, oov, corr_cfg):
+                        continue
                 lang_matches = (det_lang == target_lang) or (target_lang == "ja" and det_lang == "zh")
                 matches_layer = (tr_lid == target_lid) or (
                     lang_matches and abs(tr_y - target_mean_y[target_key]) <= cfg.audit_max_y_dist
@@ -946,6 +978,7 @@ def build_lrc_from_artifacts(
         skipped,
         frame_width=frame_width,
         frame_height=frame_height,
+        correction_config=correction_cfg,
     )
     reference_warnings.extend(audit_warnings)
 

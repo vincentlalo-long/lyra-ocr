@@ -744,7 +744,33 @@ def test_consolidate_track_segments_merges_cjk_ocr_jitter_segments():
     assert len(consolidate_track_segments(unrelated)) == 2
 
 
-
-
-
-
+def test_select_cues_reference_rescue_blocks_phase8_non_lyric_flags():
+    for flag in (
+        "split_title_card_fragment",
+        "boundary_credit_or_signoff",
+        "boundary_unvoiced_or_credit",
+        "intro_outro_signoff",
+        "intro_credit_pattern",
+        "metadata_artist_match",
+    ):
+        track = {
+            "track_id": 88,
+            "start_ms": 1000,
+            "end_ms": 4000,
+            "label": "non_lyric",
+            "decision": "reject",
+            "confidence": 0.90,
+            "qa_flags": [flag],
+            "features": {"dominant_text": "We will rock you", "mean_centroid": [0.5, 0.8]},
+            "segments": [
+                {"segment_id": 0, "start_ms": 1000, "end_ms": 4000, "text": "We will rock you", "confidence": 0.90}
+            ],
+        }
+        cues, skipped = select_cues(
+            [track],
+            human_labels={},
+            reference_lines=["We will rock you"],
+            reference_source="lrclib_synced",
+        )
+        assert cues == [], f"flag {flag} should block reference rescue"
+        assert len(skipped) == 1
