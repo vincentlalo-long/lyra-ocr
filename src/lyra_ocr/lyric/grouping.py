@@ -77,7 +77,24 @@ def _merge_cue_words(
 
 def _is_cjk_heavy(text: str) -> bool:
     no_space = re.sub(r"\s+", "", text)
-    return bool(no_space and re.search(r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]", no_space))
+    if not no_space:
+        return False
+    # Exclude Hangul (\uac00-\ud7af), which is spaced; require dominant Kana/CJK ideographs
+    # so mixed Latin/Spanish lines with occasional CJK symbols stay in spaced word-count mode.
+    cjk_unspaced_chars = len(re.findall(r"[\u3040-\u30ff\u4e00-\u9fff]", no_space))
+    if cjk_unspaced_chars == 0:
+        return False
+    latin_words = len(re.findall(r"[A-Za-z]+", text))
+    if latin_words > 0 and cjk_unspaced_chars / len(no_space) <= 0.5:
+        return False
+    return (cjk_unspaced_chars / len(no_space)) >= 0.5
+
+
+def _is_unspaced_cjk_cue(lang: str | None, text: str) -> bool:
+    lang_norm = lang or "und"
+    if get_language_profile(lang_norm).is_cjk_unspaced:
+        return True
+    return lang_norm in ("", "und") and _is_cjk_heavy(text)
 
 
 def _collapse_same_y_band(band: list[LyricCue], cfg: GroupingThresholds) -> LyricCue:
@@ -156,8 +173,7 @@ def _is_sentence_continuation_wrap(
         return False
 
     lang = l1.lang if l1.lang and l1.lang != "und" else l2.lang
-    lang_profile = get_language_profile(lang or "und")
-    is_unspaced = lang_profile.is_cjk_unspaced or _is_cjk_heavy(f"{t1}{t2}")
+    is_unspaced = _is_unspaced_cjk_cue(lang, f"{t1}{t2}")
 
     # 1. Short spillover tail (word-based for spaced scripts, char-based for unspaced CJK)
     if is_unspaced:
@@ -188,6 +204,22 @@ def _is_sentence_continuation_wrap(
     return False
 
 
+def _resolve_continuation_limit(
+    base_limit: int,
+    default_base: int,
+    cont_limit: int,
+    default_cont: int,
+    is_continuation: bool,
+) -> int:
+    if not is_continuation:
+        return base_limit
+    if cont_limit != default_cont:
+        return cont_limit
+    if base_limit < default_base:
+        return base_limit
+    return max(base_limit, cont_limit)
+
+
 def _try_merge_short_wrap(
     grp: list[LyricCue],
     t_start: int,
@@ -205,40 +237,41 @@ def _try_merge_short_wrap(
         return None
 
     is_continuation = _is_sentence_continuation_wrap(l1, l2, cfg)
-    dur_tightened = (
-        max_dur_ms < DEFAULT_GROUPING_THRESHOLDS.short_wrap_max_dur_ms
-        and cfg.continuation_wrap_max_dur_ms == DEFAULT_GROUPING_THRESHOLDS.continuation_wrap_max_dur_ms
-    )
-    eff_dur_limit = (
-        max(max_dur_ms, cfg.continuation_wrap_max_dur_ms)
-        if (is_continuation and not dur_tightened)
-        else max_dur_ms
+    eff_dur_limit = _resolve_continuation_limit(
+        max_dur_ms,
+        DEFAULT_GROUPING_THRESHOLDS.short_wrap_max_dur_ms,
+        cfg.continuation_wrap_max_dur_ms,
+        DEFAULT_GROUPING_THRESHOLDS.continuation_wrap_max_dur_ms,
+        is_continuation,
     )
     if max(0, t_end - t_start) > eff_dur_limit:
         return None
 
     combined = f"{l1.text.strip()} {l2.text.strip()}"
     lang = l1.lang if l1.lang and l1.lang != "und" else l2.lang
-    lang_profile = get_language_profile(lang or "und")
-    is_unspaced = lang_profile.is_cjk_unspaced or _is_cjk_heavy(combined)
+    is_unspaced = _is_unspaced_cjk_cue(lang, combined)
     if is_unspaced:
-        cjk_limit = (
-            max(cfg.short_wrap_max_cjk_chars, cfg.continuation_wrap_max_cjk_chars)
-            if is_continuation
-            else cfg.short_wrap_max_cjk_chars
+        cjk_limit = _resolve_continuation_limit(
+            cfg.short_wrap_max_cjk_chars,
+            DEFAULT_GROUPING_THRESHOLDS.short_wrap_max_cjk_chars,
+            cfg.continuation_wrap_max_cjk_chars,
+            DEFAULT_GROUPING_THRESHOLDS.continuation_wrap_max_cjk_chars,
+            is_continuation,
         )
         if len(re.sub(r"\s+", "", combined)) > cjk_limit:
             return None
     else:
-        word_limit = (
-            max(max_words, cfg.continuation_wrap_max_words)
-            if is_continuation
-            else max_words
+        word_limit = _resolve_continuation_limit(
+            max_words,
+            DEFAULT_GROUPING_THRESHOLDS.short_wrap_max_words,
+            cfg.continuation_wrap_max_words,
+            DEFAULT_GROUPING_THRESHOLDS.continuation_wrap_max_words,
+            is_continuation,
         )
         if len(combined.split()) > word_limit:
             return None
 
-    sep = "" if (lang_profile.is_cjk_unspaced or (lang == "und" and _is_cjk_heavy(combined))) else " "
+    sep = "" if is_unspaced else " "
     raw_1 = (l1.raw_text or l1.text).strip()
     raw_2 = (l2.raw_text or l2.text).strip()
     tids = sorted(set(l1.source_track_ids + l2.source_track_ids), key=_track_sort_key)

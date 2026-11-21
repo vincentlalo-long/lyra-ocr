@@ -1508,6 +1508,139 @@ def test_resolve_simultaneous_multiline_still_staggers_distinct_stanza_lines():
     assert all("multiline_staggered" in c.qa_flags for c in resolved_cjk_stanza)
 
 
+def test_resolve_simultaneous_multiline_keeps_korean_and_mixed_script_in_spaced_mode():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    # 1. Korean (ko) 2-line wrap (<= 12 words, > 22 Hangul chars) must use spaced word count, not CJK char cap
+    ko_short_wrap = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=3500,
+            text="아름다웠던 그시절의 소중했던 기억들을",
+            y_center=0.80,
+            layer_id=1,
+            lang="ko",
+            source_track_ids=[1],
+        ),
+        LyricCue(
+            start_ms=1000,
+            end_ms=3500,
+            text="우리들의 마음속에 영원토록 간직하며 살아갈게",
+            y_center=0.87,
+            layer_id=1,
+            lang="ko",
+            source_track_ids=[2],
+        ),
+    ]
+    ko_res = resolve_simultaneous_multiline_cues(ko_short_wrap)
+    assert len(ko_res) == 1
+    assert ko_res[0].text == "아름다웠던 그시절의 소중했던 기억들을 우리들의 마음속에 영원토록 간직하며 살아갈게"
+    assert "multiline_merged" in ko_res[0].qa_flags
+
+    # 2. Korean (ko) continuation wrap (> 4000ms, spillover tail <= 3 words, > 38 Hangul chars, <= 24 words)
+    ko_cont_wrap = [
+        LyricCue(
+            start_ms=10000,
+            end_ms=16000,
+            text="아름다웠던 그시절의 소중했던 기억들을 우리들의 마음속에",
+            y_center=0.80,
+            layer_id=1,
+            lang="ko",
+            source_track_ids=[3],
+        ),
+        LyricCue(
+            start_ms=10000,
+            end_ms=16000,
+            text="영원토록 간직하며 살아갈게",
+            y_center=0.87,
+            layer_id=1,
+            lang="ko",
+            source_track_ids=[4],
+        ),
+    ]
+    ko_cont_res = resolve_simultaneous_multiline_cues(ko_cont_wrap)
+    assert len(ko_cont_res) == 1
+    assert "multiline_merged" in ko_cont_res[0].qa_flags
+
+    # 3. Mixed spaced Latin line containing a single CJK symbol (both lang="en" and lang="und") stays in spaced mode
+    for mixed_lang in ("en", "und"):
+        mixed_wrap = [
+            LyricCue(
+                start_ms=20000,
+                end_ms=23000,
+                text="Remembering constellations 桜 beneath midnight",
+                y_center=0.80,
+                layer_id=1,
+                lang=mixed_lang,
+                source_track_ids=[5],
+            ),
+            LyricCue(
+                start_ms=20000,
+                end_ms=23000,
+                text="silhouettes drifting",
+                y_center=0.87,
+                layer_id=1,
+                lang=mixed_lang,
+                source_track_ids=[6],
+            ),
+        ]
+        mixed_res = resolve_simultaneous_multiline_cues(mixed_wrap)
+        assert len(mixed_res) == 1
+        assert mixed_res[0].text == "Remembering constellations 桜 beneath midnight silhouettes drifting"
+        assert "multiline_merged" in mixed_res[0].qa_flags
+
+
+def test_continuation_wrap_max_dur_ms_threshold_respected_independently():
+    from lyra_ocr.config import GroupingThresholds
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    def _make_pair(start_ms: int, end_ms: int) -> list[LyricCue]:
+        return [
+            LyricCue(
+                start_ms=start_ms,
+                end_ms=end_ms,
+                text="Even the tears that shine from these eyes will turn into my",
+                y_center=0.874,
+                layer_id=1,
+                lang="en",
+                source_track_ids=[1],
+            ),
+            LyricCue(
+                start_ms=start_ms,
+                end_ms=end_ms,
+                text="strength",
+                y_center=0.936,
+                layer_id=1,
+                lang="en",
+                source_track_ids=[2],
+            ),
+        ]
+
+    # Lowering continuation_wrap_max_dur_ms=2500 rejects a 3000ms continuation wrap (not clamped up to 4000ms)
+    rejected_lowered = resolve_simultaneous_multiline_cues(
+        _make_pair(1000, 4000),
+        thresholds=GroupingThresholds(continuation_wrap_max_dur_ms=2500),
+    )
+    assert len(rejected_lowered) == 2
+    assert all("multiline_staggered" in c.qa_flags for c in rejected_lowered)
+
+    # Tightening short_wrap_max_dur_ms=1000 alone still caps a 2200ms continuation wrap
+    rejected_short_cap = resolve_simultaneous_multiline_cues(
+        _make_pair(1000, 3200),
+        thresholds=GroupingThresholds(short_wrap_max_dur_ms=1000),
+    )
+    assert len(rejected_short_cap) == 2
+
+    # Explicitly setting both short_wrap_max_dur_ms=1000 and continuation_wrap_max_dur_ms=5000 honors 5000ms
+    merged_explicit = resolve_simultaneous_multiline_cues(
+        _make_pair(1000, 4000),
+        thresholds=GroupingThresholds(short_wrap_max_dur_ms=1000, continuation_wrap_max_dur_ms=5000),
+    )
+    assert len(merged_explicit) == 1
+    assert "multiline_merged" in merged_explicit[0].qa_flags
+
+
+
 
 
 
