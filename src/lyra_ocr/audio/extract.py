@@ -1,4 +1,13 @@
-"""Audio extraction and source separation utilities."""
+"""Audio extraction and source separation utilities.
+
+References:
+- Syed et al. (2025), "Exploiting Music Source Separation for Automatic Lyrics
+  Transcription with Whisper", IEEE ICME 2025W, https://arxiv.org/abs/2506.15514
+- Rouard et al. (2023), "Hybrid Transformers for Music Source Separation (HTDemucs)",
+  IEEE ICASSP 2023, https://arxiv.org/abs/2211.08553
+- Fitzgerald (2010), "Harmonic/Percussive Separation Using Median Filtering", DAFx-10
+- CixiSVesper/dsh-soundtry, https://github.com/CixiSVesper/dsh-soundtry
+"""
 
 from __future__ import annotations
 

@@ -113,7 +113,15 @@ def _compute_border_fg_distance(
     *,
     thresholds: OcrPreprocessThresholds | None = None,
 ) -> np.ndarray | None:
-    """Compute per-pixel foreground distance from the border background with outline peeling."""
+    """Compute per-pixel foreground distance from the border background with outline peeling.
+
+    References:
+    - Yang et al. (2025), "DecompST: Decomposition Looking Useful for Scene Text
+      Segmentation (Training-Free Text-Outline-Background CIE Lab Decomposition)",
+      https://arxiv.org/abs/2512.00854
+    - Bonechi et al. (2019), "Weak Supervision for Generating Pixel-Level Annotations
+      in Scene Text Segmentation", https://arxiv.org/abs/1905.11229
+    """
     if img.ndim not in (2, 3):
         return None
     h, w = img.shape[:2]

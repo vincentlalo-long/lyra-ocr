@@ -1,4 +1,9 @@
-"""Vocal activity detection using band-pass filtering and spectral energy."""
+"""Vocal activity detection using band-pass filtering and spectral RMS energy.
+
+References:
+- Syed et al. (2025), "Exploiting Music Source Separation for Automatic Lyrics
+  Transcription with Whisper" (Section II-F1 RMS-VAD), https://arxiv.org/abs/2506.15514
+"""
 
 from __future__ import annotations
 
