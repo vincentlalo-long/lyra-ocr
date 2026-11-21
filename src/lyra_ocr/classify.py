@@ -102,11 +102,12 @@ def _matches_metadata_entity(
     )
 
 
-def _is_split_title_fragment(dom_lower: str, title: str, *, word_count: int) -> bool:
+def is_split_title_fragment(text: str, title: str) -> bool:
     """Return True when a 1-word cue/track is a split fragment of a multi-word video title."""
-    if not title or word_count != 1:
+    stripped = (text or "").strip()
+    if not title or not stripped or len(stripped.split()) != 1:
         return False
-    clean_tokens = re.findall(r"\w+", dom_lower)
+    clean_tokens = re.findall(r"\w+", stripped.lower())
     if len(clean_tokens) != 1 or len(clean_tokens[0]) < 2:
         return False
     title_tokens = set(re.findall(r"\w+", title.lower()))
@@ -125,7 +126,7 @@ def is_boundary_distractor_text(
     n_text_changes: int = 0,
     thresholds: ClassificationThresholds | None = None,
 ) -> bool:
-    """Return True when boundary text matches credit, sign-off, artist, or split-title patterns."""
+    """Return True when boundary text matches credit, sign-off, or artist/channel patterns."""
     cfg = thresholds or DEFAULT_CLASSIFICATION_THRESHOLDS
     stripped = (text or "").strip()
     if not stripped:
@@ -146,8 +147,6 @@ def is_boundary_distractor_text(
     if _matches_metadata_entity(
         dom_lower, dom_tokens, artist.strip().lower(), n_text_changes=n_text_changes, cfg=cfg
     ):
-        return True
-    if _is_split_title_fragment(dom_lower, title.strip().lower(), word_count=word_count):
         return True
     return False
 
@@ -289,25 +288,38 @@ def classify_track(
     )
     in_boundary_window = in_intro_signoff or in_outro_signoff
 
+    track_vocal_ratio: float | None = None
+    if vocal_profile is not None:
+        from lyra_ocr.audio.vad import vocal_active_ratio
+
+        track_vocal_ratio = vocal_active_ratio(vocal_profile, track.start_ms, track.end_ms)
+
     # Rule 0a: Split 1-word title-card fragment in intro/outro (e.g. "only" / "my")
+    # Preserve sung 1-word title tokens inside an active lyric layer or backed by active vocals.
     if (
-        has_timeline
+        not in_lyric_layer
+        and has_timeline
         and (
             start_time_ratio <= cfg.split_title_intro_ratio
             or start_time_ratio >= (1.0 - cfg.split_title_outro_ratio)
             or end_time_ratio >= (1.0 - cfg.split_title_outro_ratio)
         )
-        and _is_split_title_fragment(dom_lower, v_title, word_count=word_count)
+        and is_split_title_fragment(dominant_text, v_title)
     ):
-        res = ClassificationResult(
-            label="non_lyric",
-            confidence=0.95,
-            reason=f"Split single-word title card fragment '{dominant_text}' in intro/outro",
-            decision="reject",
-            qa_flags=["split_title_card_fragment"],
+        has_active_vocals = (
+            track_vocal_ratio is not None
+            and track_vocal_ratio >= cfg.boundary_gate_vocal_ratio_min
         )
-        track.classification = res
-        return res
+        if not has_active_vocals:
+            res = ClassificationResult(
+                label="non_lyric",
+                confidence=0.95,
+                reason=f"Split single-word title card fragment '{dominant_text}' in intro/outro",
+                decision="reject",
+                qa_flags=["split_title_card_fragment"],
+            )
+            track.classification = res
+            return res
 
     # Rule 0b: Single-word intro/outro sign-off (e.g. "WATCHING!")
     if in_boundary_window and word_count == 1 and _SIGNOFF_WORD_RE.match(dominant_text):
@@ -495,8 +507,16 @@ def classify_track(
         sig_title_tokens = {
             t for t in title_tokens if len(t) >= cfg.title_token_min_len and t not in {"the", "and", "for", "with", "this"}
         }
+        split_frag_sung = is_split_title_fragment(dominant_text, v_title) and (
+            in_lyric_layer
+            or (
+                track_vocal_ratio is not None
+                and track_vocal_ratio >= cfg.boundary_gate_vocal_ratio_min
+            )
+        )
         token_title_match = bool(
-            sig_title_tokens
+            not split_frag_sung
+            and sig_title_tokens
             and dom_tokens.issubset(sig_title_tokens)
             and n_text_changes == 0
             and len(dom_tokens) <= cfg.title_token_max_dom_tokens

@@ -23,7 +23,7 @@ from lyra_ocr.audio import (
     transcribe_audio_words,
     vocal_active_ratio,
 )
-from lyra_ocr.classify import is_boundary_distractor_text
+from lyra_ocr.classify import is_boundary_distractor_text, is_split_title_fragment
 from lyra_ocr.config import (
     DEFAULT_ASR_ALIGNMENT_THRESHOLDS,
     DEFAULT_CLASSIFICATION_THRESHOLDS,
@@ -140,37 +140,51 @@ def filter_boundary_unvoiced_and_distractor_cues(
             kept.append(cue)
             continue
 
-        is_distractor = is_boundary_distractor_text(
+        is_credit_distractor = is_boundary_distractor_text(
             cue.text,
             title=title,
             artist=artist,
             channel=channel,
             thresholds=cfg,
         )
+        is_title_frag = is_split_title_fragment(cue.text, title)
 
-        is_vad_unvoiced = False
-        if (
+        has_vocal_check = (
             duration_ms > 0
             and vocal_profile is not None
             and len(vocal_profile) > 0
             and len(vocal_profile) * 50 > cue.start_ms
-        ):
-            if vocal_active_ratio(vocal_profile, cue.start_ms, cue.end_ms) < cfg.boundary_gate_vocal_ratio_min:
-                is_vad_unvoiced = True
+        )
+        vad_active = False
+        is_vad_unvoiced = False
+        if has_vocal_check:
+            vad_active = (
+                vocal_active_ratio(vocal_profile, cue.start_ms, cue.end_ms)
+                >= cfg.boundary_gate_vocal_ratio_min
+            )
+            is_vad_unvoiced = not vad_active
 
-        is_asr_unvoiced = False
-        if (
+        has_asr_check = (
             duration_ms > 0
             and has_dense_asr
             and first_asr_ms is not None
             and last_asr_ms is not None
-            and (
+        )
+        asr_active = False
+        is_asr_unvoiced = False
+        if has_asr_check:
+            outside_asr = (
                 cue.end_ms < first_asr_ms - asr_cfg.boundary_gate_asr_margin_ms
                 or cue.start_ms > last_asr_ms + asr_cfg.boundary_gate_asr_margin_ms
             )
-        ):
-            if asr_vocal_gate_score(cue, asr_transcript) < asr_cfg.boundary_gate_asr_score_min:
+            asr_score = asr_vocal_gate_score(cue, asr_transcript)
+            if outside_asr and asr_score < asr_cfg.boundary_gate_asr_score_min:
                 is_asr_unvoiced = True
+            elif asr_score >= asr_cfg.boundary_gate_asr_score_min:
+                asr_active = True
+
+        is_title_frag_rejected = is_title_frag and not (vad_active or asr_active)
+        is_distractor = is_credit_distractor or is_title_frag_rejected
 
         if is_distractor or is_vad_unvoiced or is_asr_unvoiced:
             if "boundary_unvoiced_or_credit" not in cue.qa_flags:
@@ -451,23 +465,30 @@ def build_lrc_from_artifacts(
 
     # Multimodal audio analysis (Isolated Vocals -> RMS-VAD, ASR & Forced Alignment)
     vocals_16k = None
+    vocals_usable = False
     audio_16k = None
     vocal_profile = None
     asr_transcript = None
     if eff_video_path and Path(eff_video_path).is_file():
         try:
             vocals_16k = extract_isolated_vocals_16k(eff_video_path, cache_dir=art_path)
-            if vocals_16k is not None:
-                if np.any(vocals_16k != 0):
-                    vocal_profile = compute_vocal_activity_profile(vocals_16k, is_isolated_vocals=True)
+            if vocals_16k is not None and np.any(vocals_16k != 0):
+                vocals_usable = True
+                vocal_profile = compute_vocal_activity_profile(vocals_16k, is_isolated_vocals=True)
             else:
+                if vocals_16k is not None:
+                    logger.info(
+                        "Isolated vocals were all-zero for %s; falling back to extract_audio_16k",
+                        eff_video_path,
+                    )
+                    vocals_16k = None
                 audio_16k = extract_audio_16k(eff_video_path, cache_dir=art_path)
                 if audio_16k is not None and np.any(audio_16k != 0):
                     vocal_profile = compute_vocal_activity_profile(audio_16k, is_isolated_vocals=False)
         except Exception as exc:
             logger.warning("Audio processing failed for %s: %s", eff_video_path, exc)
 
-    asr_audio = vocals_16k if vocals_16k is not None else audio_16k
+    asr_audio = vocals_16k if vocals_usable else audio_16k
     if getattr(reference_cfg, "enable_asr", True):
         vocal_lang = infer_vocal_language_from_cues(cues)
         cached_asr_path = art_path / "asr_transcript.json"
@@ -620,7 +641,7 @@ def build_lrc_from_artifacts(
         except Exception as exc:
             logger.warning("ASR word alignment failed: %s", exc)
 
-    align_audio = vocals_16k if vocals_16k is not None else audio_16k
+    align_audio = vocals_16k if vocals_usable else audio_16k
     if align_audio is not None and getattr(reference_cfg, "enable_audio_align", True):
         try:
             cues = align_cues_with_audio(cues, align_audio)

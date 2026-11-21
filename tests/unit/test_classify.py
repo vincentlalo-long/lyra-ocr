@@ -755,5 +755,68 @@ def test_classify_rejects_intro_outro_signoffs_and_split_title_fragments(
     assert result.decision == "reject"
 
 
+def test_classify_preserves_sung_one_word_title_token_in_boundary_window():
+    from lyra_ocr.classify import classify_track
+
+    v_dur = 255000
+    meta = {"title": "only my railgun", "artist": "fripSide", "channel": "Geneon"}
+
+    # 1. Inside an active lyric layer, a 1-word title token is preserved
+    lyric_layer_track = create_mock_track(
+        track_id=105,
+        start_ms=5000,
+        end_ms=8000,
+        texts=["Railgun"],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=v_dur,
+    )
+    lyric_layer_track.features["layer_id"] = 1
+    lyric_layer_track.features["layer_kind"] = "lyric"
+    res_layer = classify_track(lyric_layer_track, metadata=meta, video_duration_ms=v_dur)
+    assert res_layer.label == "lyric"
+    assert res_layer.decision == "accept"
+
+    # 2. Outside lyric layer but with active vocal_profile, a 1-word title token is preserved
+    sparse_voiced_track = create_mock_track(
+        track_id=106,
+        start_ms=5000,
+        end_ms=8000,
+        texts=["Railgun"],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=v_dur,
+    )
+    import numpy as np
+
+    vocal_profile = np.zeros(5100, dtype=np.float32)
+    vocal_profile[100:160] = 0.9
+    res_voiced = classify_track(
+        sparse_voiced_track,
+        metadata=meta,
+        video_duration_ms=v_dur,
+        vocal_profile=vocal_profile,
+    )
+    assert res_voiced.label == "lyric"
+    assert res_voiced.decision == "accept"
+
+    # 3. Outside lyric layer and unvoiced in vocal_profile, split title fragment is still rejected
+    sparse_silent_track = create_mock_track(
+        track_id=107,
+        start_ms=5000,
+        end_ms=8000,
+        texts=["my"],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=v_dur,
+    )
+    silent_profile = np.zeros(5100, dtype=np.float32)
+    res_silent = classify_track(
+        sparse_silent_track,
+        metadata=meta,
+        video_duration_ms=v_dur,
+        vocal_profile=silent_profile,
+    )
+    assert res_silent.label == "non_lyric"
+    assert res_silent.decision == "reject"
+
+
 
 

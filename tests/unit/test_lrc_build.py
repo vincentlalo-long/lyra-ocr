@@ -1523,6 +1523,130 @@ def test_filter_boundary_unvoiced_and_distractor_cues_strips_silent_intro_outro_
     assert skipped_asr[0]["reason"] == "boundary_unvoiced_or_credit"
 
 
+def test_filter_boundary_unvoiced_and_distractor_cues_preserves_sung_title_token():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+    from lyra_ocr.lyric.build import filter_boundary_unvoiced_and_distractor_cues
+    from lyra_ocr.lyric.models import LyricCue
+
+    duration_ms = 240000
+    vocal_profile = np.zeros(4800, dtype=np.float32)
+    vocal_profile[100:160] = 0.9   # active singing at 5000..8000ms
+    vocal_profile[4640:4720] = 0.9  # active at 232000..236000ms (sign-off still rejected!)
+
+    asr_transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment("Railgun", 5000, 8000, words=[ASRWord("Railgun", 5000, 8000)]),
+            ASRSegment("line2", 40000, 44000, words=[ASRWord("line2", 40000, 44000)]),
+            ASRSegment("line3", 80000, 84000, words=[ASRWord("line3", 80000, 84000)]),
+            ASRSegment("line4", 120000, 124000, words=[ASRWord("line4", 120000, 124000)]),
+            ASRSegment("line5", 214000, 218000, words=[ASRWord("line5", 214000, 218000)]),
+        ],
+    )
+
+    cues = [
+        LyricCue(start_ms=5000, end_ms=8000, text="Railgun", ocr_confidence=0.98, source_track_ids=[1]),
+        LyricCue(start_ms=232000, end_ms=236000, text="Thanks for watching", ocr_confidence=0.99, source_track_ids=[2]),
+    ]
+    skipped: list[dict] = []
+
+    kept = filter_boundary_unvoiced_and_distractor_cues(
+        cues,
+        skipped,
+        duration_ms=duration_ms,
+        title="only my railgun",
+        artist="fripSide",
+        asr_transcript=asr_transcript,
+        vocal_profile=vocal_profile,
+        include_review=False,
+    )
+    assert [c.text for c in kept] == ["Railgun"]
+    assert [s["text"] for s in skipped] == ["Thanks for watching"]
+
+    # Also preserved when only vocal_profile confirms active singing (asr_transcript=None)
+    kept_vad_only = filter_boundary_unvoiced_and_distractor_cues(
+        [LyricCue(start_ms=5000, end_ms=8000, text="Railgun", ocr_confidence=0.98, source_track_ids=[1])],
+        [],
+        duration_ms=duration_ms,
+        title="only my railgun",
+        artist="fripSide",
+        asr_transcript=None,
+        vocal_profile=vocal_profile,
+        include_review=False,
+    )
+    assert [c.text for c in kept_vad_only] == ["Railgun"]
+
+
+def test_build_lrc_falls_back_to_extract_audio_when_isolated_vocals_all_zero(tmp_path: Path):
+    from lyra_ocr.lyric.models import ReferenceConfig
+
+    artifacts_dir = tmp_path / "art_zero_vocals"
+    artifacts_dir.mkdir()
+    v_file = tmp_path / "vid.mp4"
+    v_file.touch()
+
+    manifest = {
+        "video_id": "vid_zero",
+        "video_path": str(v_file),
+        "probe": {"duration": 20.0, "width": 1280, "height": 720},
+    }
+    tracks = {
+        "total_tracks": 1,
+        "tracks": [
+            {
+                "track_id": 1,
+                "start_ms": 5000,
+                "end_ms": 8000,
+                "label": "lyric",
+                "decision": "accept",
+                "confidence": 0.95,
+                "features": {"dominant_text": "singing line here", "mean_centroid": [0.5, 0.85]},
+                "segments": [
+                    {"segment_id": 0, "start_ms": 5000, "end_ms": 8000, "text": "singing line here", "confidence": 0.95}
+                ],
+            }
+        ],
+    }
+    (artifacts_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    (artifacts_dir / "tracks.json").write_text(json.dumps(tracks), encoding="utf-8")
+
+    zero_vocals = np.zeros(16000 * 10, dtype=np.float32)
+    t = np.linspace(0.0, 10.0, 16000 * 10, endpoint=False, dtype=np.float32)
+    nonzero_raw = (0.4 * np.sin(2.0 * np.pi * 440.0 * t)).astype(np.float32)
+
+    observed_asr_audio: list[np.ndarray] = []
+    observed_align_audio: list[np.ndarray] = []
+
+    def fake_asr(audio_source, **kwargs):
+        observed_asr_audio.append(audio_source)
+        return None
+
+    def fake_align(cues_in, audio_in, **kwargs):
+        observed_align_audio.append(audio_in)
+        return cues_in
+
+    out_lrc = tmp_path / "zero_fallback.lrc"
+    with (
+        patch("lyra_ocr.lyric.build.extract_isolated_vocals_16k", return_value=zero_vocals),
+        patch("lyra_ocr.lyric.build.extract_audio_16k", return_value=nonzero_raw) as mock_raw,
+        patch("lyra_ocr.lyric.build.transcribe_audio_words", side_effect=fake_asr),
+        patch("lyra_ocr.lyric.build.align_cues_with_audio", side_effect=fake_align),
+    ):
+        build_lrc_from_artifacts(
+            artifacts_dir,
+            out_lrc,
+            video_path=str(v_file),
+            force=True,
+            reference_config=ReferenceConfig(enable_audio_align=True, enable_asr=True),
+        )
+
+    assert mock_raw.call_count == 1
+    assert len(observed_asr_audio) == 1
+    assert np.array_equal(observed_asr_audio[0], nonzero_raw)
+    assert len(observed_align_audio) == 1
+    assert np.array_equal(observed_align_audio[0], nonzero_raw)
+
+
 
 
 
