@@ -68,6 +68,13 @@ class GroupingThresholds:
     short_wrap_max_dur_ms: int = 4000
     short_wrap_max_words: int = 12
     short_wrap_max_cjk_chars: int = 22
+    continuation_wrap_max_dur_ms: int = 12500
+    continuation_wrap_max_words: int = 24
+    continuation_wrap_max_cjk_chars: int = 38
+    continuation_wrap_start_delta_ms: int = 1200
+    continuation_wrap_end_delta_ms: int = 1500
+    continuation_spillover_max_words: int = 3
+    continuation_spillover_max_len_ratio: float = 0.28
     min_stagger_gap_ms: int = 350
     same_y_band_tolerance: float = 0.032
     same_y_min_containment: float = 0.70

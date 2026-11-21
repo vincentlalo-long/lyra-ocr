@@ -279,7 +279,7 @@ def test_consolidate_keeps_companion_multiline_band():
         LyricCue(
             start_ms=1000,
             end_ms=3500,
-            text="and companion second line continues here with more words",
+            text="Companion second line continues here with more words",
             layer_id=2,
             lang="en",
             x_center=0.50,
@@ -288,7 +288,7 @@ def test_consolidate_keeps_companion_multiline_band():
         LyricCue(
             start_ms=4000,
             end_ms=6500,
-            text="another companion second line that must survive consolidation",
+            text="Another companion second line that must survive consolidation",
             layer_id=2,
             lang="en",
             x_center=0.50,
@@ -298,8 +298,8 @@ def test_consolidate_keeps_companion_multiline_band():
     result = consolidate_language_layers(dom + companion)
     texts = [c.text for c in result]
     assert {c.layer_id for c in result} == {1}
-    assert "and companion second line continues here with more words" in texts
-    assert "another companion second line that must survive consolidation" in texts
+    assert "Companion second line continues here with more words" in texts
+    assert "Another companion second line that must survive consolidation" in texts
     assert len(result) == 17
 
 
@@ -1325,6 +1325,189 @@ def test_dedupe_does_not_delete_cue_across_overlapping_intervening_cue():
     res_short = dedupe_and_group([c1b, c2b, c3b])
     assert len(res_short) == 3
     assert [(c.start_ms, c.end_ms) for c in res_short] == [(1000, 5000), (5000, 6500), (7000, 10000)]
+
+
+def test_resolve_simultaneous_multiline_merges_long_duration_continuation_wraps():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    en_cues = [
+        LyricCue(
+            start_ms=84410,
+            end_ms=94000,
+            text="Even the tears that shine from these eyes will turn into my",
+            y_center=0.874,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[10],
+        ),
+        LyricCue(
+            start_ms=84410,
+            end_ms=94000,
+            text="strength",
+            y_center=0.936,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[11],
+        ),
+    ]
+    en_resolved = resolve_simultaneous_multiline_cues(en_cues)
+    assert len(en_resolved) == 1
+    assert en_resolved[0].text == "Even the tears that shine from these eyes will turn into my strength"
+    assert en_resolved[0].start_ms == 84410
+    assert en_resolved[0].end_ms == 94000
+    assert "multiline_merged" in en_resolved[0].qa_flags
+    assert "multiline_staggered" not in en_resolved[0].qa_flags
+
+    es_cues = [
+        LyricCue(
+            start_ms=17200,
+            end_ms=28680,
+            text="Un arco iris después de la lluvia,y una flor que floreció con",
+            y_center=0.908,
+            layer_id=2,
+            lang="es",
+            source_track_ids=[20],
+        ),
+        LyricCue(
+            start_ms=17200,
+            end_ms=28680,
+            text="elfrio, están cambiando abundantemente de colores",
+            y_center=0.963,
+            layer_id=2,
+            lang="es",
+            source_track_ids=[21],
+        ),
+    ]
+    es_resolved = resolve_simultaneous_multiline_cues(es_cues)
+    assert len(es_resolved) == 1
+    assert es_resolved[0].text == (
+        "Un arco iris después de la lluvia,y una flor que floreció con "
+        "elfrio, están cambiando abundantemente de colores"
+    )
+    assert es_resolved[0].start_ms == 17200
+    assert es_resolved[0].end_ms == 28680
+    assert "multiline_merged" in es_resolved[0].qa_flags
+    assert "multiline_staggered" not in es_resolved[0].qa_flags
+
+
+def test_resolve_simultaneous_multiline_still_staggers_distinct_stanza_lines():
+    from lyra_ocr.lyric.grouping import resolve_simultaneous_multiline_cues
+
+    two_line_stanza = [
+        LyricCue(
+            start_ms=10000,
+            end_ms=19000,
+            text="Stars are shining bright tonight",
+            y_center=0.78,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[1],
+        ),
+        LyricCue(
+            start_ms=10000,
+            end_ms=19000,
+            text="Shadows fade into the light",
+            y_center=0.86,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[2],
+        ),
+    ]
+    resolved_two = resolve_simultaneous_multiline_cues(two_line_stanza)
+    assert len(resolved_two) == 2
+    assert [c.text for c in resolved_two] == [
+        "Stars are shining bright tonight",
+        "Shadows fade into the light",
+    ]
+    assert resolved_two[0].start_ms < resolved_two[1].start_ms
+    assert all("multiline_staggered" in c.qa_flags for c in resolved_two)
+    assert all("multiline_merged" not in c.qa_flags for c in resolved_two)
+
+    # Also verify K >= 3 lines still staggers even if one line ends with a continuation word
+    three_line_stanza = [
+        LyricCue(
+            start_ms=20000,
+            end_ms=29000,
+            text="Walking slowly through the",
+            y_center=0.72,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[3],
+        ),
+        LyricCue(
+            start_ms=20000,
+            end_ms=29000,
+            text="evening mist tonight",
+            y_center=0.80,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[4],
+        ),
+        LyricCue(
+            start_ms=20000,
+            end_ms=29000,
+            text="Nothing else can hold us back",
+            y_center=0.88,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[5],
+        ),
+    ]
+    resolved_three = resolve_simultaneous_multiline_cues(three_line_stanza)
+    assert len(resolved_three) == 3
+    assert all("multiline_staggered" in c.qa_flags for c in resolved_three)
+
+    # Terminal punctuation on line 1 blocks continuation merge even if line 2 is <= 3 words
+    terminated_pair = [
+        LyricCue(
+            start_ms=30000,
+            end_ms=38000,
+            text="I walked away today.",
+            y_center=0.78,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[6],
+        ),
+        LyricCue(
+            start_ms=30000,
+            end_ms=38000,
+            text="Never looked back.",
+            y_center=0.86,
+            layer_id=1,
+            lang="en",
+            source_track_ids=[7],
+        ),
+    ]
+    resolved_terminated = resolve_simultaneous_multiline_cues(terminated_pair)
+    assert len(resolved_terminated) == 2
+    assert all("multiline_staggered" in c.qa_flags for c in resolved_terminated)
+
+    # Unspaced CJK two-line stanza of comparable lengths (> 4000ms) must stagger, not treat 1 unspaced token as spillover
+    cjk_stanza = [
+        LyricCue(
+            start_ms=40000,
+            end_ms=48000,
+            text="静かな夜の森の中で夢を見ていた",
+            y_center=0.78,
+            layer_id=1,
+            lang="ja",
+            source_track_ids=[8],
+        ),
+        LyricCue(
+            start_ms=40000,
+            end_ms=48000,
+            text="遠い空の星が静かに輝いている",
+            y_center=0.86,
+            layer_id=1,
+            lang="ja",
+            source_track_ids=[9],
+        ),
+    ]
+    resolved_cjk_stanza = resolve_simultaneous_multiline_cues(cjk_stanza)
+    assert len(resolved_cjk_stanza) == 2
+    assert all("multiline_staggered" in c.qa_flags for c in resolved_cjk_stanza)
+
+
 
 
 

@@ -118,6 +118,76 @@ def _collapse_same_y_band(band: list[LyricCue], cfg: GroupingThresholds) -> Lyri
     )
 
 
+_CONTINUATION_TAIL_WORDS: frozenset[str] = frozenset({
+    "a", "an", "the", "my", "your", "our", "his", "her", "their", "its",
+    "this", "that", "these", "those", "every", "no", "some", "any", "to",
+    "of", "in", "on", "at", "for", "with", "from", "into", "onto", "upon",
+    "by", "as", "like", "than", "and", "or", "but", "nor", "so", "yet",
+    "if", "when", "while", "until", "because", "since", "though", "although",
+    "be", "being", "been", "is", "are", "was", "were", "will", "would",
+    "shall", "should", "can", "could", "may", "might", "must", "do", "does",
+    "did", "have", "has", "had", "let", "anyone", "someone",
+    "con", "de", "del", "al", "el", "la", "los", "las", "un", "una",
+    "mi", "tu", "su", "mis", "tus", "sus", "por", "para", "sin", "sobre",
+    "entre", "hacia", "hasta", "como", "que", "y", "o", "pero", "ni", "en",
+    "se", "me", "te", "le", "nos",
+})
+
+_TERMINAL_PUNCTUATION = (".", "!", "?", "。", "！", "？")
+
+
+def _is_sentence_continuation_wrap(
+    l1: LyricCue,
+    l2: LyricCue,
+    cfg: GroupingThresholds,
+) -> bool:
+    """Return True when two vertically adjacent cues form a wrapped single sentence."""
+    if (
+        abs(l1.start_ms - l2.start_ms) > cfg.continuation_wrap_start_delta_ms
+        or abs(l1.end_ms - l2.end_ms) > cfg.continuation_wrap_end_delta_ms
+    ):
+        return False
+
+    t1 = l1.text.strip()
+    t2 = l2.text.strip()
+    if not t1 or not t2:
+        return False
+    if t1.endswith(_TERMINAL_PUNCTUATION):
+        return False
+
+    lang = l1.lang if l1.lang and l1.lang != "und" else l2.lang
+    lang_profile = get_language_profile(lang or "und")
+    is_unspaced = lang_profile.is_cjk_unspaced or _is_cjk_heavy(f"{t1}{t2}")
+
+    # 1. Short spillover tail (word-based for spaced scripts, char-based for unspaced CJK)
+    if is_unspaced:
+        t1_compact = re.sub(r"\s+", "", t1)
+        t2_compact = re.sub(r"\s+", "", t2)
+        if (
+            len(t2_compact) <= cfg.continuation_spillover_max_words
+            or len(t2_compact) <= len(t1_compact) * cfg.continuation_spillover_max_len_ratio
+        ):
+            return True
+    elif (
+        len(t2.split()) <= cfg.continuation_spillover_max_words
+        or len(t2) <= len(t1) * cfg.continuation_spillover_max_len_ratio
+    ):
+        return True
+
+    # 2. Line 1 ends with comma, hyphen, or open continuation connector/preposition
+    if t1.endswith((",", "、", "-")):
+        return True
+    last_word = t1.split()[-1].strip("\"'()[].,!?;:¡¿«»").lower()
+    if last_word in _CONTINUATION_TAIL_WORDS:
+        return True
+
+    # 3. Line 2 starts with lowercase while line 1 has no terminal punctuation
+    if t2[0].islower():
+        return True
+
+    return False
+
+
 def _try_merge_short_wrap(
     grp: list[LyricCue],
     t_start: int,
@@ -126,12 +196,25 @@ def _try_merge_short_wrap(
     max_words: int,
     cfg: GroupingThresholds,
 ) -> LyricCue | None:
-    """Merge a short 2-line wrapped sentence in adjacent vertical bands if within bounds."""
-    if len(grp) != 2 or max(0, t_end - t_start) > max_dur_ms:
+    """Merge a 2-line wrapped sentence in adjacent vertical bands if within bounds."""
+    if len(grp) != 2:
         return None
     l1, l2 = grp[0], grp[1]
     y_diff = abs(l2.y_center - l1.y_center)
     if not (cfg.wrap_y_diff_min <= y_diff <= cfg.wrap_y_diff_max):
+        return None
+
+    is_continuation = _is_sentence_continuation_wrap(l1, l2, cfg)
+    dur_tightened = (
+        max_dur_ms < DEFAULT_GROUPING_THRESHOLDS.short_wrap_max_dur_ms
+        and cfg.continuation_wrap_max_dur_ms == DEFAULT_GROUPING_THRESHOLDS.continuation_wrap_max_dur_ms
+    )
+    eff_dur_limit = (
+        max(max_dur_ms, cfg.continuation_wrap_max_dur_ms)
+        if (is_continuation and not dur_tightened)
+        else max_dur_ms
+    )
+    if max(0, t_end - t_start) > eff_dur_limit:
         return None
 
     combined = f"{l1.text.strip()} {l2.text.strip()}"
@@ -139,10 +222,21 @@ def _try_merge_short_wrap(
     lang_profile = get_language_profile(lang or "und")
     is_unspaced = lang_profile.is_cjk_unspaced or _is_cjk_heavy(combined)
     if is_unspaced:
-        if len(re.sub(r"\s+", "", combined)) > cfg.short_wrap_max_cjk_chars:
+        cjk_limit = (
+            max(cfg.short_wrap_max_cjk_chars, cfg.continuation_wrap_max_cjk_chars)
+            if is_continuation
+            else cfg.short_wrap_max_cjk_chars
+        )
+        if len(re.sub(r"\s+", "", combined)) > cjk_limit:
             return None
-    elif len(combined.split()) > max_words:
-        return None
+    else:
+        word_limit = (
+            max(max_words, cfg.continuation_wrap_max_words)
+            if is_continuation
+            else max_words
+        )
+        if len(combined.split()) > word_limit:
+            return None
 
     sep = "" if (lang_profile.is_cjk_unspaced or (lang == "und" and _is_cjk_heavy(combined))) else " "
     raw_1 = (l1.raw_text or l1.text).strip()
