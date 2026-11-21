@@ -5,12 +5,14 @@ import re
 from pathlib import Path
 from typing import Any, Mapping
 
+from lyra_ocr.config import DEFAULT_GROUPING_THRESHOLDS
 from lyra_ocr.labels import load_labels_jsonl
 from lyra_ocr.lang import get_language_profile
 from lyra_ocr.lyric.correct import build_corpus_vocab, correct_text
 from lyra_ocr.lyric.models import CorrectionConfig, CorrectionInfo, LyricCue, ReferenceConfig
 from lyra_ocr.lyric.reference import best_reference_similarity, line_similarity
 from lyra_ocr.lyric.text_repair import oov_ratio, text_quality
+from lyra_ocr.track import string_similarity
 
 
 def load_artifacts(artifacts_dir: str | Path) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, dict[str, Any]]]:
@@ -108,10 +110,51 @@ def _segments_text_overlap_score(text_a: str, text_b: str) -> float:
         suff += 1
     best_affix = max(pref, suff)
     is_cjk = bool(re.search(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]", a + b))
+    sim = string_similarity(a, b)
+    sim_threshold = (
+        DEFAULT_GROUPING_THRESHOLDS.segment_cjk_min_similarity
+        if is_cjk
+        else DEFAULT_GROUPING_THRESHOLDS.segment_non_cjk_min_similarity
+    )
+    if sim >= sim_threshold:
+        return max(float(best_affix), sim * min_len)
     min_ratio = 0.35 if is_cjk else 0.70
     if best_affix >= 10 or best_affix >= min_ratio * min_len:
         return float(best_affix)
     return 0.0
+
+
+def _merge_single_occ_jitter_segments(
+    work: list[dict[str, Any]],
+    max_boundary_gap_ms: int,
+) -> list[dict[str, Any]]:
+    """Collapse adjacent 1-occurrence OCR jitter segments into a single highest-confidence segment."""
+    merged: list[dict[str, Any]] = [dict(work[0])]
+    for nxt in work[1:]:
+        cur = merged[-1]
+        cur_start = int(cur.get("start_ms", 0))
+        cur_end = int(cur.get("end_ms", cur_start))
+        nxt_start = int(nxt.get("start_ms", 0))
+        nxt_end = int(nxt.get("end_ms", nxt_start))
+        gap = max(0, nxt_start - cur_end, cur_start - nxt_end)
+        if (
+            gap <= max_boundary_gap_ms
+            and _segments_text_overlap_score(str(cur.get("text", "")), str(nxt.get("text", ""))) > 0.0
+        ):
+            cur_conf = float(cur.get("confidence") or 0.0)
+            nxt_conf = float(nxt.get("confidence") or 0.0)
+            cur_text = str(cur.get("text", ""))
+            nxt_text = str(nxt.get("text", ""))
+            if (nxt_conf, len(nxt_text.strip())) > (cur_conf, len(cur_text.strip())):
+                cur["text"] = nxt_text
+                if nxt.get("confidence") is not None:
+                    cur["confidence"] = nxt["confidence"]
+            cur["start_ms"] = min(cur_start, nxt_start)
+            cur["end_ms"] = max(cur_end, nxt_end)
+            cur["num_occurrences"] = _seg_occ_count(cur) + _seg_occ_count(nxt)
+        else:
+            merged.append(dict(nxt))
+    return merged
 
 
 def consolidate_track_segments(
@@ -126,6 +169,9 @@ def consolidate_track_segments(
         (dict(s) for s in segments),
         key=lambda s: (int(s.get("start_ms", 0)), int(s.get("end_ms", 0))),
     )
+
+    if all(_seg_occ_count(s) <= 1 for s in work):
+        return _merge_single_occ_jitter_segments(work, max_boundary_gap_ms)
 
     changed = True
     while changed and len(work) > 1:

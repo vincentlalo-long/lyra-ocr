@@ -1640,6 +1640,72 @@ def test_continuation_wrap_max_dur_ms_threshold_respected_independently():
     assert "multiline_merged" in merged_explicit[0].qa_flags
 
 
+def test_consolidate_language_layers_keeps_non_overlapping_cues_from_small_secondary_band():
+    # Primary ja-Latn layer with 30 cues (cy=0.84, cx=0.38), leaving gaps at 236..238s and 259..262s
+    primary = [
+        LyricCue(
+            start_ms=i * 7000 + 1000,
+            end_ms=i * 7000 + 5000,
+            text=f"kaze no naka de utau yo {i}",
+            layer_id=1,
+            lang="ja-Latn",
+            x_center=0.38,
+            y_center=0.84,
+            source_track_ids=[i + 1],
+        )
+        for i in range(30)
+    ]
+    # Secondary ja-Latn band (cy=0.81, cx=0.24, 4 cues): 2 overlap primary, 2 fill gaps
+    secondary = [
+        LyricCue(
+            start_ms=1000,
+            end_ms=5000,
+            text="kaze no naka de utau yo 0",
+            layer_id=2,
+            lang="ja-Latn",
+            x_center=0.24,
+            y_center=0.81,
+            source_track_ids=[101],
+        ),
+        LyricCue(
+            start_ms=8000,
+            end_ms=12000,
+            text="kaze no naka de utau yo 1",
+            layer_id=2,
+            lang="ja-Latn",
+            x_center=0.24,
+            y_center=0.81,
+            source_track_ids=[102],
+        ),
+        LyricCue(
+            start_ms=236000,
+            end_ms=238000,
+            text="tatoe tooku hanarete mo",
+            layer_id=2,
+            lang="ja-Latn",
+            x_center=0.24,
+            y_center=0.81,
+            source_track_ids=[103],
+        ),
+        LyricCue(
+            start_ms=259000,
+            end_ms=262000,
+            text="kono omoi wa kienai kara",
+            layer_id=2,
+            lang="ja-Latn",
+            x_center=0.24,
+            y_center=0.81,
+            source_track_ids=[104],
+        ),
+    ]
+    result = consolidate_language_layers(primary + secondary)
+    texts = [c.text for c in result]
+    assert "tatoe tooku hanarete mo" in texts
+    assert "kono omoi wa kienai kara" in texts
+    assert {c.layer_id for c in result} == {1}
+    assert len(result) == 32
+
+
 
 
 

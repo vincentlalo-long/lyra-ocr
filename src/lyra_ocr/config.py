@@ -59,10 +59,21 @@ class GroupingThresholds:
     consolidate_overlap_margin_ms: int = 200
     companion_band_y_min: float = 0.02
     companion_band_y_max: float = 0.18
-    companion_band_x_min: float = 0.28
-    companion_band_x_max: float = 0.72
+    companion_band_x_min: float = 0.15
+    companion_band_x_max: float = 0.85
     noisy_layer_min_dom_ratio: float = 0.35
     noisy_layer_min_cues: int = 10
+    gap_cue_max_y_diff: float = 0.22
+
+    # Track segment jitter consolidation
+    segment_cjk_min_similarity: float = 0.55
+    segment_non_cjk_min_similarity: float = 0.72
+
+    # Cross-layer coverage audit & gap recovery
+    audit_major_layer_min_cues: int = 8
+    audit_cue_overlap_pad_ms: int = 600
+    audit_track_overlap_pad_ms: int = 500
+    audit_max_y_dist: float = 0.08
 
     # Simultaneous multi-line resolution & same-Y flicker collapse
     short_wrap_max_dur_ms: int = 4000

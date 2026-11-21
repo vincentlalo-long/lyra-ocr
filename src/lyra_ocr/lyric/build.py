@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections import defaultdict
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -23,14 +24,21 @@ from lyra_ocr.audio import (
     transcribe_audio_words,
     vocal_active_ratio,
 )
-from lyra_ocr.classify import is_boundary_distractor_text, is_split_title_fragment
+from lyra_ocr.classify import (
+    CHAT_CONTENT_RE,
+    SUPPLEMENTARY_KEYWORDS,
+    is_boundary_distractor_text,
+    is_split_title_fragment,
+)
 from lyra_ocr.config import (
     DEFAULT_ASR_ALIGNMENT_THRESHOLDS,
     DEFAULT_CLASSIFICATION_THRESHOLDS,
+    DEFAULT_GROUPING_THRESHOLDS,
     ASRAlignmentThresholds,
     ClassificationThresholds,
+    GroupingThresholds,
 )
-from lyra_ocr.lang import vote_layer_lang
+from lyra_ocr.lang import detect_line_lang, vote_layer_lang
 from lyra_ocr.layers import refresh_dict_tracks_layers
 from lyra_ocr.lyric.export import write_cues_json, write_lrc, write_lrc_layers
 from lyra_ocr.lyric.grouping import (
@@ -60,11 +68,268 @@ from lyra_ocr.lyric.reference import (
     select_reference_lines,
 )
 
-from lyra_ocr.lyric.select import load_artifacts, select_cues
+from lyra_ocr.lyric.select import _segment_confidence, load_artifacts, select_cues
 
 logger = logging.getLogger(__name__)
 CAPTION_CACHE_TTL_SECONDS = 3600.0
 BUILD_CACHE_VERSION = 8
+
+_HARD_REJECT_QA_FLAGS = frozenset({
+    "intro_bounded_card",
+    "intro_credit_pattern",
+    "intro_outro_signoff",
+    "metadata_title_match",
+    "metadata_channel_match",
+    "metadata_artist_match",
+    "only_intro_outro",
+    "social_handle_tag",
+    "static_overlay_layer",
+    "long_lifetime_invariant",
+    "high_spatial_variance",
+    "vad_silent_overlay",
+    "isolated_fragment_word",
+    "boundary_unvoiced_or_credit",
+})
+
+
+def _is_hard_rejected_track(
+    track: dict[str, Any],
+    dom_text: str,
+    skipped_reasons: set[str],
+) -> bool:
+    """Return True if a track was blocked by metadata, credit, watermark, or tracking-error rules."""
+    features = track.get("features") or {}
+    if isinstance(features, dict) and features.get("layer_kind") == "overlay":
+        return True
+    qa_flags = set(track.get("qa_flags") or [])
+    if qa_flags & _HARD_REJECT_QA_FLAGS:
+        return True
+    if skipped_reasons & {"tracking_error", "boundary_unvoiced_or_credit"}:
+        return True
+    if "supplementary/social/credit" in str(track.get("reason", "")).lower():
+        return True
+    stripped = dom_text.strip()
+    dom_lower = stripped.lower()
+    if stripped.startswith("@") or any(kw in dom_lower for kw in SUPPLEMENTARY_KEYWORDS):
+        return True
+    if CHAT_CONTENT_RE.search(stripped):
+        return True
+    return False
+
+
+def _track_centroid(
+    track: dict[str, Any],
+    frame_width: int,
+    frame_height: int,
+) -> tuple[float, float]:
+    features = track.get("features") or {}
+    mean_centroid = features.get("mean_centroid") if isinstance(features, dict) else None
+    if mean_centroid and len(mean_centroid) >= 2:
+        return float(mean_centroid[0]), float(mean_centroid[1])
+    bbox = track.get("bbox") or []
+    if len(bbox) >= 4:
+        return (
+            float((bbox[0] + bbox[2]) / 2.0 / max(1, frame_width)),
+            float((bbox[1] + bbox[3]) / 2.0 / max(1, frame_height)),
+        )
+    return 0.0, 0.0
+
+
+def _pick_track_span_and_text(
+    track: dict[str, Any],
+    anchor_start_ms: int,
+    anchor_end_ms: int,
+    pad_ms: int,
+) -> tuple[int, int, str, float | None, int | None]:
+    """Return (start_ms, end_ms, text, confidence, segment_id) for the best overlapping segment or track."""
+    features = track.get("features") or {}
+    dom_text = str(features.get("dominant_text") or "").strip() if isinstance(features, dict) else ""
+    segments = [s for s in (track.get("segments") or []) if isinstance(s, dict)]
+
+    best_seg: dict[str, Any] | None = None
+    best_overlap = -1
+    for seg in segments:
+        s_start = int(seg.get("start_ms", track.get("start_ms", 0)))
+        s_end = int(seg.get("end_ms", s_start))
+        s_text = str(seg.get("text") or "").strip()
+        if not s_text:
+            continue
+        overlap = min(s_end, anchor_end_ms + pad_ms) - max(s_start, anchor_start_ms - pad_ms)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_seg = seg
+
+    if best_seg is not None and (best_overlap > 0 or not dom_text):
+        seg_start = int(best_seg.get("start_ms", track.get("start_ms", 0)))
+        seg_end = int(best_seg.get("end_ms", seg_start))
+        if seg_end <= seg_start:
+            seg_end = seg_start + 300
+        seg_text = str(best_seg.get("text") or "").strip() or dom_text
+        seg_conf = _segment_confidence(best_seg, track)
+        return seg_start, seg_end, seg_text, seg_conf, best_seg.get("segment_id")
+
+    tr_start = int(track.get("start_ms", 0))
+    tr_end = int(track.get("end_ms", tr_start))
+    if tr_end <= tr_start:
+        tr_end = tr_start + 300
+    tr_conf = _segment_confidence({}, track)
+    return tr_start, tr_end, dom_text, tr_conf, None
+
+
+def audit_and_recover_missing_lyrics(
+    cues: list[LyricCue],
+    tracks: list[dict[str, Any]],
+    skipped: list[dict[str, Any]],
+    *,
+    frame_width: int = 1280,
+    frame_height: int = 720,
+    thresholds: GroupingThresholds | None = None,
+) -> tuple[list[LyricCue], list[str]]:
+    """Audit parallel major layers for coverage gaps, rescue dropped tracks, and flag remaining gaps."""
+    if not cues:
+        return cues, []
+
+    cfg = thresholds or DEFAULT_GROUPING_THRESHOLDS
+    by_layer_lang: dict[tuple[Any, str], list[LyricCue]] = defaultdict(list)
+    for cue in cues:
+        if cue.layer_id is not None:
+            by_layer_lang[(cue.layer_id, cue.lang)].append(cue)
+
+    major_keys = [
+        key for key, lcues in by_layer_lang.items()
+        if len(lcues) >= cfg.audit_major_layer_min_cues
+    ]
+    if len(major_keys) < 2:
+        return cues, []
+
+    target_mean_y = {
+        key: sum(c.y_center for c in by_layer_lang[key]) / len(by_layer_lang[key])
+        for key in major_keys
+    }
+
+    used_track_id_strs: set[str] = {
+        str(tid) for cue in cues for tid in cue.source_track_ids if tid is not None
+    }
+    skipped_reasons_by_tid: dict[str, set[str]] = defaultdict(set)
+    for item in skipped:
+        if isinstance(item, dict) and item.get("track_id") is not None:
+            skipped_reasons_by_tid[str(item["track_id"])].add(str(item.get("reason", "")))
+
+    anchor_entries: list[tuple[tuple[Any, str], LyricCue]] = []
+    for key in major_keys:
+        for cue in by_layer_lang[key]:
+            anchor_entries.append((key, cue))
+    anchor_entries.sort(key=lambda item: (item[1].start_ms, item[1].end_ms, str(item[0][0])))
+
+    flagged_intervals: dict[tuple[Any, str], list[tuple[int, int]]] = defaultdict(list)
+    warnings: list[str] = []
+    rescued_cues: list[LyricCue] = []
+    rescued_track_id_strs: set[str] = set()
+
+    cue_pad = cfg.audit_cue_overlap_pad_ms
+    track_pad = cfg.audit_track_overlap_pad_ms
+
+    for src_key, anchor in anchor_entries:
+        for target_key in major_keys:
+            if target_key == src_key:
+                continue
+            target_lid, target_lang = target_key
+
+            has_target_cue = any(
+                dc.start_ms < anchor.end_ms + cue_pad and dc.end_ms > anchor.start_ms - cue_pad
+                for dc in by_layer_lang[target_key]
+            )
+            if has_target_cue:
+                continue
+
+            already_flagged = any(
+                fs < anchor.end_ms + cue_pad and fe > anchor.start_ms - cue_pad
+                for fs, fe in flagged_intervals[target_key]
+            )
+            if already_flagged:
+                continue
+
+            best_candidate: tuple[tuple[int, int, float], dict[str, Any], tuple[int, int, str, float | None, int | None], float, float] | None = None
+            for track in tracks:
+                if not isinstance(track, dict):
+                    continue
+                tid = track.get("track_id")
+                tid_str = str(tid) if tid is not None else ""
+                if tid_str and tid_str in used_track_id_strs:
+                    continue
+
+                tr_start, tr_end, cand_text, cand_conf, seg_id = _pick_track_span_and_text(
+                    track, anchor.start_ms, anchor.end_ms, track_pad
+                )
+                if not cand_text:
+                    continue
+                overlap_ms = min(tr_end, anchor.end_ms + track_pad) - max(tr_start, anchor.start_ms - track_pad)
+                if overlap_ms <= 0:
+                    continue
+                if _is_hard_rejected_track(track, cand_text, skipped_reasons_by_tid.get(tid_str, set())):
+                    continue
+
+                features = track.get("features") or {}
+                tr_lid = features.get("layer_id") if isinstance(features, dict) else None
+                tr_x, tr_y = _track_centroid(track, frame_width, frame_height)
+                det_lang = detect_line_lang(cand_text)
+                lang_matches = (det_lang == target_lang) or (target_lang == "ja" and det_lang == "zh")
+                matches_layer = (tr_lid == target_lid) or (
+                    lang_matches and abs(tr_y - target_mean_y[target_key]) <= cfg.audit_max_y_dist
+                )
+                if not matches_layer:
+                    continue
+
+                score = (1 if tr_lid == target_lid else 0, overlap_ms, float(cand_conf or 0.0))
+                if best_candidate is None or score > best_candidate[0]:
+                    best_candidate = (score, track, (tr_start, tr_end, cand_text, cand_conf, seg_id), tr_x, tr_y)
+
+            if best_candidate is not None:
+                _, track, (tr_start, tr_end, cand_text, cand_conf, seg_id), tr_x, tr_y = best_candidate
+                tid = track.get("track_id")
+                tid_str = str(tid) if tid is not None else ""
+                tr_decision = str(track.get("decision") or "review")
+                rescued_cue = LyricCue(
+                    start_ms=tr_start,
+                    end_ms=tr_end,
+                    text=cand_text,
+                    raw_text=cand_text,
+                    source_track_ids=[tid] if tid is not None else [],
+                    source_segment_ids=[seg_id] if seg_id is not None else [],
+                    confidence=float(cand_conf if cand_conf is not None else 0.0),
+                    decision=tr_decision,
+                    review_required=(tr_decision == "review"),
+                    bbox=list(track.get("bbox") or []),
+                    x_center=tr_x,
+                    y_center=tr_y,
+                    qa_flags=["cross_layer_gap_rescued"],
+                    ocr_confidence=cand_conf,
+                    layer_id=target_lid,
+                    lang=target_lang,
+                )
+                rescued_cues.append(rescued_cue)
+                by_layer_lang[target_key].append(rescued_cue)
+                if tid_str:
+                    used_track_id_strs.add(tid_str)
+                    rescued_track_id_strs.add(tid_str)
+            else:
+                warnings.append(
+                    f"missing_parallel_cue: lang={target_lang} at {anchor.start_ms / 1000:.1f}s..{anchor.end_ms / 1000:.1f}s"
+                )
+                flagged_intervals[target_key].append((anchor.start_ms, anchor.end_ms))
+
+    if rescued_track_id_strs:
+        skipped[:] = [
+            s for s in skipped
+            if not (isinstance(s, dict) and s.get("track_id") is not None and str(s.get("track_id")) in rescued_track_id_strs)
+        ]
+
+    if rescued_cues:
+        combined = list(cues) + rescued_cues
+        combined.sort(key=lambda c: (c.start_ms, c.y_center))
+        return combined, warnings
+
+    return cues, warnings
 
 
 def filter_boundary_unvoiced_and_distractor_cues(
@@ -516,6 +781,14 @@ def build_lrc_from_artifacts(
         vocal_profile=vocal_profile,
         include_review=include_review,
     )
+    cues, audit_warnings = audit_and_recover_missing_lyrics(
+        cues,
+        tracks,
+        skipped,
+        frame_width=frame_width,
+        frame_height=frame_height,
+    )
+    reference_warnings.extend(audit_warnings)
 
     if cues and asr_transcript is not None and asr_transcript.segments:
         gated_cues: list[LyricCue] = []
@@ -634,6 +907,14 @@ def build_lrc_from_artifacts(
         vocal_profile=vocal_profile,
         include_review=include_review,
     )
+    cues, audit_warnings = audit_and_recover_missing_lyrics(
+        cues,
+        tracks,
+        skipped,
+        frame_width=frame_width,
+        frame_height=frame_height,
+    )
+    reference_warnings.extend(audit_warnings)
 
     if asr_transcript is not None:
         try:

@@ -1647,6 +1647,123 @@ def test_build_lrc_falls_back_to_extract_audio_when_isolated_vocals_all_zero(tmp
     assert np.array_equal(observed_align_audio[0], nonzero_raw)
 
 
+def test_audit_and_recover_missing_lyrics_rescues_dropped_parallel_track_and_flags_gaps():
+    from lyra_ocr.lyric.build import audit_and_recover_missing_lyrics
+    from lyra_ocr.lyric.models import LyricCue
+
+    # Build 3 major layers (>= 8 cues each): ja (layer 1), ja-Latn (layer 2), en (layer 3)
+    # Gap in en at 20000..23000ms (index 2) and 40000..43000ms (index 5)
+    cues: list[LyricCue] = []
+    for i in range(10):
+        s = (i + 1) * 7000
+        e = s + 3000
+        if i == 2:
+            s, e = 20000, 23000
+        elif i == 5:
+            s, e = 40000, 43000
+        cues.append(
+            LyricCue(
+                start_ms=s,
+                end_ms=e,
+                text=f"日本語の歌詞ライン{i}",
+                layer_id=1,
+                lang="ja",
+                y_center=0.72,
+                source_track_ids=[100 + i],
+            )
+        )
+        cues.append(
+            LyricCue(
+                start_ms=s,
+                end_ms=e,
+                text=f"nihongo no kashi rain {i}",
+                layer_id=2,
+                lang="ja-Latn",
+                y_center=0.80,
+                source_track_ids=[200 + i],
+            )
+        )
+        if i not in (2, 5):
+            cues.append(
+                LyricCue(
+                    start_ms=s,
+                    end_ms=e,
+                    text=f"English lyric line {i}",
+                    layer_id=3,
+                    lang="en",
+                    y_center=0.88,
+                    source_track_ids=[300 + i],
+                )
+            )
+
+    # Case 1: An unused English track at 20000..23000ms skipped as review/sparse -> rescued!
+    # Also include a hard-rejected channel watermark at 40000..43000ms -> must NOT be rescued!
+    tracks = [
+        {
+            "track_id": 901,
+            "start_ms": 20000,
+            "end_ms": 23000,
+            "label": "non_lyric",
+            "decision": "review",
+            "confidence": 0.88,
+            "qa_flags": ["needs_human_audit"],
+            "features": {
+                "dominant_text": "Even if the night falls down",
+                "layer_id": None,
+                "layer_kind": "sparse",
+                "mean_centroid": [0.5, 0.88],
+            },
+            "segments": [
+                {
+                    "segment_id": 0,
+                    "start_ms": 20000,
+                    "end_ms": 23000,
+                    "text": "Even if the night falls down",
+                    "confidence": 0.88,
+                }
+            ],
+        },
+        {
+            "track_id": 902,
+            "start_ms": 40000,
+            "end_ms": 43000,
+            "label": "non_lyric",
+            "decision": "reject",
+            "confidence": 0.99,
+            "qa_flags": ["metadata_channel_match"],
+            "features": {
+                "dominant_text": "Official Channel Watermark",
+                "layer_id": 3,
+                "layer_kind": "overlay",
+                "mean_centroid": [0.5, 0.88],
+            },
+        },
+    ]
+    skipped = [
+        {"track_id": 901, "segment_id": 0, "reason": "review", "label": "non_lyric", "decision": "review", "text": "Even if the night falls down"},
+        {"track_id": 902, "segment_id": None, "reason": "non_lyric", "label": "non_lyric", "decision": "reject", "text": "Official Channel Watermark"},
+    ]
+
+    recovered_cues, warnings = audit_and_recover_missing_lyrics(cues, tracks, skipped)
+
+    rescued = [c for c in recovered_cues if c.source_track_ids == [901]]
+    assert len(rescued) == 1
+    assert rescued[0].text == "Even if the night falls down"
+    assert rescued[0].layer_id == 3
+    assert rescued[0].lang == "en"
+    assert "cross_layer_gap_rescued" in rescued[0].qa_flags
+    assert all(s["track_id"] != 901 for s in skipped)
+
+    # Watermark 902 was NOT rescued, so 40.0s..43.0s remains unrecovered and records warning
+    assert all(c.source_track_ids != [902] for c in recovered_cues)
+    assert "missing_parallel_cue: lang=en at 40.0s..43.0s" in warnings
+
+    # Case 2: No track on screen at 20000..23000ms -> records missing_parallel_cue warning
+    recovered_no_track, warnings_no_track = audit_and_recover_missing_lyrics(cues, [], [])
+    assert "missing_parallel_cue: lang=en at 20.0s..23.0s" in warnings_no_track
+    assert warnings_no_track.count("missing_parallel_cue: lang=en at 20.0s..23.0s") == 1
+
+
 
 
 

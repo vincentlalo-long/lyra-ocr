@@ -295,6 +295,7 @@ def _merge_or_filter_secondary_layer(
         return
 
     dom_texts = [_normalize_text(c.text) for c in dom_cues]
+    orig_dom_cues = list(dom_cues)
     sec_x = sum(c.x_center for c in sec_cues) / len(sec_cues)
     is_companion_band = (
         cfg.companion_band_y_min <= abs(sec_y - dom_y) <= cfg.companion_band_y_max
@@ -302,7 +303,25 @@ def _merge_or_filter_secondary_layer(
     )
     for sc in sec_cues:
         norm = _normalize_text(sc.text)
-        if norm and _text_in(dom_texts, norm, cfg):
+        sc_overlaps_dom = any(
+            max(sc.start_ms, dc.start_ms) < min(sc.end_ms, dc.end_ms) - cfg.consolidate_overlap_margin_ms
+            for dc in orig_dom_cues
+        )
+        sc_detected_lang = detect_line_lang(sc.text)
+        is_gap_filler = (
+            not sc_overlaps_dom
+            and (
+                sc_detected_lang in (lang, "en", "und")
+                or (lang == "ja" and sc_detected_lang == "zh")
+            )
+            and abs(sc.y_center - dom_y) <= cfg.gap_cue_max_y_diff
+        )
+        if is_gap_filler:
+            sc.layer_id = dominant_lid
+            sc.lang = lang
+            dom_cues.append(sc)
+            dom_texts.append(norm)
+        elif norm and _text_in(dom_texts, norm, cfg):
             dropped_cues.add(id(sc))
         elif (not is_companion_band) and (
             len(sec_cues) < cfg.noisy_layer_min_dom_ratio * len(dom_cues)

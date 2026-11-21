@@ -673,6 +673,77 @@ def test_select_cues_lyric_layer_bypasses_english_oov_gate():
     assert skipped_by_tid[103] == "low_text_quality"
 
 
+def test_consolidate_track_segments_merges_cjk_ocr_jitter_segments():
+    from lyra_ocr.lyric.select import _segments_text_overlap_score, consolidate_track_segments
+
+    # 3 consecutive 1-second 1-occurrence CJK segments with 1-char OCR jitter
+    segments = [
+        {
+            "segment_id": 0,
+            "start_ms": 1000,
+            "end_ms": 2000,
+            "text": "悪重退散ICBM",
+            "confidence": 0.80,
+            "num_occurrences": 1,
+        },
+        {
+            "segment_id": 1,
+            "start_ms": 2000,
+            "end_ms": 3000,
+            "text": "思靠退散ICBM",
+            "confidence": 0.94,
+            "num_occurrences": 1,
+        },
+        {
+            "segment_id": 2,
+            "start_ms": 3000,
+            "end_ms": 4000,
+            "text": "恶重退散ICBM",
+            "confidence": 0.85,
+            "num_occurrences": 1,
+        },
+    ]
+    consolidated = consolidate_track_segments(segments)
+    assert len(consolidated) == 1
+    assert consolidated[0]["start_ms"] == 1000
+    assert consolidated[0]["end_ms"] == 4000
+    assert consolidated[0]["text"] == "思靠退散ICBM"
+    assert consolidated[0]["num_occurrences"] == 3
+
+    # Kana/Kanji jitter pair with spacing differences
+    assert _segments_text_overlap_score("君ノ声モ届力ナ但", "君ノ声モ 届カナイヨ") > 0.0
+    kana_segments = [
+        {
+            "segment_id": 0,
+            "start_ms": 10000,
+            "end_ms": 11000,
+            "text": "君ノ声モ届力ナ但",
+            "confidence": 0.78,
+            "num_occurrences": 1,
+        },
+        {
+            "segment_id": 1,
+            "start_ms": 11000,
+            "end_ms": 12000,
+            "text": "君ノ声モ 届カナイヨ",
+            "confidence": 0.92,
+            "num_occurrences": 1,
+        },
+    ]
+    kana_consolidated = consolidate_track_segments(kana_segments)
+    assert len(kana_consolidated) == 1
+    assert kana_consolidated[0]["start_ms"] == 10000
+    assert kana_consolidated[0]["end_ms"] == 12000
+    assert kana_consolidated[0]["text"] == "君ノ声モ 届カナイヨ"
+
+    # Unrelated CJK 1-occurrence segments must NOT merge
+    unrelated = [
+        {"segment_id": 0, "start_ms": 1000, "end_ms": 2000, "text": "夜空の星を見上げて", "confidence": 0.9, "num_occurrences": 1},
+        {"segment_id": 1, "start_ms": 2000, "end_ms": 3000, "text": "明日へ向かう旅路", "confidence": 0.9, "num_occurrences": 1},
+    ]
+    assert len(consolidate_track_segments(unrelated)) == 2
+
+
 
 
 
