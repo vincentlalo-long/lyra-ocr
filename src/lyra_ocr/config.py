@@ -144,6 +144,15 @@ class ClassificationThresholds:
     vad_intro_start_ratio_max: float = 0.20
     vad_outro_start_ratio_min: float = 0.80
     intro_credit_start_ratio_max: float = 0.15
+    intro_signoff_window_ratio: float = 0.15
+    outro_signoff_window_ratio: float = 0.12
+    split_title_intro_ratio: float = 0.15
+    split_title_outro_ratio: float = 0.12
+    boundary_intro_min_ms: int = 15000
+    boundary_intro_ratio: float = 0.15
+    boundary_outro_min_ms: int = 18000
+    boundary_outro_ratio: float = 0.12
+    boundary_gate_vocal_ratio_min: float = 0.18
     title_token_min_len: int = 3
     title_token_max_dom_tokens: int = 4
     title_token_min_coverage: float = 0.50
@@ -237,6 +246,25 @@ class OcrPreprocessThresholds:
 
 
 @dataclass(frozen=True)
+class VocalIsolationThresholds:
+    """Mid-Side HPSS vocal isolation and RMS-VAD thresholds for ``audio/extract.py`` and ``audio/vad.py``."""
+
+    stft_nperseg: int = 1024
+    stft_noverlap: int = 768
+    side_suppression_weight: float = 1.2
+    hpss_harmonic_kernel: int = 15
+    hpss_percussive_kernel: int = 15
+    vocal_band_low_hz: float = 180.0
+    vocal_band_high_hz: float = 3800.0
+    vad_band_low_hz: float = 300.0
+    vad_band_high_hz: float = 3400.0
+    isolated_vad_ref_percentile: float = 95.0
+    isolated_vad_ref_min_rms: float = 1e-4
+    isolated_vad_silence_floor: float = 0.002
+    vad_active_frame_threshold: float = 0.35
+
+
+@dataclass(frozen=True)
 class ASRAlignmentThresholds:
     """Vocal language routing and word-level ASR alignment thresholds for ``asr.py``."""
 
@@ -245,12 +273,22 @@ class ASRAlignmentThresholds:
     fuzzy_token_similarity_min: float = 0.70
     word_match_ratio_min: float = 0.50
     total_similarity_min: float = 0.55
+    whisper_no_speech_prob_max: float = 0.85
+    whisper_fallback_min_segments: int = 3
+    whisper_fallback_min_words: int = 5
+    whisper_fallback_min_duration_sec: float = 20.0
+    whisper_cache_min_segments_long_audio: int = 1
+    whisper_cache_long_audio_min_sec: float = 30.0
+    boundary_gate_asr_score_min: float = 0.15
+    boundary_gate_min_asr_segments: int = 5
+    boundary_gate_asr_margin_ms: int = 2500
 
 
 DEFAULT_LAYER_DISCOVERY_THRESHOLDS = LayerDiscoveryThresholds()
 DEFAULT_GROUPING_THRESHOLDS = GroupingThresholds()
 DEFAULT_CLASSIFICATION_THRESHOLDS = ClassificationThresholds()
 DEFAULT_OCR_PREPROCESS_THRESHOLDS = OcrPreprocessThresholds()
+DEFAULT_VOCAL_ISOLATION_THRESHOLDS = VocalIsolationThresholds()
 DEFAULT_ASR_ALIGNMENT_THRESHOLDS = ASRAlignmentThresholds()
 
 __all__ = [
@@ -261,7 +299,9 @@ __all__ = [
     "DEFAULT_GROUPING_THRESHOLDS",
     "DEFAULT_LAYER_DISCOVERY_THRESHOLDS",
     "DEFAULT_OCR_PREPROCESS_THRESHOLDS",
+    "DEFAULT_VOCAL_ISOLATION_THRESHOLDS",
     "GroupingThresholds",
     "LayerDiscoveryThresholds",
     "OcrPreprocessThresholds",
+    "VocalIsolationThresholds",
 ]

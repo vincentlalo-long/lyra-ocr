@@ -538,4 +538,50 @@ def test_align_cues_words_with_asr_overlapping_asr_words_stay_monotonic():
             assert cue.words[i - 1]["end_ms"] <= w["start_ms"]
 
 
+def test_transcribe_audio_words_retries_without_vad_when_silero_starves_on_music():
+    from types import SimpleNamespace
+
+    calls: list[dict] = []
+
+    def _make_seg(text: str, start: float, end: float, words_list: list[tuple[str, float, float]], no_speech_prob: float = 0.1):
+        return SimpleNamespace(
+            text=text,
+            start=start,
+            end=end,
+            no_speech_prob=no_speech_prob,
+            words=[SimpleNamespace(word=w, start=ws, end=we, probability=0.92) for w, ws, we in words_list],
+        )
+
+    class _FakeWhisperModel:
+        def __init__(self, model_size, device="auto", compute_type="default"):
+            pass
+
+        def transcribe(self, audio_input, **kwargs):
+            calls.append(dict(kwargs))
+            info = SimpleNamespace(language="ja", duration=40.0)
+            if kwargs.get("vad_filter", True):
+                return iter([]), info
+            segs = [
+                _make_seg("BGM", 0.5, 2.0, [("BGM", 0.5, 2.0)], no_speech_prob=0.92),
+                _make_seg("その鼓動を", 10.0, 12.5, [("その", 10.0, 10.7), ("鼓動を", 10.8, 12.5)], no_speech_prob=0.05),
+                _make_seg("超えてゆく", 13.0, 15.5, [("超えて", 13.0, 14.2), ("ゆく", 14.3, 15.5)], no_speech_prob=0.08),
+                _make_seg("光の先へ", 16.0, 19.0, [("光の", 16.0, 17.5), ("先へ", 17.6, 19.0)], no_speech_prob=0.04),
+            ]
+            return iter(segs), info
+
+    audio_40s = np.zeros(16000 * 40, dtype=np.float32)
+    fake_module = SimpleNamespace(WhisperModel=_FakeWhisperModel)
+    with patch.dict("sys.modules", {"faster_whisper": fake_module}):
+        transcript = transcribe_audio_words(audio_40s, language="ja")
+
+    assert transcript is not None
+    assert len(calls) == 2
+    assert calls[0]["vad_filter"] is True
+    assert calls[1]["vad_filter"] is False
+    assert calls[1]["condition_on_previous_text"] is False
+    texts = [s.text for s in transcript.segments]
+    assert "BGM" not in texts
+    assert texts == ["その鼓動を", "超えてゆく", "光の先へ"]
+
+
 

@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _CJK_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]+")
+_WHISPER_HALLUCINATION_RE = re.compile(
+    r"^(?:bgm|music|instrumental|applause|字幕|エンディング|オープニング|thanks for watching|thank you for watching)$",
+    re.IGNORECASE,
+)
 
 
 @dataclass
@@ -187,38 +191,85 @@ def load_asr_transcript(
     return loaded
 
 
+def _run_whisper_transcribe(
+    model: Any,
+    audio_input: str | np.ndarray,
+    whisper_lang: str | None,
+    *,
+    vad_filter: bool,
+    condition_on_previous_text: bool = True,
+    thresholds: ASRAlignmentThresholds | None = None,
+) -> tuple[list[ASRSegment], str, float]:
+    """Run one faster-whisper pass and filter out non-speech / hallucination segments."""
+    cfg = thresholds or DEFAULT_ASR_ALIGNMENT_THRESHOLDS
+    kwargs: dict[str, Any] = {
+        "language": whisper_lang,
+        "word_timestamps": True,
+        "vad_filter": vad_filter,
+    }
+    if not condition_on_previous_text:
+        kwargs["condition_on_previous_text"] = False
+
+    segments_iter, info = model.transcribe(audio_input, **kwargs)
+    detected_lang = getattr(info, "language", "") or whisper_lang or ""
+    info_duration = float(getattr(info, "duration", 0.0) or 0.0)
+
+    segments: list[ASRSegment] = []
+    for seg in segments_iter:
+        seg_text = str(getattr(seg, "text", "") or "").strip()
+        if not seg_text:
+            continue
+        no_speech_prob = float(getattr(seg, "no_speech_prob", 0.0) or 0.0)
+        if no_speech_prob > cfg.whisper_no_speech_prob_max:
+            continue
+        if _WHISPER_HALLUCINATION_RE.match(seg_text):
+            continue
+
+        words: list[ASRWord] = []
+        for w in getattr(seg, "words", None) or ():
+            w_text = str(getattr(w, "word", "") or "").strip()
+            if not w_text:
+                continue
+            w_start = int(round(float(getattr(w, "start", 0.0)) * 1000))
+            w_end = int(round(float(getattr(w, "end", 0.0)) * 1000))
+            w_prob = float(getattr(w, "probability", 1.0))
+            words.append(
+                ASRWord(word=w_text, start_ms=w_start, end_ms=max(w_start, w_end), probability=w_prob)
+            )
+
+        seg_start = int(round(float(getattr(seg, "start", 0.0)) * 1000))
+        seg_end = int(round(float(getattr(seg, "end", 0.0)) * 1000))
+        segments.append(
+            ASRSegment(
+                text=seg_text,
+                start_ms=seg_start,
+                end_ms=max(seg_start, seg_end),
+                words=words,
+                language=detected_lang,
+            )
+        )
+
+    return segments, detected_lang, info_duration
+
+
 def transcribe_audio_words(
     audio_source: str | Path | np.ndarray,
     *,
     cache_dir: str | Path | None = None,
     language: str | None = None,
     model_size: str = "small",
+    thresholds: ASRAlignmentThresholds | None = None,
 ) -> ASRTranscript | None:
     """Transcribe audio into word-level timestamps using faster-whisper, with disk caching."""
+    cfg = thresholds or DEFAULT_ASR_ALIGNMENT_THRESHOLDS
     whisper_lang = _normalize_whisper_lang(language)
-    cache_file = Path(cache_dir) / "asr_transcript.json" if cache_dir else None
-    if cache_file is not None and cache_file.is_file():
-        cached = load_asr_transcript(cache_file)
-        if cached is not None:
-            if _asr_cache_matches_language(cached, language):
-                return cached
-            logger.info(
-                "Ignoring stale ASR cache %s (cached language=%r != requested=%r)",
-                cache_file,
-                cached.language,
-                whisper_lang,
-            )
 
-    try:
-        from faster_whisper import WhisperModel
-    except ImportError:
-        logger.info("faster-whisper not installed; skipping word-level ASR")
-        return None
-
+    audio_dur_sec: float | None = None
     if isinstance(audio_source, np.ndarray):
         audio_input: str | np.ndarray = np.asarray(audio_source, dtype=np.float32).reshape(-1)
         if audio_input.size == 0:
             return None
+        audio_dur_sec = float(audio_input.size) / 16000.0
     else:
         p = Path(audio_source)
         if not p.is_file():
@@ -226,78 +277,78 @@ def transcribe_audio_words(
             return None
         audio_input = str(p)
 
+    cache_file = Path(cache_dir) / "asr_transcript.json" if cache_dir else None
+    if cache_file is not None and cache_file.is_file():
+        cached = load_asr_transcript(cache_file)
+        if cached is not None:
+            if not _asr_cache_matches_language(cached, language):
+                logger.info(
+                    "Ignoring stale ASR cache %s (cached language=%r != requested=%r)",
+                    cache_file,
+                    cached.language,
+                    whisper_lang,
+                )
+            elif (
+                audio_dur_sec is not None
+                and audio_dur_sec >= cfg.whisper_cache_long_audio_min_sec
+                and len(cached.segments) <= cfg.whisper_cache_min_segments_long_audio
+            ):
+                logger.info(
+                    "Invalidating starved ASR cache %s (%d segments on %.1fs audio)",
+                    cache_file,
+                    len(cached.segments),
+                    audio_dur_sec,
+                )
+            else:
+                return cached
+
+    try:
+        from faster_whisper import WhisperModel
+    except ImportError:
+        logger.info("faster-whisper not installed; skipping word-level ASR")
+        return None
+
+    def _transcribe_with_music_fallback(model: Any) -> tuple[list[ASRSegment], str]:
+        segments, detected_lang, info_dur = _run_whisper_transcribe(
+            model,
+            audio_input,
+            whisper_lang,
+            vad_filter=True,
+            thresholds=cfg,
+        )
+        eff_dur = audio_dur_sec if audio_dur_sec is not None else info_dur
+        total_words = sum(len(s.words) for s in segments)
+        if eff_dur >= cfg.whisper_fallback_min_duration_sec and (
+            len(segments) < cfg.whisper_fallback_min_segments
+            or total_words < cfg.whisper_fallback_min_words
+        ):
+            logger.info(
+                "Whisper vad_filter=True returned %d segments / %d words on %.1fs audio; retrying without VAD",
+                len(segments),
+                total_words,
+                eff_dur,
+            )
+            retry_segs, retry_lang, _ = _run_whisper_transcribe(
+                model,
+                audio_input,
+                whisper_lang,
+                vad_filter=False,
+                condition_on_previous_text=False,
+                thresholds=cfg,
+            )
+            retry_words = sum(len(s.words) for s in retry_segs)
+            if len(retry_segs) > len(segments) or retry_words > total_words:
+                return retry_segs, (retry_lang or detected_lang)
+        return segments, detected_lang
+
     try:
         model = WhisperModel(model_size, device="auto", compute_type="default")
-        segments_iter, info = model.transcribe(
-            audio_input,
-            language=whisper_lang,
-            word_timestamps=True,
-            vad_filter=True,
-        )
-        detected_lang = getattr(info, "language", "") or whisper_lang or ""
-        segments: list[ASRSegment] = []
-        for seg in segments_iter:
-            seg_text = str(getattr(seg, "text", "") or "").strip()
-            if not seg_text:
-                continue
-            words: list[ASRWord] = []
-            for w in getattr(seg, "words", None) or ():
-                w_text = str(getattr(w, "word", "") or "").strip()
-                if not w_text:
-                    continue
-                w_start = int(round(float(getattr(w, "start", 0.0)) * 1000))
-                w_end = int(round(float(getattr(w, "end", 0.0)) * 1000))
-                w_prob = float(getattr(w, "probability", 1.0))
-                words.append(ASRWord(word=w_text, start_ms=w_start, end_ms=max(w_start, w_end), probability=w_prob))
-
-            seg_start = int(round(float(getattr(seg, "start", 0.0)) * 1000))
-            seg_end = int(round(float(getattr(seg, "end", 0.0)) * 1000))
-            segments.append(
-                ASRSegment(
-                    text=seg_text,
-                    start_ms=seg_start,
-                    end_ms=max(seg_start, seg_end),
-                    words=words,
-                    language=detected_lang,
-                )
-            )
+        segments, detected_lang = _transcribe_with_music_fallback(model)
     except Exception as exc:
         logger.warning("faster-whisper failed (%s); trying CPU int8 fallback", exc)
         try:
             model = WhisperModel(model_size, device="cpu", compute_type="int8")
-            segments_iter, info = model.transcribe(
-                audio_input,
-                language=whisper_lang,
-                word_timestamps=True,
-                vad_filter=True,
-            )
-            detected_lang = getattr(info, "language", "") or whisper_lang or ""
-            segments = []
-            for seg in segments_iter:
-                seg_text = str(getattr(seg, "text", "") or "").strip()
-                if not seg_text:
-                    continue
-                words = [
-                    ASRWord(
-                        word=str(getattr(w, "word", "") or "").strip(),
-                        start_ms=int(round(float(getattr(w, "start", 0.0)) * 1000)),
-                        end_ms=int(round(float(getattr(w, "end", 0.0)) * 1000)),
-                        probability=float(getattr(w, "probability", 1.0)),
-                    )
-                    for w in (getattr(seg, "words", None) or ())
-                    if str(getattr(w, "word", "") or "").strip()
-                ]
-                seg_start = int(round(float(getattr(seg, "start", 0.0)) * 1000))
-                seg_end = int(round(float(getattr(seg, "end", 0.0)) * 1000))
-                segments.append(
-                    ASRSegment(
-                        text=seg_text,
-                        start_ms=seg_start,
-                        end_ms=max(seg_start, seg_end),
-                        words=words,
-                        language=detected_lang,
-                    )
-                )
+            segments, detected_lang = _transcribe_with_music_fallback(model)
         except Exception as exc_cpu:
             logger.warning("ASR transcription unavailable: %s", exc_cpu)
             return None

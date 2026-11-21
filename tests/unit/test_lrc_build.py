@@ -1457,6 +1457,72 @@ def test_build_lrc_routes_vocal_lang_to_asr_and_preserves_asr_words(tmp_path: Pa
     ]
 
 
+def test_filter_boundary_unvoiced_and_distractor_cues_strips_silent_intro_outro_cues():
+    from lyra_ocr.audio.asr import ASRSegment, ASRTranscript, ASRWord
+    from lyra_ocr.lyric.build import filter_boundary_unvoiced_and_distractor_cues
+    from lyra_ocr.lyric.models import LyricCue
+
+    duration_ms = 240000
+    # 50ms hops for 240s = 4800 frames; silent in [0..20s] and [220..240s], voiced in [20..220s]
+    vocal_profile = np.zeros(4800, dtype=np.float32)
+    vocal_profile[400:4400] = 0.9
+
+    asr_transcript = ASRTranscript(
+        language="ja",
+        segments=[
+            ASRSegment("line1", 22000, 26000, words=[ASRWord("line1", 22000, 26000)]),
+            ASRSegment("line2", 40000, 44000, words=[ASRWord("line2", 40000, 44000)]),
+            ASRSegment("line3", 80000, 84000, words=[ASRWord("line3", 80000, 84000)]),
+            ASRSegment("line4", 120000, 124000, words=[ASRWord("line4", 120000, 124000)]),
+            ASRSegment("line5", 214000, 218000, words=[ASRWord("line5", 214000, 218000)]),
+        ],
+    )
+
+    cues = [
+        LyricCue(start_ms=2000, end_ms=6000, text="Silent intro line", ocr_confidence=0.98, source_track_ids=[1]),
+        LyricCue(start_ms=4000, end_ms=8000, text="my", ocr_confidence=0.99, source_track_ids=[2]),
+        LyricCue(start_ms=40000, end_ms=44000, text="Hanatsu hikari ima koko kara", ocr_confidence=0.97, source_track_ids=[3]),
+        LyricCue(start_ms=226000, end_ms=230000, text="Silent outro lyric", ocr_confidence=0.96, source_track_ids=[4]),
+        LyricCue(start_ms=232000, end_ms=236000, text="Thanks for watching", ocr_confidence=0.99, source_track_ids=[5]),
+    ]
+    skipped: list[dict] = []
+
+    kept = filter_boundary_unvoiced_and_distractor_cues(
+        cues,
+        skipped,
+        duration_ms=duration_ms,
+        title="only my railgun",
+        artist="fripSide",
+        asr_transcript=asr_transcript,
+        vocal_profile=vocal_profile,
+        include_review=False,
+    )
+
+    assert [c.text for c in kept] == ["Hanatsu hikari ima koko kara"]
+    assert len(skipped) == 4
+    assert all(item["reason"] == "boundary_unvoiced_or_credit" for item in skipped)
+
+    # Also verify ASR-only boundary gate when vocal_profile is None
+    cues_asr_only = [
+        LyricCue(start_ms=5000, end_ms=9000, text="Unvoiced by ASR gate", ocr_confidence=0.98, source_track_ids=[10]),
+        LyricCue(start_ms=22000, end_ms=26000, text="Sung opening line", ocr_confidence=0.98, source_track_ids=[11]),
+    ]
+    skipped_asr: list[dict] = []
+    kept_asr = filter_boundary_unvoiced_and_distractor_cues(
+        cues_asr_only,
+        skipped_asr,
+        duration_ms=duration_ms,
+        title="only my railgun",
+        artist="fripSide",
+        asr_transcript=asr_transcript,
+        vocal_profile=None,
+        include_review=False,
+    )
+    assert [c.text for c in kept_asr] == ["Sung opening line"]
+    assert len(skipped_asr) == 1
+    assert skipped_asr[0]["reason"] == "boundary_unvoiced_or_credit"
+
+
 
 
 

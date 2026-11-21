@@ -53,18 +53,103 @@ CHAT_CONTENT_RE = re.compile(
 )
 
 _INTRO_CREDIT_PREFIX_RE = re.compile(
-    r"^(?:(?:music|lyrics?|vocal(?:s)?|illust(?:ration)?|movie|video|animation|compilation|arranged?|arrangement|mix(?:ed)?|master(?:ing|ed)?|encoded|subtitles?|translated|sub(?:bed)?|edit(?:ed)?)\s*[:\-]|by\s+(?!(?:the|a|an|my|your|our|his|her|their|this|that|all|now|far)\b)[A-Za-z0-9_\-]+)",
+    r"(?:^(?:anime|edition|music|lyrics?|vocal(?:s)?|illust(?:ration)?|movie|video|animation|compilation|arranged?|arrangement|mix(?:ed)?|master(?:ing|ed)?|encoded|subtitles?|translated|sub(?:bed)?|edit(?:ed)?)\s*[:\-]|(?:^|[\-\|/:]\s*)by\s+(?!(?:the|a|an|my|your|our|his|her|their|this|that|all|now|far)\b)[A-Za-z0-9_\-]+)",
     re.IGNORECASE,
 )
 
+_SIGNOFF_WORD_RE = re.compile(r"^watching[!！.]*$", re.IGNORECASE)
+
 
 def _is_intro_credit_text(text: str, *, in_lyric_layer: bool, word_count: int) -> bool:
-    """Return True when ``text`` matches an intro production-credit prefix."""
+    """Return True when ``text`` matches an intro/outro production-credit prefix or infix."""
     if not _INTRO_CREDIT_PREFIX_RE.search(text):
         return False
     if in_lyric_layer and word_count >= 5 and re.match(r"by\s+", text, re.IGNORECASE):
         return False
     return True
+
+
+def _matches_metadata_entity(
+    dom_lower: str,
+    dom_tokens: set[str],
+    entity: str,
+    *,
+    n_text_changes: int,
+    cfg: ClassificationThresholds,
+) -> bool:
+    """Return True when ``dom_lower`` matches channel or artist metadata."""
+    if not entity:
+        return False
+    sim = string_similarity(dom_lower, entity)
+    ent_tokens = set(re.findall(r"\w+", entity))
+    sig_ent_tokens = {t for t in ent_tokens if len(t) >= cfg.channel_token_min_len}
+    token_match = bool(
+        sig_ent_tokens
+        and (
+            sig_ent_tokens.issubset(dom_tokens)
+            or (
+                sig_ent_tokens.intersection(dom_tokens)
+                and n_text_changes == 0
+                and len(dom_tokens) <= cfg.channel_partial_max_dom_tokens
+            )
+        )
+    )
+    len_ratio = len(entity) / max(1, len(dom_lower))
+    return (
+        sim >= cfg.channel_min_similarity
+        or token_match
+        or (entity in dom_lower and len_ratio >= cfg.channel_substring_min_len_ratio)
+    )
+
+
+def _is_split_title_fragment(dom_lower: str, title: str, *, word_count: int) -> bool:
+    """Return True when a 1-word cue/track is a split fragment of a multi-word video title."""
+    if not title or word_count != 1:
+        return False
+    clean_tokens = re.findall(r"\w+", dom_lower)
+    if len(clean_tokens) != 1 or len(clean_tokens[0]) < 2:
+        return False
+    title_tokens = set(re.findall(r"\w+", title.lower()))
+    if len(title_tokens) < 2:
+        return False
+    return clean_tokens[0] in title_tokens
+
+
+def is_boundary_distractor_text(
+    text: str,
+    *,
+    title: str = "",
+    artist: str = "",
+    channel: str = "",
+    in_lyric_layer: bool = False,
+    n_text_changes: int = 0,
+    thresholds: ClassificationThresholds | None = None,
+) -> bool:
+    """Return True when boundary text matches credit, sign-off, artist, or split-title patterns."""
+    cfg = thresholds or DEFAULT_CLASSIFICATION_THRESHOLDS
+    stripped = (text or "").strip()
+    if not stripped:
+        return False
+    dom_lower = stripped.lower()
+    if any(kw in dom_lower for kw in SUPPLEMENTARY_KEYWORDS):
+        return True
+    word_count = len(stripped.split())
+    if word_count == 1 and _SIGNOFF_WORD_RE.match(stripped):
+        return True
+    if _is_intro_credit_text(stripped, in_lyric_layer=in_lyric_layer, word_count=word_count):
+        return True
+    dom_tokens = set(re.findall(r"\w+", dom_lower))
+    if _matches_metadata_entity(
+        dom_lower, dom_tokens, channel.strip().lower(), n_text_changes=n_text_changes, cfg=cfg
+    ):
+        return True
+    if _matches_metadata_entity(
+        dom_lower, dom_tokens, artist.strip().lower(), n_text_changes=n_text_changes, cfg=cfg
+    ):
+        return True
+    if _is_split_title_fragment(dom_lower, title.strip().lower(), word_count=word_count):
+        return True
+    return False
 
 
 SUPPLEMENTARY_KEYWORDS = [
@@ -98,6 +183,13 @@ SUPPLEMENTARY_KEYWORDS = [
     "out now",
     "presents",
     "sound only",
+    "thanks for watching",
+    "thank you for watching",
+    "color coded lyrics",
+    "kan/rom/eng",
+    "rom/eng",
+    "romaji/español",
+    "sub. español",
 ]
 
 
@@ -117,6 +209,7 @@ def classify_track(
     cfg = thresholds or DEFAULT_CLASSIFICATION_THRESHOLDS
     meta = metadata or {}
     v_channel = meta.get("channel", "").strip().lower()
+    v_artist = meta.get("artist", "").strip().lower()
     v_title = meta.get("title", "").strip().lower()
 
     # Ensure features exist
@@ -185,6 +278,48 @@ def classify_track(
     ) and (video_duration_ms > 0 or lifetime_ratio > 0)
 
     qa_flags: list[str] = []
+    has_timeline = video_duration_ms > 0 or feat.get("start_time_ratio") is not None
+    in_intro_signoff = has_timeline and start_time_ratio <= cfg.intro_signoff_window_ratio
+    in_outro_signoff = (
+        has_timeline
+        and (
+            start_time_ratio >= (1.0 - cfg.outro_signoff_window_ratio)
+            or end_time_ratio >= (1.0 - cfg.outro_signoff_window_ratio)
+        )
+    )
+    in_boundary_window = in_intro_signoff or in_outro_signoff
+
+    # Rule 0a: Split 1-word title-card fragment in intro/outro (e.g. "only" / "my")
+    if (
+        has_timeline
+        and (
+            start_time_ratio <= cfg.split_title_intro_ratio
+            or start_time_ratio >= (1.0 - cfg.split_title_outro_ratio)
+            or end_time_ratio >= (1.0 - cfg.split_title_outro_ratio)
+        )
+        and _is_split_title_fragment(dom_lower, v_title, word_count=word_count)
+    ):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.95,
+            reason=f"Split single-word title card fragment '{dominant_text}' in intro/outro",
+            decision="reject",
+            qa_flags=["split_title_card_fragment"],
+        )
+        track.classification = res
+        return res
+
+    # Rule 0b: Single-word intro/outro sign-off (e.g. "WATCHING!")
+    if in_boundary_window and word_count == 1 and _SIGNOFF_WORD_RE.match(dominant_text):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.95,
+            reason=f"Intro/outro sign-off word '{dominant_text}'",
+            decision="reject",
+            qa_flags=["intro_outro_signoff"],
+        )
+        track.classification = res
+        return res
 
     # Rule 0: Isolated single fragment or credit word
     if word_count == 1 and dom_lower in ("sound", "only", "presents"):
@@ -224,36 +359,36 @@ def classify_track(
         return res
 
     # Rule 3: Channel Watermark / Artist Attribution
-    if v_channel:
-        sim_chan = string_similarity(dom_lower, v_channel)
-        chan_tokens = set(re.findall(r"\w+", v_channel))
-        sig_chan_tokens = {t for t in chan_tokens if len(t) >= cfg.channel_token_min_len}
-        token_chan_match = bool(
-            sig_chan_tokens
-            and (
-                sig_chan_tokens.issubset(dom_tokens)
-                or (
-                    sig_chan_tokens.intersection(dom_tokens)
-                    and n_text_changes == 0
-                    and len(dom_tokens) <= cfg.channel_partial_max_dom_tokens
-                )
-            )
+    if _matches_metadata_entity(
+        dom_lower, dom_tokens, v_channel, n_text_changes=n_text_changes, cfg=cfg
+    ):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.98,
+            reason=f"Matched video channel/artist metadata '{v_channel}'",
+            decision="reject",
+            qa_flags=["metadata_channel_match"],
         )
-        chan_len_ratio = len(v_channel) / max(1, len(dom_lower))
-        if (
-            sim_chan >= cfg.channel_min_similarity
-            or token_chan_match
-            or (v_channel in dom_lower and chan_len_ratio >= cfg.channel_substring_min_len_ratio)
-        ):
-            res = ClassificationResult(
-                label="non_lyric",
-                confidence=0.98,
-                reason=f"Matched video channel/artist metadata '{v_channel}'",
-                decision="reject",
-                qa_flags=["metadata_channel_match"],
-            )
-            track.classification = res
-            return res
+        track.classification = res
+        return res
+
+    if (
+        in_boundary_window
+        and v_artist
+        and v_artist != v_channel
+        and _matches_metadata_entity(
+            dom_lower, dom_tokens, v_artist, n_text_changes=n_text_changes, cfg=cfg
+        )
+    ):
+        res = ClassificationResult(
+            label="non_lyric",
+            confidence=0.98,
+            reason=f"Matched video artist metadata '{v_artist}' in intro/outro",
+            decision="reject",
+            qa_flags=["metadata_artist_match"],
+        )
+        track.classification = res
+        return res
 
     # Rule 3b: Right-rail chat / stream overlay.
     # Live-stream comments occupy a narrow right-hand column, last only a few
@@ -336,16 +471,16 @@ def classify_track(
             track.classification = res
             return res
 
-    # Intro Production Credit Prefix Filter
+    # Intro / Outro Production Credit Prefix & Infix Filter
     if (
-        (video_duration_ms > 0 or feat.get("start_time_ratio") is not None)
-        and start_time_ratio <= cfg.intro_credit_start_ratio_max
+        has_timeline
+        and (start_time_ratio <= cfg.intro_credit_start_ratio_max or in_outro_signoff)
         and _is_intro_credit_text(dominant_text, in_lyric_layer=in_lyric_layer, word_count=word_count)
     ):
         res = ClassificationResult(
             label="non_lyric",
             confidence=0.95,
-            reason="Intro production credit prefix pattern",
+            reason="Intro/outro production credit pattern",
             decision="reject",
             qa_flags=["intro_credit_pattern"],
         )

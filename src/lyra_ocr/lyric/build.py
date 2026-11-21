@@ -7,16 +7,28 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from lyra_ocr.audio import (
+    ASRTranscript,
     align_cues_with_audio,
     align_cues_words_with_asr,
     asr_to_reference_bundle,
     asr_vocal_gate_score,
     compute_vocal_activity_profile,
     extract_audio_16k,
+    extract_isolated_vocals_16k,
     infer_vocal_language_from_cues,
     load_asr_transcript,
     transcribe_audio_words,
+    vocal_active_ratio,
+)
+from lyra_ocr.classify import is_boundary_distractor_text
+from lyra_ocr.config import (
+    DEFAULT_ASR_ALIGNMENT_THRESHOLDS,
+    DEFAULT_CLASSIFICATION_THRESHOLDS,
+    ASRAlignmentThresholds,
+    ClassificationThresholds,
 )
 from lyra_ocr.lang import vote_layer_lang
 from lyra_ocr.layers import refresh_dict_tracks_layers
@@ -52,7 +64,136 @@ from lyra_ocr.lyric.select import load_artifacts, select_cues
 
 logger = logging.getLogger(__name__)
 CAPTION_CACHE_TTL_SECONDS = 3600.0
-BUILD_CACHE_VERSION = 7
+BUILD_CACHE_VERSION = 8
+
+
+def filter_boundary_unvoiced_and_distractor_cues(
+    cues: list[LyricCue],
+    skipped: list[dict[str, Any]],
+    *,
+    duration_ms: int,
+    title: str,
+    artist: str,
+    asr_transcript: ASRTranscript | None,
+    vocal_profile: np.ndarray | None,
+    include_review: bool = False,
+    channel: str = "",
+    thresholds: ClassificationThresholds | None = None,
+    asr_thresholds: ASRAlignmentThresholds | None = None,
+) -> list[LyricCue]:
+    """Strip unvoiced intro/outro cues and boundary credit/sign-off/title fragments."""
+    if not cues:
+        return cues
+
+    cfg = thresholds or DEFAULT_CLASSIFICATION_THRESHOLDS
+    asr_cfg = asr_thresholds or DEFAULT_ASR_ALIGNMENT_THRESHOLDS
+
+    intro_cutoff_ms = (
+        max(
+            int(round(cfg.boundary_intro_ratio * duration_ms)),
+            min(cfg.boundary_intro_min_ms, int(round(0.20 * duration_ms))),
+        )
+        if duration_ms > 0
+        else cfg.boundary_intro_min_ms
+    )
+    outro_window_ms = (
+        max(
+            int(round(cfg.boundary_outro_ratio * duration_ms)),
+            min(cfg.boundary_outro_min_ms, int(round(0.15 * duration_ms))),
+        )
+        if duration_ms > 0
+        else 0
+    )
+    outro_cutoff_ms = (duration_ms - outro_window_ms) if duration_ms > 0 else None
+
+    first_asr_ms: int | None = None
+    last_asr_ms: int | None = None
+    has_dense_asr = (
+        asr_transcript is not None
+        and len(asr_transcript.segments) >= asr_cfg.boundary_gate_min_asr_segments
+    )
+    if has_dense_asr and asr_transcript is not None:
+        word_starts: list[int] = []
+        word_ends: list[int] = []
+        for seg in asr_transcript.segments:
+            if seg.words:
+                for w in seg.words:
+                    word_starts.append(int(w.start_ms))
+                    word_ends.append(int(w.end_ms))
+            else:
+                word_starts.append(int(seg.start_ms))
+                word_ends.append(int(seg.end_ms))
+        if word_starts and word_ends:
+            first_asr_ms = min(word_starts)
+            last_asr_ms = max(word_ends)
+
+    kept: list[LyricCue] = []
+    for cue in cues:
+        if cue.decision == "human_accept":
+            kept.append(cue)
+            continue
+
+        in_intro = cue.start_ms <= intro_cutoff_ms
+        in_outro = outro_cutoff_ms is not None and cue.end_ms >= outro_cutoff_ms
+        in_boundary = (in_intro or in_outro) if duration_ms > 0 else in_intro
+        if not in_boundary:
+            kept.append(cue)
+            continue
+
+        is_distractor = is_boundary_distractor_text(
+            cue.text,
+            title=title,
+            artist=artist,
+            channel=channel,
+            thresholds=cfg,
+        )
+
+        is_vad_unvoiced = False
+        if (
+            duration_ms > 0
+            and vocal_profile is not None
+            and len(vocal_profile) > 0
+            and len(vocal_profile) * 50 > cue.start_ms
+        ):
+            if vocal_active_ratio(vocal_profile, cue.start_ms, cue.end_ms) < cfg.boundary_gate_vocal_ratio_min:
+                is_vad_unvoiced = True
+
+        is_asr_unvoiced = False
+        if (
+            duration_ms > 0
+            and has_dense_asr
+            and first_asr_ms is not None
+            and last_asr_ms is not None
+            and (
+                cue.end_ms < first_asr_ms - asr_cfg.boundary_gate_asr_margin_ms
+                or cue.start_ms > last_asr_ms + asr_cfg.boundary_gate_asr_margin_ms
+            )
+        ):
+            if asr_vocal_gate_score(cue, asr_transcript) < asr_cfg.boundary_gate_asr_score_min:
+                is_asr_unvoiced = True
+
+        if is_distractor or is_vad_unvoiced or is_asr_unvoiced:
+            if "boundary_unvoiced_or_credit" not in cue.qa_flags:
+                cue.qa_flags = list(cue.qa_flags) + ["boundary_unvoiced_or_credit"]
+            if include_review and not is_distractor:
+                cue.review_required = True
+                kept.append(cue)
+            else:
+                skipped.append(
+                    {
+                        "track_id": cue.source_track_ids[0] if cue.source_track_ids else None,
+                        "segment_id": cue.source_segment_ids[0] if cue.source_segment_ids else None,
+                        "reason": "boundary_unvoiced_or_credit",
+                        "label": "non_lyric" if is_distractor else "lyric",
+                        "decision": cue.decision,
+                        "text": cue.text,
+                    }
+                )
+            continue
+
+        kept.append(cue)
+
+    return kept
 
 
 def _reference_signature(
@@ -308,25 +449,32 @@ def build_lrc_from_artifacts(
         except Exception as e:
             logger.warning("Refine timings failed, falling back to coarse: %s", e)
 
-    # Multimodal audio analysis (VAD, ASR & Forced Alignment)
+    # Multimodal audio analysis (Isolated Vocals -> RMS-VAD, ASR & Forced Alignment)
+    vocals_16k = None
     audio_16k = None
     vocal_profile = None
     asr_transcript = None
     if eff_video_path and Path(eff_video_path).is_file():
         try:
-            audio_16k = extract_audio_16k(eff_video_path, cache_dir=art_path)
-            if audio_16k is not None:
-                vocal_profile = compute_vocal_activity_profile(audio_16k)
+            vocals_16k = extract_isolated_vocals_16k(eff_video_path, cache_dir=art_path)
+            if vocals_16k is not None:
+                if np.any(vocals_16k != 0):
+                    vocal_profile = compute_vocal_activity_profile(vocals_16k, is_isolated_vocals=True)
+            else:
+                audio_16k = extract_audio_16k(eff_video_path, cache_dir=art_path)
+                if audio_16k is not None and np.any(audio_16k != 0):
+                    vocal_profile = compute_vocal_activity_profile(audio_16k, is_isolated_vocals=False)
         except Exception as exc:
             logger.warning("Audio processing failed for %s: %s", eff_video_path, exc)
 
+    asr_audio = vocals_16k if vocals_16k is not None else audio_16k
     if getattr(reference_cfg, "enable_asr", True):
         vocal_lang = infer_vocal_language_from_cues(cues)
         cached_asr_path = art_path / "asr_transcript.json"
-        if audio_16k is not None:
+        if asr_audio is not None:
             try:
                 asr_transcript = transcribe_audio_words(
-                    audio_16k,
+                    asr_audio,
                     cache_dir=art_path,
                     language=vocal_lang,
                 )
@@ -334,6 +482,19 @@ def build_lrc_from_artifacts(
                 logger.warning("Word-level ASR failed for %s: %s", eff_video_path, exc)
         elif cached_asr_path.is_file():
             asr_transcript = load_asr_transcript(cached_asr_path, expected_language=vocal_lang)
+
+    m_channel = str(meta.get("channel", "") or manifest.get("channel", "") or "")
+    cues = filter_boundary_unvoiced_and_distractor_cues(
+        cues,
+        skipped,
+        duration_ms=duration_ms,
+        title=m_title,
+        artist=m_artist,
+        channel=m_channel,
+        asr_transcript=asr_transcript,
+        vocal_profile=vocal_profile,
+        include_review=include_review,
+    )
 
     if cues and asr_transcript is not None and asr_transcript.segments:
         gated_cues: list[LyricCue] = []
@@ -441,6 +602,17 @@ def build_lrc_from_artifacts(
     cues = consolidate_language_layers(cues, asr_transcript=asr_transcript)
     cues = dedupe_and_group(cues, asr_transcript=asr_transcript)
     cues = share_solitary_cross_layer_cues(cues)
+    cues = filter_boundary_unvoiced_and_distractor_cues(
+        cues,
+        skipped,
+        duration_ms=duration_ms,
+        title=m_title,
+        artist=m_artist,
+        channel=m_channel,
+        asr_transcript=asr_transcript,
+        vocal_profile=vocal_profile,
+        include_review=include_review,
+    )
 
     if asr_transcript is not None:
         try:
@@ -448,9 +620,10 @@ def build_lrc_from_artifacts(
         except Exception as exc:
             logger.warning("ASR word alignment failed: %s", exc)
 
-    if audio_16k is not None and getattr(reference_cfg, "enable_audio_align", True):
+    align_audio = vocals_16k if vocals_16k is not None else audio_16k
+    if align_audio is not None and getattr(reference_cfg, "enable_audio_align", True):
         try:
-            cues = align_cues_with_audio(cues, audio_16k)
+            cues = align_cues_with_audio(cues, align_audio)
         except Exception as exc:
             logger.warning("Forced alignment failed: %s", exc)
 

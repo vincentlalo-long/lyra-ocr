@@ -719,5 +719,41 @@ def test_classify_intro_credit_zero_video_duration_without_start_ratio_not_rejec
     assert result.decision == "accept"
 
 
+@pytest.mark.parametrize(
+    ("text", "start_ms", "end_ms"),
+    [
+        ("Thanks for watching", 242000, 252000),
+        ("WATCHING!", 244000, 252000),
+        ("(Color Coded Lyrics Kan/Rom/Eng)", 2000, 10000),
+        ("fripSide (フリップサイド)", 3000, 11000),
+        ("Anime: Shigatsu wa Kimi no Uso", 5000, 12000),
+        ("Edition- by Kurousa-P", 240000, 250000),
+        ("my", 0, 12000),
+        ("my", 243000, 251000),
+    ],
+)
+def test_classify_rejects_intro_outro_signoffs_and_split_title_fragments(
+    text: str, start_ms: int, end_ms: int
+):
+    from lyra_ocr.classify import classify_track
+
+    v_dur = 255000
+    track = create_mock_track(
+        track_id=104,
+        start_ms=start_ms,
+        end_ms=end_ms,
+        texts=[text],
+        bbox=[320, 580, 960, 630],
+        video_duration_ms=v_dur,
+    )
+    result = classify_track(
+        track,
+        metadata={"title": "only my railgun", "artist": "fripSide", "channel": "Geneon"},
+        video_duration_ms=v_dur,
+    )
+    assert result.label == "non_lyric"
+    assert result.decision == "reject"
+
+
 
 

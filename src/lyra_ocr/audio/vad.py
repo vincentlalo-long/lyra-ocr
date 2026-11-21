@@ -11,6 +11,8 @@ import logging
 import numpy as np
 from scipy import signal
 
+from lyra_ocr.config import DEFAULT_VOCAL_ISOLATION_THRESHOLDS, VocalIsolationThresholds
+
 logger = logging.getLogger(__name__)
 
 
@@ -18,23 +20,29 @@ def compute_vocal_activity_profile(
     audio: np.ndarray,
     sample_rate: int = 16000,
     hop_ms: int = 50,
+    *,
+    is_isolated_vocals: bool = False,
+    thresholds: VocalIsolationThresholds | None = None,
 ) -> np.ndarray:
     """Compute frame-level vocal activity probability profile in [0.0, 1.0].
 
     Uses a 4th order Butterworth band-pass filter isolating the 300Hz - 3400Hz
     singing vocal formant range, combined with short-time frame RMS energy analysis.
+    When ``is_isolated_vocals=True``, applies arXiv:2506.15514v1 Eq. 2-3 RMS-VAD
+    normalization against the track's 95th-percentile RMS with a background floor gate.
     """
     if audio is None or len(audio) == 0:
         return np.zeros(0, dtype=np.float32)
 
+    cfg = thresholds or DEFAULT_VOCAL_ISOLATION_THRESHOLDS
     audio = audio.astype(np.float32)
 
     # 4th order Butterworth band-pass filter (300Hz - 3400Hz)
     nyq = 0.5 * sample_rate
-    low = 300.0 / nyq
-    high = min(3400.0 / nyq, 0.99)
+    low = cfg.vad_band_low_hz / nyq
+    high = min(cfg.vad_band_high_hz / nyq, 0.99)
     sos = signal.butter(4, [low, high], btype="bandpass", output="sos")
-    filtered = signal.sosfiltfilt(sos, audio)
+    filtered = signal.sosfiltfilt(sos, audio) if len(audio) > 27 else signal.sosfilt(sos, audio)
 
     hop_samples = int(sample_rate * (hop_ms / 1000.0))
     if hop_samples <= 0:
@@ -43,6 +51,24 @@ def compute_vocal_activity_profile(
     n_frames = int(len(audio) / hop_samples)
     if n_frames <= 0:
         return np.zeros(0, dtype=np.float32)
+
+    if is_isolated_vocals:
+        rms_arr = np.zeros(n_frames, dtype=np.float32)
+        for i in range(n_frames):
+            start = i * hop_samples
+            end = min(len(audio), start + hop_samples)
+            frame_filt = filtered[start:end]
+            rms_arr[i] = float(np.sqrt(np.mean(frame_filt ** 2))) if len(frame_filt) > 0 else 0.0
+        ref_rms = max(
+            float(np.percentile(rms_arr, cfg.isolated_vad_ref_percentile)),
+            cfg.isolated_vad_ref_min_rms,
+        )
+        profile = np.where(
+            rms_arr < cfg.isolated_vad_silence_floor,
+            0.0,
+            np.clip(rms_arr / ref_rms, 0.0, 1.0),
+        ).astype(np.float32)
+        return profile
 
     profile = np.zeros(n_frames, dtype=np.float32)
     for i in range(n_frames):
@@ -84,5 +110,5 @@ def vocal_active_ratio(
         return 0.0
 
     slice_frames = profile[start_frame:end_frame]
-    active_count = np.sum(slice_frames >= 0.35)
+    active_count = np.sum(slice_frames >= DEFAULT_VOCAL_ISOLATION_THRESHOLDS.vad_active_frame_threshold)
     return float(active_count / len(slice_frames))

@@ -15,7 +15,12 @@ from lyra_ocr.audio.asr import (
     save_asr_transcript,
     transcribe_audio_words,
 )
-from lyra_ocr.audio.extract import extract_audio_16k, separate_vocals_demucs
+from lyra_ocr.audio.extract import (
+    extract_audio_16k,
+    extract_isolated_vocals_16k,
+    isolate_vocals_midside_hpss,
+    separate_vocals_demucs,
+)
 from lyra_ocr.audio.forced_align import align_cues_with_audio
 from lyra_ocr.audio.vad import compute_vocal_activity_profile, vocal_active_ratio
 
@@ -32,6 +37,8 @@ __all__ = [
     "align_multiline_cues_with_asr",
     "asr_vocal_gate_score",
     "extract_audio_16k",
+    "extract_isolated_vocals_16k",
+    "isolate_vocals_midside_hpss",
     "separate_vocals_demucs",
     "compute_vocal_activity_profile",
     "vocal_active_ratio",

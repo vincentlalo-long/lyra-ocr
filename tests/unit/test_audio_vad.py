@@ -67,3 +67,17 @@ def test_fill_reference_gaps_skips_silence_when_vad_provided():
     assert gap_res.n_filled == 0
     assert len(merged) == 2
     assert any("silent" in w for w in gap_res.warnings)
+
+
+def test_compute_vocal_activity_profile_rms_vad_on_isolated_vocals():
+    sr = 16000
+    # [0..5s]: low-energy residual instrumental bleed in the vocal band
+    bleed = _generate_tone(600.0, 5.0, sr=sr, amp=0.03)
+    # [5..10s]: active singing frames
+    singing = _generate_tone(440.0, 5.0, sr=sr, amp=0.40) + _generate_tone(880.0, 5.0, sr=sr, amp=0.20)
+    audio = np.concatenate([bleed, singing]).astype(np.float32)
+
+    profile = compute_vocal_activity_profile(audio, sample_rate=sr, hop_ms=50, is_isolated_vocals=True)
+    assert len(profile) == int(len(audio) / (sr * 0.05))
+    assert vocal_active_ratio(profile, start_ms=0, end_ms=5000, hop_ms=50) < 0.15
+    assert vocal_active_ratio(profile, start_ms=5000, end_ms=10000, hop_ms=50) > 0.75
